@@ -183,8 +183,13 @@ button:focus-visible, input:focus-visible, canvas:focus-visible { outline: 3px s
 
 .selection-id { padding: 13px; background: var(--ink); color: #fff; }
 .selection-id span { font: 700 9px ui-monospace, monospace; color: #64d19c; }
-.selection-id h3 { margin: 8px 0; font: 700 11px/1.45 ui-monospace, monospace; overflow-wrap: anywhere; }
+.selection-id h3 { margin: 8px 0; font: 800 18px/1.25 ui-monospace, monospace; overflow-wrap: anywhere; }
 .selection-id button { background: transparent; border: 0; color: #8ed3f1; padding: 0; font-size: 9px; cursor: pointer; }
+.export-key { margin-top: 10px; font: 9px/1.4 ui-monospace, monospace; }
+.export-key summary { width: fit-content; color: var(--muted); cursor: pointer; user-select: none; }
+.export-key code { display: block; margin-top: 5px; padding: 6px 7px; background: #ffffff80; color: var(--ink); overflow-wrap: anywhere; }
+.selection-id .export-key summary { color: #8ea7ae; }
+.selection-id .export-key code { background: #071a21; color: #b7d8e4; }
 .detail-grid { margin: 15px 0 0; }
 .detail-grid > div { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); }
 .detail-grid dt { color: var(--muted); font-size: 9px; }
@@ -193,7 +198,7 @@ button:focus-visible, input:focus-visible, canvas:focus-visible { outline: 3px s
 .l2-inspector { margin-top: 17px; padding: 13px; background: #eef2ed; position: relative; min-height: 160px; }
 .l2-inspector > div:first-child span, .l2-inspector > div:first-child b { display: block; }
 .l2-inspector > div:first-child span { color: var(--muted); font-size: 9px; }
-.l2-inspector > div:first-child b { margin-top: 4px; padding-right: 52px; font: 800 10px/1.45 ui-monospace, monospace; overflow-wrap: anywhere; }
+.l2-inspector > div:first-child b { margin-top: 4px; padding-right: 52px; font: 800 16px/1.35 ui-monospace, monospace; overflow-wrap: anywhere; }
 .mini-hex { --hex-color: #45a8e5; position: absolute; right: 12px; top: 12px; width: 44px; aspect-ratio: .8660254; display: grid; place-items: center; background: var(--hex-color); clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); color: #fff; font: 800 10px ui-monospace, monospace; }
 .l2-inspector dl { margin: 14px 0 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .l2-inspector dl div { min-width: 0; }

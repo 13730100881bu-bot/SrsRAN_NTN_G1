@@ -55,6 +55,14 @@ function signed(value: number, width = 5) {
   return `${value >= 0 ? "+" : "-"}${Math.abs(value).toString().padStart(width, "0")}`;
 }
 
+function shortAxis(value: number) {
+  return `${value >= 0 ? "+" : "-"}${Math.abs(value)}`;
+}
+
+function makeL1ShortId(parent: Pick<BeamCell, "u" | "v">) {
+  return `CN1.1.${shortAxis(parent.u)}.${shortAxis(parent.v)}`;
+}
+
 function makeBeamCell(u: number, v: number, region = "华东 / 沿海核心"): BeamCell {
   const hash = Math.abs((u * 73856093) ^ (v * 19349663));
   return {
@@ -79,6 +87,7 @@ function makeL2Identity(parent: Pick<BeamCell, "u" | "v">, position: (typeof L2_
     q,
     r,
     id: `CN-G01-L2-Q${signed(q)}-R${signed(r)}`,
+    shortId: `CN1.2.${shortAxis(q)}.${shortAxis(r)}`,
   };
 }
 
@@ -316,7 +325,7 @@ function ClusterView({ parent, selectedChild, onSelect }: { parent: BeamCell; se
               style={{ "--hex-tx": position.tx, "--hex-ty": position.ty, "--hex-color": REUSE_COLORS[mod(position.q + 3 * position.r, 7)] } as CSSProperties}
               onClick={() => onSelect(index)}
               aria-pressed={selectedChild === index}
-              aria-label={`${position.id}，正式 ID ${identity.id}，复用色 ${mod(position.q + 3 * position.r, 7)}`}
+              aria-label={`${position.id}，短号 ${identity.shortId}，复用色 ${mod(position.q + 3 * position.r, 7)}`}
               data-testid={`l2-${position.id}`}
             >
               <b>{position.id}</b>
@@ -394,9 +403,10 @@ export function BeamPlanner() {
 
   const submitSearch = (event: FormEvent) => {
     event.preventDefault();
-    const match = search.trim().match(/^CN-G01-L1-U([+-]\d+)-V([+-]\d+)$/i);
+    const value = search.trim();
+    const match = value.match(/^CN1\.1\.([+-]\d+)\.([+-]\d+)$/i) ?? value.match(/^CN-G01-L1-U([+-]\d+)-V([+-]\d+)$/i);
     if (!match) {
-      setSearchError("请输入完整 L1 ID，例如 U+00125-V-00037");
+      setSearchError("请输入 L1 短号，例如 CN1.1.+125.-37");
       return;
     }
     setSelected(makeBeamCell(Number(match[1]), Number(match[2])));
@@ -454,7 +464,7 @@ export function BeamPlanner() {
 
           <form className="beam-search" onSubmit={submitSearch}>
             <label htmlFor="beam-id">定位一级波位</label>
-            <div><input id="beam-id" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="CN-G01-L1-U+00125-V-00037" /><button type="submit">定位</button></div>
+            <div><input id="beam-id" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="CN1.1.+125.-37" /><button type="submit">定位</button></div>
             {searchError && <p role="alert">{searchError}</p>}
           </form>
 
@@ -478,7 +488,12 @@ export function BeamPlanner() {
 
         <aside className="inspector-panel" aria-label="波位详情">
           <div className="panel-heading"><span>02</span><div><p>SELECTION</p><h2>当前选择</h2></div></div>
-          <div className="selection-id"><span>L1 · {selected.status.toUpperCase()}</span><h3>{selected.id}</h3><button type="button" onClick={() => setView("cluster")}>展开 7 个 L2 →</button></div>
+          <div className="selection-id">
+            <span>L1 · {selected.status.toUpperCase()}</span>
+            <h3>{makeL1ShortId(selected)}</h3>
+            <button type="button" onClick={() => setView("cluster")}>展开 7 个 L2 →</button>
+            <details className="export-key"><summary>查看导出键</summary><code>{selected.id}</code></details>
+          </div>
           <dl className="detail-grid">
             <div><dt>NCI</dt><dd>{selected.nci}</dd></div><div><dt>TAC</dt><dd>{selected.tac}</dd></div>
             <div><dt>轴坐标</dt><dd>U {signed(selected.u)} / V {signed(selected.v)}</dd></div><div><dt>L1 复用色</dt><dd><i style={{ background: REUSE_COLORS[selected.reuse] }} />R{selected.reuse}</dd></div>
@@ -486,8 +501,9 @@ export function BeamPlanner() {
           </dl>
 
           <div className="l2-inspector">
-            <div><span>正式二级波位 ID · {selectedL2.id} 为局部槽位</span><b>{selectedL2Identity.id}</b></div>
+            <div><span>L2 短号 · {selectedL2.id} 为局部槽位</span><b>{selectedL2Identity.shortId}</b></div>
             <div className="mini-hex" style={{ "--hex-color": REUSE_COLORS[selectedL2Reuse] } as CSSProperties}>{selectedL2.id}</div>
+            <details className="export-key"><summary>查看导出键</summary><code>{selectedL2Identity.id}</code></details>
             <dl><div><dt>全局轴坐标</dt><dd>Q {signed(selectedL2Identity.q)} / R {signed(selectedL2Identity.r)}</dd></div><div><dt>名义半径</dt><dd>15 km</dd></div><div><dt>复用色</dt><dd>R{selectedL2Reuse}</dd></div><div><dt>服务资源</dt><dd>PDU / DRB · SR/SRS</dd></div></dl>
           </div>
 
