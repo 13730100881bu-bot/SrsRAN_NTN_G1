@@ -22,6 +22,7 @@ test("server-renders the NTN beam planning console", async () => {
   assert.match(html, /星地波位规划台/);
   assert.match(html, /全国地固波位目录/);
   assert.match(html, /CN-G01/);
+  assert.match(html, /CN-G01-L2-Q\+00338-R-00199/);
   assert.match(html, /L1 \/ L2 编排/);
   assert.match(html, /多星接管/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);

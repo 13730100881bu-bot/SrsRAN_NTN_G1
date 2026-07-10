@@ -23,13 +23,13 @@ type CanvasCell = BeamCell & { x: number; y: number; radius: number; guard: bool
 const REUSE_COLORS = ["#45a8e5", "#ff9b54", "#53c68c", "#ec6f9d", "#9678d3", "#42bbb2", "#e4c64d"];
 const REGION_OPTIONS = ["全国", "华北", "华东", "华南", "西部"];
 const L2_POSITIONS = [
-  { id: "D0", q: 0, r: 0, x: 50, y: 49 },
-  { id: "D1", q: 1, r: 0, x: 69.5, y: 49 },
-  { id: "D2", q: 1, r: -1, x: 59.8, y: 31.8 },
-  { id: "D3", q: 0, r: -1, x: 40.2, y: 31.8 },
-  { id: "D4", q: -1, r: 0, x: 30.5, y: 49 },
-  { id: "D5", q: -1, r: 1, x: 40.2, y: 66.2 },
-  { id: "D6", q: 0, r: 1, x: 59.8, y: 66.2 },
+  { id: "D0", q: 0, r: 0, tx: "0%", ty: "0%" },
+  { id: "D1", q: 1, r: 0, tx: "100%", ty: "0%" },
+  { id: "D2", q: 1, r: -1, tx: "50%", ty: "-75%" },
+  { id: "D3", q: 0, r: -1, tx: "-50%", ty: "-75%" },
+  { id: "D4", q: -1, r: 0, tx: "-100%", ty: "0%" },
+  { id: "D5", q: -1, r: 1, tx: "-50%", ty: "75%" },
+  { id: "D6", q: 0, r: 1, tx: "50%", ty: "75%" },
 ];
 
 const TAKEOVER_PHASES = [
@@ -67,6 +67,18 @@ function makeBeamCell(u: number, v: number, region = "华东 / 沿海核心"): B
     region,
     satellite: mod(u + v, 3) === 0 ? "SAT-B07" : "SAT-A12",
     status: mod(u - v, 11) === 0 ? "candidate" : "ready",
+  };
+}
+
+function makeL2Identity(parent: Pick<BeamCell, "u" | "v">, position: (typeof L2_POSITIONS)[number]) {
+  const centerQ = 3 * parent.u + parent.v;
+  const centerR = -parent.u + 2 * parent.v;
+  const q = centerQ + position.q;
+  const r = centerR + position.r;
+  return {
+    q,
+    r,
+    id: `CN-G01-L2-Q${signed(q)}-R${signed(r)}`,
   };
 }
 
@@ -285,32 +297,47 @@ function NationalCanvas({
   );
 }
 
-function ClusterView({ selectedChild, onSelect }: { selectedChild: number; onSelect: (index: number) => void }) {
+function ClusterView({ parent, selectedChild, onSelect }: { parent: BeamCell; selectedChild: number; onSelect: (index: number) => void }) {
   return (
     <div className="cluster-stage" data-testid="cluster-stage">
       <div className="cluster-caption">
         <span>L1 信令服务轮廓</span>
         <strong>1 个 access cell · 7 个数字业务位置</strong>
       </div>
-      <div className="parent-ring" aria-hidden="true" />
-      {L2_POSITIONS.map((position, index) => (
-        <button
-          key={position.id}
-          type="button"
-          className={`hex-button ${selectedChild === index ? "is-selected" : ""}`}
-          style={{ left: `${position.x}%`, top: `${position.y}%`, "--hex-color": REUSE_COLORS[mod(position.q + 3 * position.r, 7)] } as CSSProperties}
-          onClick={() => onSelect(index)}
-          aria-pressed={selectedChild === index}
-          aria-label={`${position.id} 二级数字波位，复用色 ${mod(position.q + 3 * position.r, 7)}`}
-          data-testid={`l2-${position.id}`}
-        >
-          <b>{position.id}</b>
-          <span>R{mod(position.q + 3 * position.r, 7)}</span>
-        </button>
-      ))}
+      <div className="cluster-grid">
+        <div className="parent-ring" aria-hidden="true" />
+        {L2_POSITIONS.map((position, index) => {
+          const identity = makeL2Identity(parent, position);
+          return (
+            <button
+              key={position.id}
+              type="button"
+              className={`hex-button ${selectedChild === index ? "is-selected" : ""}`}
+              style={{ "--hex-tx": position.tx, "--hex-ty": position.ty, "--hex-color": REUSE_COLORS[mod(position.q + 3 * position.r, 7)] } as CSSProperties}
+              onClick={() => onSelect(index)}
+              aria-pressed={selectedChild === index}
+              aria-label={`${position.id}，正式 ID ${identity.id}，复用色 ${mod(position.q + 3 * position.r, 7)}`}
+              data-testid={`l2-${position.id}`}
+            >
+              <b>{position.id}</b>
+              <span>R{mod(position.q + 3 * position.r, 7)}</span>
+            </button>
+          );
+        })}
+      </div>
       <div className="cluster-scale"><span /> 15 km 名义半径</div>
       <div className="cluster-rule rule-intra">同 L1：资源重配</div>
       <div className="cluster-rule rule-inter">跨 L1：目标 ready 后 HO</div>
+      <div className="l2-id-strip" aria-label="当前一级波位的七个二级波位 ID">
+        {L2_POSITIONS.map((position, index) => {
+          const identity = makeL2Identity(parent, position);
+          return (
+            <button type="button" key={position.id} className={selectedChild === index ? "active" : ""} onClick={() => onSelect(index)} aria-pressed={selectedChild === index}>
+              <span>{position.id}</span><b>Q{signed(identity.q)}</b><b>R{signed(identity.r)}</b>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -361,6 +388,7 @@ export function BeamPlanner() {
   const [searchError, setSearchError] = useState("");
 
   const selectedL2 = L2_POSITIONS[selectedChild];
+  const selectedL2Identity = makeL2Identity(selected, selectedL2);
   const selectedL2Reuse = mod(selectedL2.q + 3 * selectedL2.r, 7);
   const activeMetric = view === "national" ? "全国目录" : view === "cluster" ? "两级结构" : "多星接管";
 
@@ -440,7 +468,7 @@ export function BeamPlanner() {
           </div>
           <div className={`visual-stage view-${view}`}>
             {view === "national" && <NationalCanvas mode={colorMode} region={region} showGuard={showGuard} showLabels={showLabels} selected={selected} onSelect={setSelected} />}
-            {view === "cluster" && <ClusterView selectedChild={selectedChild} onSelect={setSelectedChild} />}
+            {view === "cluster" && <ClusterView parent={selected} selectedChild={selectedChild} onSelect={setSelectedChild} />}
             {view === "handover" && <HandoverView phase={phase} onPhase={setPhase} />}
           </div>
           <div className="stage-footer">
@@ -458,9 +486,9 @@ export function BeamPlanner() {
           </dl>
 
           <div className="l2-inspector">
-            <div><span>选中二级波位</span><b>{selectedL2.id}</b></div>
+            <div><span>正式二级波位 ID · {selectedL2.id} 为局部槽位</span><b>{selectedL2Identity.id}</b></div>
             <div className="mini-hex" style={{ "--hex-color": REUSE_COLORS[selectedL2Reuse] } as CSSProperties}>{selectedL2.id}</div>
-            <dl><div><dt>用途</dt><dd>数字业务跳变</dd></div><div><dt>名义半径</dt><dd>15 km</dd></div><div><dt>复用色</dt><dd>R{selectedL2Reuse}</dd></div><div><dt>服务资源</dt><dd>PDU / DRB · SR/SRS</dd></div></dl>
+            <dl><div><dt>全局轴坐标</dt><dd>Q {signed(selectedL2Identity.q)} / R {signed(selectedL2Identity.r)}</dd></div><div><dt>名义半径</dt><dd>15 km</dd></div><div><dt>复用色</dt><dd>R{selectedL2Reuse}</dd></div><div><dt>服务资源</dt><dd>PDU / DRB · SR/SRS</dd></div></dl>
           </div>
 
           <div className="invariant-box"><p>当前不变量</p><ul><li>小区身份不绑定 satellite_id</li><li>同 L1 的 L2 切换不触发 HO</li><li>DU applied feedback 后才视为 ready</li></ul></div>
