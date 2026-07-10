@@ -11,9 +11,17 @@
 
 ## 本地运行
 
+Windows 下可直接双击 `open_ntn_beam_planner.cmd`。它会启动本机服务并打开：
+
+`http://127.0.0.1:4317`
+
+使用结束后关闭标题为 `NTN Beam Planner Server` 的命令行窗口即可。
+
+也可以手动运行：
+
 ```bash
 npm install
-npm run dev
+npm run dev -- -H 127.0.0.1 -p 4317
 ```
 
 生产构建与渲染测试：
