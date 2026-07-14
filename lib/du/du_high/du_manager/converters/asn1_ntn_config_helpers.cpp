@@ -21,15 +21,54 @@
  */
 
 #include "asn1_ntn_config_helpers.h"
+#include "srsran/adt/byte_buffer.h"
+#include <array>
+#include <cmath>
 
 using namespace asn1::rrc_nr;
+
+/// Encode a geodetic coordinate as an 11-octet ReferenceLocation-r17 per TS 23.032 §7.3.4
+/// (Ellipsoid Point with Uncertainty Ellipse).
+static asn1::dyn_octstring encode_reference_location(const srsran::geodetic_coordinates_t& loc)
+{
+  // Latitude: 23-bit magnitude, bit 23 = South flag.
+  const auto lat_int = static_cast<uint32_t>(std::lround(std::abs(loc.latitude) * (1u << 23) / 90.0));
+  // Longitude: signed 24-bit two's-complement, value = round(lon * 2^24 / 360).
+  const auto lon_int = static_cast<int32_t>(std::lround(loc.longitude * (1u << 24) / 360.0));
+
+  const std::array<uint8_t, 11> bytes = {{
+      0x03u, // Shape type: Ellipsoid Point with Uncertainty Ellipse
+      static_cast<uint8_t>((loc.latitude < 0.0 ? 0x80u : 0x00u) | ((lat_int >> 16u) & 0x7fu)),
+      static_cast<uint8_t>((lat_int >> 8u) & 0xffu),
+      static_cast<uint8_t>(lat_int & 0xffu),
+      static_cast<uint8_t>((static_cast<uint32_t>(lon_int) >> 16u) & 0xffu),
+      static_cast<uint8_t>((static_cast<uint32_t>(lon_int) >> 8u) & 0xffu),
+      static_cast<uint8_t>(static_cast<uint32_t>(lon_int) & 0xffu),
+      0x00u, // uncertainty semi-major = 0
+      0x00u, // uncertainty semi-minor = 0
+      0x00u, // orientation of major axis = 0
+      0x00u, // confidence = 0
+  }};
+
+  auto result = srsran::byte_buffer::create(bytes.begin(), bytes.end());
+  srsran_assert(result.has_value(), "Failed to allocate reference location buffer");
+  return asn1::dyn_octstring{std::move(result.value())};
+}
 
 sib19_r17_s srsran::srs_du::make_asn1_rrc_cell_sib19(const sib19_info& sib19_params)
 {
   sib19_r17_s sib19;
 
-  // Distance Threshold.
-  sib19.distance_thresh_r17_present = false;
+  // Reference location (beam position centre, encoded per TS 23.032 §7.3.4).
+  if (sib19_params.ref_location.has_value()) {
+    sib19.ref_location_r17 = encode_reference_location(sib19_params.ref_location.value());
+  }
+
+  // Distance threshold (coverage radius in 50 m steps, per TS 38.331 distanceThresh-r17).
+  if (sib19_params.distance_thres.has_value()) {
+    sib19.distance_thresh_r17_present = true;
+    sib19.distance_thresh_r17         = static_cast<uint16_t>(sib19_params.distance_thres.value());
+  }
 
   // T-Service, currently not supported.
   sib19.t_service_r17_present = false;

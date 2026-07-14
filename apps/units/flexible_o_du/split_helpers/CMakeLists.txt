@@ -32,6 +32,8 @@ target_include_directories(srsran_flexible_o_du_helpers PRIVATE ${CMAKE_SOURCE_D
 target_link_libraries(srsran_flexible_o_du_helpers
         srsran_o_du
         srsran_pcap
+        du_manager_converters
+        srsran_ntn
         srsran_app_services
         srsran_o_du_low_unit_helpers
         srsran_o_du_high_unit_helpers

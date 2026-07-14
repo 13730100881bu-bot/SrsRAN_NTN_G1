@@ -36,6 +36,7 @@
 #include "srsran/scheduler/config/serving_cell_config_validator.h"
 #include "srsran/scheduler/sched_consts.h"
 #include "srsran/support/config/validator_helpers.h"
+#include <limits>
 
 using namespace srsran;
 using namespace srs_du;
@@ -374,9 +375,7 @@ static check_outcome check_ssb_configuration(const du_cell_config& cell_cfg)
         fmt::underlying(ssb_cfg.scs), fmt::underlying(subcarrier_spacing::kHz120), "SSB SCS must be 120kHz for FR2.");
   }
 
-  CHECK_EQ(ssb_cfg.ssb_bitmap,
-           static_cast<uint64_t>(1U) << static_cast<uint64_t>(63U),
-           "Multiple beams not supported for SSB.");
+  CHECK_TRUE(ssb_cfg.ssb_bitmap != 0, "SSB bitmap must contain at least one active SSB beam.");
 
   // Checks that SSB does not get located outside the band.
   if (cell_cfg.scs_common == subcarrier_spacing::kHz15) {
@@ -418,9 +417,14 @@ static check_outcome check_ssb_configuration(const du_cell_config& cell_cfg)
   }
 
   ssb_pattern_case ssb_case   = band_helper::get_ssb_pattern(cell_cfg.dl_carrier.band, ssb_cfg.scs);
-  uint8_t          ssb_bitmap = static_cast<uint64_t>(ssb_cfg.ssb_bitmap) << static_cast<uint64_t>(56U);
+  uint8_t          ssb_bitmap = static_cast<uint8_t>(ssb_cfg.ssb_bitmap >> static_cast<uint64_t>(56U));
   bool             is_paired  = band_helper::is_paired_spectrum(cell_cfg.dl_carrier.band);
   uint8_t          L_max      = ssb_get_L_max(ssb_cfg.scs, cell_cfg.dl_carrier.arfcn_f_ref, cell_cfg.dl_carrier.band);
+  uint64_t valid_ssb_mask = L_max == NOF_BEAMS ? std::numeric_limits<uint64_t>::max()
+                                               : std::numeric_limits<uint64_t>::max() << (NOF_BEAMS - L_max);
+  CHECK_TRUE((ssb_cfg.ssb_bitmap & ~valid_ssb_mask) == 0,
+             "SSB bitmap contains positions outside the supported L_max={} SSB beams.",
+             L_max);
   double           cutoff_freq_mhz_case_a_b_c = band_helper::nr_arfcn_to_freq(cell_cfg.dl_carrier.arfcn_f_ref) / 1e6;
   double cutoff_freq_mhz_case_c_unpaired      = band_helper::nr_arfcn_to_freq(cell_cfg.dl_carrier.arfcn_f_ref) / 1e6;
 

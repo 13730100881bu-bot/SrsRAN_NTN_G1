@@ -21,9 +21,9 @@
  */
 
 #include "du_mac_si_pdu_update_procedure.h"
+#include "../du_cell_manager.h"
+#include "srsran/mac/mac_cell_manager.h"
 #include "srsran/srslog/srslog.h"
-#include "srsran/support/async/async_no_op_task.h"
-#include <future>
 
 using namespace srsran;
 using namespace srs_du;
@@ -34,11 +34,40 @@ async_task<du_si_pdu_update_response> srsran::srs_du::start_du_mac_si_pdu_update
                                                                                  const du_manager_params&        params,
                                                                                  du_cell_manager& cell_mng)
 {
-  auto err_function = [](coro_context<async_task<du_si_pdu_update_response>>& ctx) {
+  srslog::basic_logger& logger = srslog::fetch_basic_logger("DU-MNG");
+
+  return launch_async([&req,
+                       &params,
+                       &cell_mng,
+                       &logger,
+                       cell_index = INVALID_DU_CELL_INDEX,
+                       mac_req    = mac_cell_reconfig_request{},
+                       mac_resp   = mac_cell_reconfig_response{}](
+                          coro_context<async_task<du_si_pdu_update_response>>& ctx) mutable {
     CORO_BEGIN(ctx);
-    CORO_RETURN(du_si_pdu_update_response{false});
-  };
-  return launch_async(std::move(err_function));
+
+    cell_index = cell_mng.get_cell_index(req.nr_cgi);
+    if (cell_index == INVALID_DU_CELL_INDEX) {
+      logger.warning("Discarding SI PDU update. Cause: No DU cell with NR-CGI={} was found", req.nr_cgi.nci);
+      CORO_EARLY_RETURN(du_si_pdu_update_response{false});
+    }
+
+    if (not cell_mng.is_cell_active(cell_index)) {
+      logger.warning("Discarding SI PDU update for cell={}. Cause: Cell is not active", fmt::underlying(cell_index));
+      CORO_EARLY_RETURN(du_si_pdu_update_response{false});
+    }
+
+    mac_req.new_si_pdu_info.emplace();
+    mac_req.new_si_pdu_info->si_msg_idx     = req.si_msg_idx;
+    mac_req.new_si_pdu_info->sib_idx        = static_cast<uint8_t>(req.sib_idx);
+    mac_req.new_si_pdu_info->slot           = req.slot;
+    mac_req.new_si_pdu_info->si_slot_period = req.si_slot_period;
+    mac_req.new_si_pdu_info->si_messages    = req.si_messages;
+
+    CORO_AWAIT_VALUE(mac_resp, params.mac.mgr.get_cell_manager().get_cell_controller(cell_index).reconfigure(mac_req));
+
+    CORO_RETURN(du_si_pdu_update_response{mac_resp.si_pdus_enqueued});
+  });
 }
 
 #endif // SRSRAN_HAS_ENTERPRISE_NTN

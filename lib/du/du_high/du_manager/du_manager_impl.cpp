@@ -274,14 +274,41 @@ du_param_config_response du_manager_impl::handle_operator_config_request(const d
 
 void du_manager_impl::handle_si_pdu_update(const du_si_pdu_update_request& req)
 {
-  schedule_async_task(launch_async([&req, this](coro_context<async_task<void>>& ctx) {
+  std::vector<byte_buffer> si_messages;
+  si_messages.reserve(req.si_messages.size());
+  for (const byte_buffer& si_message : req.si_messages) {
+    auto si_message_copy = si_message.deep_copy(byte_buffer::fallback_allocation_tag{});
+    if (not si_message_copy.has_value()) {
+      logger.warning("Discarding SI PDU update. Cause: Failed to copy SI message buffer");
+      return;
+    }
+    si_messages.push_back(std::move(si_message_copy.value()));
+  }
+
+  schedule_async_task(launch_async([this,
+                                    nr_cgi         = req.nr_cgi,
+                                    si_msg_idx     = req.si_msg_idx,
+                                    sib_idx        = req.sib_idx,
+                                    slot           = req.slot,
+                                    si_slot_period = req.si_slot_period,
+                                    si_messages    = std::move(si_messages),
+                                    req_copy       = du_si_pdu_update_request{}](
+                                       coro_context<async_task<void>>& ctx) mutable {
     CORO_BEGIN(ctx);
 
     if (not ctxt.running) {
       // Already stopped.
       CORO_EARLY_RETURN();
     }
-    CORO_AWAIT(start_du_mac_si_pdu_update(req, params, cell_mng));
+
+    req_copy.nr_cgi         = nr_cgi;
+    req_copy.si_msg_idx     = si_msg_idx;
+    req_copy.sib_idx        = sib_idx;
+    req_copy.slot           = slot;
+    req_copy.si_slot_period = si_slot_period;
+    req_copy.si_messages    = span<byte_buffer>(si_messages.data(), si_messages.size());
+
+    CORO_AWAIT(start_du_mac_si_pdu_update(req_copy, params, cell_mng));
 
     CORO_RETURN();
   }));

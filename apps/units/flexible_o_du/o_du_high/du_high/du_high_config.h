@@ -47,7 +47,9 @@
 #include "srsran/ran/tac.h"
 #include "srsran/scheduler/config/scheduler_expert_config.h"
 #include "srsran/srslog/srslog.h"
+#include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -130,6 +132,8 @@ struct du_high_unit_ssb_config {
   int ssb_block_power = -16;
   /// PSS EPRE to SSS EPRE for SSB, as per TS 38.213, Section 4.1.
   ssb_pss_to_sss_epre pss_to_sss_epre = ssb_pss_to_sss_epre::dB_0;
+  /// SSB positions in burst bitmap, as per TS 38.331. Bit 63 maps to SSB index 0, bit 62 to index 1, etc.
+  std::optional<uint64_t> ssb_bitmap;
 };
 
 /// Common uplink parameters of a cell.

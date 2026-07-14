@@ -36,6 +36,7 @@
 #include "srsran/support/cli11_utils.h"
 #include "srsran/support/config_parsers.h"
 #include "srsran/support/format/fmt_to_c_str.h"
+#include <limits>
 
 using namespace srsran;
 
@@ -44,6 +45,44 @@ static expected<Integer, std::string> parse_int(const std::string& value)
 {
   try {
     return std::stoi(value);
+  } catch (const std::invalid_argument& e) {
+    return make_unexpected(e.what());
+  } catch (const std::out_of_range& e) {
+    return make_unexpected(e.what());
+  }
+}
+
+static expected<uint64_t, std::string> parse_ssb_bitmap(const std::string& value)
+{
+  if (value.empty()) {
+    return make_unexpected("SSB bitmap cannot be empty");
+  }
+
+  if (value.size() > 2 and value[0] == '0' and (value[1] == 'b' or value[1] == 'B')) {
+    if (value.size() == 2) {
+      return make_unexpected("SSB bitmap binary literal has no digits");
+    }
+
+    uint64_t bitmap = 0;
+    for (unsigned i = 2, e = value.size(); i != e; ++i) {
+      if (value[i] != '0' and value[i] != '1') {
+        return make_unexpected("SSB bitmap binary literal can only contain 0 or 1");
+      }
+      if (bitmap > (std::numeric_limits<uint64_t>::max() >> 1U)) {
+        return make_unexpected("SSB bitmap is out of uint64_t range");
+      }
+      bitmap = (bitmap << 1U) | static_cast<uint64_t>(value[i] == '1');
+    }
+    return bitmap;
+  }
+
+  try {
+    std::size_t idx    = 0;
+    uint64_t    bitmap = std::stoull(value, &idx, 0);
+    if (idx != value.size()) {
+      return make_unexpected("SSB bitmap contains trailing characters");
+    }
+    return bitmap;
   } catch (const std::invalid_argument& e) {
     return make_unexpected(e.what());
   } catch (const std::out_of_range& e) {
@@ -449,6 +488,20 @@ static void configure_cli11_ssb_args(CLI::App& app, du_high_unit_ssb_config& ssb
       },
       "SSB PSS to SSS EPRE ratio in dB {0, 3}")
       ->check(CLI::IsMember({0, 3}));
+  add_option_function<std::string>(
+      app,
+      "--ssb_bitmap",
+      [&ssb_params](const std::string& value) {
+        expected<uint64_t, std::string> bitmap = parse_ssb_bitmap(value);
+        if (bitmap.has_value()) {
+          ssb_params.ssb_bitmap = bitmap.value();
+        }
+      },
+      "SSB positions in burst bitmap. Bit 63 maps to SSB index 0. Accepts decimal, 0x... or 0b...")
+      ->check([](const std::string& value) {
+        expected<uint64_t, std::string> bitmap = parse_ssb_bitmap(value);
+        return bitmap.has_value() ? "" : bitmap.error();
+      });
 }
 
 static void configure_cli11_tdd_ul_dl_pattern_args(CLI::App& app, tdd_ul_dl_pattern_unit_config& pattern_params)

@@ -29,6 +29,16 @@
 using namespace srsran;
 using namespace srs_du;
 
+static uint8_t count_active_ssb_beams(uint64_t ssb_bitmap)
+{
+  uint8_t nof_beams = 0;
+  while (ssb_bitmap != 0) {
+    nof_beams += static_cast<uint8_t>(ssb_bitmap & 1U);
+    ssb_bitmap >>= 1U;
+  }
+  return nof_beams;
+}
+
 std::optional<si_scheduling_config>
 srsran::srs_du::make_si_scheduling_info_config(const du_cell_config& du_cfg, span<const units::bytes> si_message_lens)
 {
@@ -76,7 +86,10 @@ srsran::srs_du::make_sched_cell_config_req(du_cell_index_t                      
   sched_req.ssb_config           = du_cfg.ssb_cfg;
   sched_req.dmrs_typeA_pos       = du_cfg.dmrs_typeA_pos;
   sched_req.tdd_ul_dl_cfg_common = du_cfg.tdd_ul_dl_cfg_common;
-  sched_req.nof_beams            = 1;
+  sched_req.nof_beams            = count_active_ssb_beams(du_cfg.ssb_cfg.ssb_bitmap);
+  if (sched_req.nof_beams == 0) {
+    sched_req.nof_beams = 1;
+  }
   // NTN parameters.
   sched_req.ntn_cs_koffset = du_cfg.ntn_cs_koffset;
   sched_req.dl_harq_mode_b = du_cfg.dl_harq_mode_b;

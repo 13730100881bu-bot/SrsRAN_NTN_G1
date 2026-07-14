@@ -117,10 +117,10 @@ inline dci_ul_format get_ul_dci_format(const search_space_configuration& ss_cfg)
 /// \param sl Slot in which the SearchSpace is being monitored.
 /// \param ss_cfg SearchSpace configuration.
 /// \return true if the SearchSpace is being monitored. False, otherwise.
-inline bool is_pdcch_monitoring_active(slot_point sl, const search_space_configuration& ss_cfg)
+inline bool is_pdcch_monitoring_active(slot_point sl, const search_space_configuration& ss_cfg, uint8_t ssb_beam_idx = 0)
 {
   const unsigned slot_offset  = sl.to_uint() % ss_cfg.get_monitoring_slot_periodicity();
-  const unsigned window_start = ss_cfg.get_monitoring_slot_offset();
+  const unsigned window_start = ss_cfg.get_monitoring_slot_offset(ssb_beam_idx);
   const unsigned window_end   = (window_start + ss_cfg.get_duration()) % ss_cfg.get_monitoring_slot_periodicity();
 
   // Checks whether slot_offset falls [window_start, window_end), taking into account the wrap-around of "window_end".

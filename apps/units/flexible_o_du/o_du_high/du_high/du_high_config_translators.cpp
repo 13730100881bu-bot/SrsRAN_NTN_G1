@@ -385,6 +385,15 @@ std::vector<srs_du::du_cell_config> srsran::generate_du_cell_config(const du_hig
     out_cell.ssb_cfg.ssb_period      = static_cast<ssb_periodicity>(base_cell.ssb_cfg.ssb_period_msec);
     out_cell.ssb_cfg.ssb_block_power = base_cell.ssb_cfg.ssb_block_power;
     out_cell.ssb_cfg.pss_to_sss_epre = base_cell.ssb_cfg.pss_to_sss_epre;
+    if (base_cell.ssb_cfg.ssb_bitmap.has_value()) {
+      out_cell.ssb_cfg.ssb_bitmap = base_cell.ssb_cfg.ssb_bitmap.value();
+      out_cell.ssb_cfg.beam_ids   = {};
+      for (unsigned ssb_idx = 0; ssb_idx != out_cell.ssb_cfg.beam_ids.size(); ++ssb_idx) {
+        if ((out_cell.ssb_cfg.ssb_bitmap & (static_cast<uint64_t>(1U) << (63U - ssb_idx))) != 0) {
+          out_cell.ssb_cfg.beam_ids[ssb_idx] = ssb_idx;
+        }
+      }
+    }
 
     // SI message config.
     if (not base_cell.sib_cfg.si_sched_info.empty()) {

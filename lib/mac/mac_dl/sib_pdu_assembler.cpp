@@ -23,6 +23,8 @@
 #include "sib_pdu_assembler.h"
 #include "srsran/srslog/srslog.h"
 #include "srsran/support/units.h"
+#include <algorithm>
+#include <deque>
 
 using namespace srsran;
 
@@ -199,10 +201,163 @@ span<const uint8_t> sib_pdu_assembler::encode_si_pdu(slot_point sl_tx, const sib
 
 #ifndef SRSRAN_HAS_ENTERPRISE_NTN
 
-std::unique_ptr<sib_pdu_assembler::message_handler>
-srsran::create_si_message_extension_handler(const mac_cell_sys_info_config& req)
+namespace {
+
+// Maximum number of dynamic SI update records kept in the matching table.
+static constexpr size_t MAX_DYNAMIC_SI_PDU_UPDATES = 256;
+
+// Maximum number of linearized SI PDU buffers retained to keep spans handed to lower layers valid.
+static constexpr size_t MAX_RETAINED_DYNAMIC_SI_PDUS = 4096;
+
+class generic_si_message_extension_handler final : public sib_pdu_assembler::message_handler
 {
-  return nullptr;
+public:
+  explicit generic_si_message_extension_handler(srslog::basic_logger& logger_) : logger(logger_) {}
+
+  si_version_type update(si_version_type si_version, const byte_buffer& pdu) override
+  {
+    // Dynamic SI PDU replacement does not change the SI scheduling version advertised in SIB1.
+    (void)pdu;
+    return si_version;
+  }
+
+  bool enqueue_si_pdu_updates(const mac_cell_sys_info_pdu_update& pdu_update_req) override
+  {
+    if (pdu_update_req.si_messages.empty()) {
+      logger.warning("Discarding dynamic SI PDU update. Cause: No SI messages were provided");
+      return false;
+    }
+
+    if (pdu_update_req.si_messages.size() > 1 &&
+        (!pdu_update_req.si_slot_period.has_value() || pdu_update_req.si_slot_period.value() == 0)) {
+      logger.warning("Discarding dynamic SI PDU update. Cause: si_slot_period is required for multi-PDU updates");
+      return false;
+    }
+
+    dynamic_si_pdu_update update;
+    update.si_msg_idx     = pdu_update_req.si_msg_idx;
+    update.sib_idx        = pdu_update_req.sib_idx;
+    update.start_slot     = pdu_update_req.slot;
+    update.si_slot_period = pdu_update_req.si_slot_period;
+    update.pdus.reserve(pdu_update_req.si_messages.size());
+
+    for (const byte_buffer& si_msg : pdu_update_req.si_messages) {
+      auto pdu = dynamic_si_pdu{make_linear_buffer(si_msg), static_cast<unsigned>(si_msg.length())};
+      retained_pdus.push_back(pdu.buffer);
+      update.pdus.push_back(std::move(pdu));
+    }
+
+    while (retained_pdus.size() > MAX_RETAINED_DYNAMIC_SI_PDUS) {
+      retained_pdus.pop_front();
+    }
+
+    control_snapshot.updates.push_back(std::move(update));
+    if (control_snapshot.updates.size() > MAX_DYNAMIC_SI_PDU_UPDATES) {
+      control_snapshot.updates.erase(control_snapshot.updates.begin(),
+                                     control_snapshot.updates.end() - MAX_DYNAMIC_SI_PDU_UPDATES);
+    }
+    pending_snapshot.write_and_commit(control_snapshot);
+
+    logger.debug("Enqueued dynamic SI PDU update si_msg={} sib={} slot={} nof_pdus={}",
+                 pdu_update_req.si_msg_idx,
+                 pdu_update_req.sib_idx,
+                 pdu_update_req.slot,
+                 pdu_update_req.si_messages.size());
+
+    return true;
+  }
+
+  span<const uint8_t> get_pdu(slot_point sl_tx, const sib_information& si_info) override
+  {
+    if (si_info.si_indicator != sib_information::si_indicator_type::other_si || !si_info.si_msg_index.has_value()) {
+      return {};
+    }
+
+    const auto& snapshot = pending_snapshot.read();
+    const auto* selected = select_pdu(snapshot, sl_tx, si_info.si_msg_index.value());
+    if (selected == nullptr) {
+      return {};
+    }
+
+    const unsigned tbs = si_info.pdsch_cfg.codewords[0].tb_size_bytes;
+    if (selected->length > tbs) {
+      logger.warning("Failed to encode dynamic SI-message {} PDSCH. Cause: PDSCH TB size {} is smaller than the "
+                     "SI-message length {}",
+                     si_info.si_msg_index.value(),
+                     tbs,
+                     selected->length);
+      return span<const uint8_t>{zeros_payload}.first(tbs);
+    }
+
+    return span<const uint8_t>(selected->buffer->data(), tbs);
+  }
+
+private:
+  using bcch_dl_sch_buffer = std::shared_ptr<const std::vector<uint8_t>>;
+
+  struct dynamic_si_pdu {
+    bcch_dl_sch_buffer buffer;
+    unsigned           length = 0;
+  };
+
+  struct dynamic_si_pdu_update {
+    unsigned                         si_msg_idx = 0;
+    uint8_t                          sib_idx    = 0;
+    slot_point                       start_slot;
+    std::optional<unsigned>          si_slot_period;
+    std::vector<dynamic_si_pdu>      pdus;
+  };
+
+  struct dynamic_si_pdu_snapshot {
+    std::vector<dynamic_si_pdu_update> updates;
+  };
+
+  static const dynamic_si_pdu* select_pdu(const dynamic_si_pdu_snapshot& snapshot,
+                                          slot_point                     sl_tx,
+                                          unsigned                       si_msg_idx)
+  {
+    const dynamic_si_pdu* selected = nullptr;
+
+    for (const dynamic_si_pdu_update& update : snapshot.updates) {
+      if (update.si_msg_idx != si_msg_idx || update.pdus.empty() || sl_tx < update.start_slot) {
+        continue;
+      }
+
+      unsigned pdu_idx = 0;
+      if (update.pdus.size() > 1) {
+        if (!update.si_slot_period.has_value()) {
+          continue;
+        }
+
+        const slot_difference slot_offset = sl_tx - update.start_slot;
+        if (slot_offset < 0 || (slot_offset % static_cast<slot_difference>(*update.si_slot_period)) != 0) {
+          continue;
+        }
+
+        pdu_idx = static_cast<unsigned>(slot_offset / static_cast<slot_difference>(*update.si_slot_period));
+        if (pdu_idx >= update.pdus.size()) {
+          continue;
+        }
+      }
+
+      selected = &update.pdus[pdu_idx];
+    }
+
+    return selected;
+  }
+
+  srslog::basic_logger&                         logger;
+  dynamic_si_pdu_snapshot                       control_snapshot;
+  lockfree_triple_buffer<dynamic_si_pdu_snapshot> pending_snapshot;
+  std::deque<bcch_dl_sch_buffer>                retained_pdus;
+};
+
+} // namespace
+
+std::unique_ptr<sib_pdu_assembler::message_handler>
+srsran::create_si_message_extension_handler(const mac_cell_sys_info_config& /*req*/)
+{
+  return std::make_unique<generic_si_message_extension_handler>(srslog::fetch_basic_logger("MAC"));
 }
 
 #endif // SRSRAN_HAS_ENTERPRISE_NTN

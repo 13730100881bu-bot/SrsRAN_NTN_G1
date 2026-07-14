@@ -216,6 +216,9 @@ static YAML::Node build_du_high_ssb_section(const du_high_unit_ssb_config& confi
   node["ssb_period"]          = config.ssb_period_msec;
   node["ssb_block_power_dbm"] = config.ssb_block_power;
   node["pss_to_sss_epre_db"]  = config.pss_to_sss_epre == ssb_pss_to_sss_epre::dB_0 ? "0" : "3";
+  if (config.ssb_bitmap.has_value()) {
+    node["ssb_bitmap"] = std::to_string(config.ssb_bitmap.value());
+  }
 
   return node;
 }
