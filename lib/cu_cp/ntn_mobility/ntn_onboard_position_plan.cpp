@@ -49,6 +49,11 @@ int64_t to_unix_milliseconds(std::chrono::system_clock::time_point value)
   return std::chrono::duration_cast<std::chrono::milliseconds>(value.time_since_epoch()).count();
 }
 
+bool has_millisecond_precision(std::chrono::system_clock::time_point value)
+{
+  return value.time_since_epoch() == std::chrono::duration_cast<std::chrono::milliseconds>(value.time_since_epoch());
+}
+
 std::chrono::system_clock::time_point from_unix_milliseconds(int64_t value)
 {
   return std::chrono::system_clock::time_point{std::chrono::milliseconds{value}};
@@ -428,6 +433,60 @@ const char* srsran::srs_cu_cp::to_string(ntn_access_calendar_state state)
   return state == ntn_access_calendar_state::proposed ? "proposed" : "checked";
 }
 
+const char* srsran::srs_cu_cp::to_string(ntn_initial_access_plan_decision decision)
+{
+  switch (decision) {
+    case ntn_initial_access_plan_decision::accept:
+      return "accept";
+    case ntn_initial_access_plan_decision::reject:
+      return "reject";
+    case ntn_initial_access_plan_decision::audit_only:
+      return "audit_only";
+  }
+  return "unknown";
+}
+
+const char* srsran::srs_cu_cp::to_string(ntn_initial_access_plan_reason reason)
+{
+  switch (reason) {
+    case ntn_initial_access_plan_reason::none:
+      return "none";
+    case ntn_initial_access_plan_reason::feature_disabled:
+      return "feature_disabled";
+    case ntn_initial_access_plan_reason::incomplete_metadata:
+      return "incomplete_metadata";
+    case ntn_initial_access_plan_reason::no_active_plan:
+      return "no_active_plan";
+    case ntn_initial_access_plan_reason::active_plan_not_valid:
+      return "active_plan_not_valid";
+    case ntn_initial_access_plan_reason::satellite_mismatch:
+      return "satellite_mismatch";
+    case ntn_initial_access_plan_reason::catalog_version_mismatch:
+      return "catalog_version_mismatch";
+    case ntn_initial_access_plan_reason::schedule_version_mismatch:
+      return "schedule_version_mismatch";
+    case ntn_initial_access_plan_reason::source_hash_mismatch:
+      return "source_hash_mismatch";
+    case ntn_initial_access_plan_reason::calendar_hash_mismatch:
+      return "calendar_hash_mismatch";
+    case ntn_initial_access_plan_reason::cell_identity_mismatch:
+      return "cell_identity_mismatch";
+    case ntn_initial_access_plan_reason::position_not_assigned_to_cell:
+      return "position_not_assigned_to_cell";
+    case ntn_initial_access_plan_reason::missing_external_apply_evidence:
+      return "missing_external_apply_evidence";
+    case ntn_initial_access_plan_reason::prach_occasion_not_scheduled:
+      return "prach_occasion_not_scheduled";
+    case ntn_initial_access_plan_reason::prach_ul_beam_missing:
+      return "prach_ul_beam_missing";
+    case ntn_initial_access_plan_reason::resource_port_mismatch:
+      return "resource_port_mismatch";
+    case ntn_initial_access_plan_reason::intent_only_plan:
+      return "intent_only_plan";
+  }
+  return "unknown";
+}
+
 std::chrono::milliseconds
 srsran::srs_cu_cp::limit_ntn_position_plan_timer_delay(std::chrono::milliseconds requested_delay)
 {
@@ -466,13 +525,15 @@ ntn_position_plan_reject_reason ntn_onboard_position_plan_controller::validate_p
     return ntn_position_plan_reject_reason::non_monotonic_version;
   }
 
-  if (plan.valid_from >= plan.valid_until) {
+  if (!has_millisecond_precision(plan.valid_from) || !has_millisecond_precision(plan.valid_until) ||
+      plan.valid_from >= plan.valid_until) {
     return ntn_position_plan_reject_reason::invalid_validity_window;
   }
   if (now >= plan.valid_until) {
     return ntn_position_plan_reject_reason::expired;
   }
-  if (plan.activation_epoch < plan.valid_from || plan.activation_epoch >= plan.valid_until) {
+  if (!has_millisecond_precision(plan.activation_epoch) || plan.activation_epoch < plan.valid_from ||
+      plan.activation_epoch >= plan.valid_until) {
     return ntn_position_plan_reject_reason::invalid_activation_epoch;
   }
   const int64_t activation_ms = to_unix_milliseconds(plan.activation_epoch);
@@ -808,8 +869,145 @@ ntn_access_calendar_audit ntn_onboard_position_plan_controller::audit_access_cal
   return audit;
 }
 
-ntn_position_plan_submit_result
-ntn_onboard_position_plan_controller::reject(ntn_position_plan_reject_reason reason, uint64_t schedule_version)
+ntn_initial_access_plan_audit
+ntn_onboard_position_plan_controller::audit_initial_access_event(const ntn_initial_access_plan_event& event) const
+{
+  ntn_initial_access_plan_audit result;
+  auto                          finish = [&result](ntn_initial_access_plan_decision decision,
+                                                   ntn_initial_access_plan_reason   reason,
+                                                   const char*                      evidence) {
+    result.decision = decision;
+    result.reason   = reason;
+    result.evidence = evidence;
+    return result;
+  };
+
+  if (!cfg.enabled) {
+    return finish(ntn_initial_access_plan_decision::audit_only,
+                  ntn_initial_access_plan_reason::feature_disabled,
+                  "not_evaluated_feature_disabled_no_rf_evidence");
+  }
+  if (event.satellite_id.empty() || event.catalog_version == 0 || event.schedule_version == 0 ||
+      event.source_content_hash.empty() || event.calendar_hash.empty() || event.position_id.empty() ||
+      event.cell.pci == INVALID_PCI || event.ul_beam_port_id == ntn_access_calendar_intent::no_resource_port) {
+    return finish(ntn_initial_access_plan_decision::reject,
+                  ntn_initial_access_plan_reason::incomplete_metadata,
+                  "rejected_incomplete_sideband_no_rf_evidence");
+  }
+  if (!active.has_value()) {
+    return finish(ntn_initial_access_plan_decision::reject,
+                  ntn_initial_access_plan_reason::no_active_plan,
+                  "rejected_no_active_plan_no_rf_evidence");
+  }
+
+  result.active_schedule_version = active->source.schedule_version;
+  result.active_calendar_hash    = active->calendar_hash;
+  if (event.occasion_time < active->source.valid_from || event.occasion_time < active->source.activation_epoch ||
+      event.occasion_time >= active->source.valid_until) {
+    return finish(ntn_initial_access_plan_decision::reject,
+                  ntn_initial_access_plan_reason::active_plan_not_valid,
+                  "rejected_outside_active_validity_no_rf_evidence");
+  }
+  if (event.satellite_id != active->source.satellite_id) {
+    return finish(ntn_initial_access_plan_decision::reject,
+                  ntn_initial_access_plan_reason::satellite_mismatch,
+                  "rejected_active_plan_metadata_mismatch_no_rf_evidence");
+  }
+  if (event.catalog_version != active->source.catalog_version) {
+    return finish(ntn_initial_access_plan_decision::reject,
+                  ntn_initial_access_plan_reason::catalog_version_mismatch,
+                  "rejected_active_plan_metadata_mismatch_no_rf_evidence");
+  }
+  if (event.schedule_version != active->source.schedule_version) {
+    return finish(ntn_initial_access_plan_decision::reject,
+                  ntn_initial_access_plan_reason::schedule_version_mismatch,
+                  "rejected_active_plan_metadata_mismatch_no_rf_evidence");
+  }
+  if (normalize_hash(event.source_content_hash) != normalize_hash(active->source.content_hash)) {
+    return finish(ntn_initial_access_plan_decision::reject,
+                  ntn_initial_access_plan_reason::source_hash_mismatch,
+                  "rejected_active_plan_metadata_mismatch_no_rf_evidence");
+  }
+  if (normalize_hash(event.calendar_hash) != normalize_hash(active->calendar_hash)) {
+    return finish(ntn_initial_access_plan_decision::reject,
+                  ntn_initial_access_plan_reason::calendar_hash_mismatch,
+                  "rejected_active_plan_metadata_mismatch_no_rf_evidence");
+  }
+
+  const ntn_onboard_cell_position_set* owner = nullptr;
+  for (const ntn_onboard_cell_position_set& cell : active->cell_positions) {
+    if (cell_identity_equal(cell.identity, event.cell)) {
+      owner = &cell;
+      break;
+    }
+  }
+  if (owner == nullptr) {
+    return finish(ntn_initial_access_plan_decision::reject,
+                  ntn_initial_access_plan_reason::cell_identity_mismatch,
+                  "rejected_active_plan_cell_mismatch_no_rf_evidence");
+  }
+  if (std::find(owner->assigned_l1_ids.begin(), owner->assigned_l1_ids.end(), event.position_id) ==
+      owner->assigned_l1_ids.end()) {
+    return finish(ntn_initial_access_plan_decision::reject,
+                  ntn_initial_access_plan_reason::position_not_assigned_to_cell,
+                  "rejected_active_plan_position_owner_mismatch_no_rf_evidence");
+  }
+  if (cfg.max_prach_interval.count() <= 0) {
+    return finish(ntn_initial_access_plan_decision::reject,
+                  ntn_initial_access_plan_reason::prach_occasion_not_scheduled,
+                  "rejected_invalid_calendar_cycle_no_rf_evidence");
+  }
+
+  const std::chrono::microseconds since_activation =
+      std::chrono::duration_cast<std::chrono::microseconds>(event.occasion_time - active->source.activation_epoch);
+  result.occasion_offset = std::chrono::microseconds{since_activation.count() % cfg.max_prach_interval.count()};
+  const auto ro_it =
+      std::find_if(active->access_calendar.begin(), active->access_calendar.end(), [&](const auto& intent) {
+        return intent.schedule_version == event.schedule_version && intent.nci == event.cell.nci &&
+               intent.position_id == event.position_id && intent.purpose == ntn_access_calendar_purpose::prach_ro &&
+               result.occasion_offset >= intent.start_time &&
+               result.occasion_offset < intent.start_time + intent.duration;
+      });
+  if (ro_it == active->access_calendar.end()) {
+    return finish(ntn_initial_access_plan_decision::reject,
+                  ntn_initial_access_plan_reason::prach_occasion_not_scheduled,
+                  "rejected_outside_active_prach_window_no_rf_evidence");
+  }
+
+  const auto beam_it =
+      std::find_if(active->access_calendar.begin(), active->access_calendar.end(), [&](const auto& intent) {
+        return intent.schedule_version == ro_it->schedule_version && intent.nci == ro_it->nci &&
+               intent.position_id == ro_it->position_id &&
+               intent.purpose == ntn_access_calendar_purpose::prach_ul_beam && intent.start_time == ro_it->start_time &&
+               intent.duration == ro_it->duration;
+      });
+  if (beam_it == active->access_calendar.end()) {
+    return finish(ntn_initial_access_plan_decision::reject,
+                  ntn_initial_access_plan_reason::prach_ul_beam_missing,
+                  "rejected_prach_without_ul_beam_no_rf_evidence");
+  }
+  if (beam_it->port_id != event.ul_beam_port_id) {
+    return finish(ntn_initial_access_plan_decision::reject,
+                  ntn_initial_access_plan_reason::resource_port_mismatch,
+                  "rejected_ul_beam_port_mismatch_no_rf_evidence");
+  }
+  if (cfg.require_external_apply && !active_external_apply_evidence) {
+    return finish(ntn_initial_access_plan_decision::reject,
+                  ntn_initial_access_plan_reason::missing_external_apply_evidence,
+                  "rejected_without_software_gate_snapshot_no_rf_evidence");
+  }
+  if (!cfg.require_external_apply) {
+    return finish(ntn_initial_access_plan_decision::audit_only,
+                  ntn_initial_access_plan_reason::intent_only_plan,
+                  "cu_cp_intent_calendar_event_match_no_du_or_rf_evidence");
+  }
+  return finish(ntn_initial_access_plan_decision::accept,
+                ntn_initial_access_plan_reason::none,
+                "cu_cp_active_plan_event_match_software_gate_snapshot_no_rf_evidence");
+}
+
+ntn_position_plan_submit_result ntn_onboard_position_plan_controller::reject(ntn_position_plan_reject_reason reason,
+                                                                             uint64_t schedule_version)
 {
   current_stage         = reason == ntn_position_plan_reject_reason::feature_disabled
                               ? ntn_position_plan_stage::disabled
@@ -906,6 +1104,14 @@ bool ntn_onboard_position_plan_controller::mark_deployment_preparing(uint64_t   
       normalize_hash(pending->calendar_hash) != normalize_hash(calendar_hash)) {
     return false;
   }
+  if (deployment == ntn_position_plan_deployment_stage::preparing ||
+      deployment == ntn_position_plan_deployment_stage::ready ||
+      deployment == ntn_position_plan_deployment_stage::applied) {
+    return true;
+  }
+  if (deployment != ntn_position_plan_deployment_stage::not_sent) {
+    return false;
+  }
   deployment        = ntn_position_plan_deployment_stage::preparing;
   deployment_reason = "prepare_sent";
   return true;
@@ -917,6 +1123,16 @@ bool ntn_onboard_position_plan_controller::mark_deployment_retryable(uint64_t   
 {
   if (!pending.has_value() || pending->source.schedule_version != schedule_version ||
       normalize_hash(pending->calendar_hash) != normalize_hash(calendar_hash)) {
+    return false;
+  }
+  if (deployment == ntn_position_plan_deployment_stage::ready ||
+      deployment == ntn_position_plan_deployment_stage::applied) {
+    // A matching lower-state response may arrive after a query has already advanced the same plan. Acknowledge it
+    // without regressing state so callers do not treat it as an orphan deployment that must be cleared.
+    return true;
+  }
+  if (deployment != ntn_position_plan_deployment_stage::not_sent &&
+      deployment != ntn_position_plan_deployment_stage::preparing) {
     return false;
   }
   deployment        = ntn_position_plan_deployment_stage::not_sent;
@@ -931,6 +1147,13 @@ bool ntn_onboard_position_plan_controller::mark_deployment_ready(uint64_t       
       normalize_hash(pending->calendar_hash) != normalize_hash(calendar_hash)) {
     return false;
   }
+  if (deployment == ntn_position_plan_deployment_stage::ready ||
+      deployment == ntn_position_plan_deployment_stage::applied) {
+    return true;
+  }
+  if (deployment != ntn_position_plan_deployment_stage::preparing) {
+    return false;
+  }
   deployment        = ntn_position_plan_deployment_stage::ready;
   deployment_reason = "du_ready";
   return true;
@@ -941,6 +1164,13 @@ bool ntn_onboard_position_plan_controller::mark_deployment_applied(uint64_t     
 {
   if (!pending.has_value() || pending->source.schedule_version != schedule_version ||
       normalize_hash(pending->calendar_hash) != normalize_hash(calendar_hash)) {
+    return false;
+  }
+  if (deployment == ntn_position_plan_deployment_stage::applied) {
+    return true;
+  }
+  if (deployment != ntn_position_plan_deployment_stage::preparing &&
+      deployment != ntn_position_plan_deployment_stage::ready) {
     return false;
   }
   deployment        = ntn_position_plan_deployment_stage::applied;

@@ -34,13 +34,14 @@ bool ntn_beam_service_resource_manager::is_valid_access_ownership_update(
     const ntn_access_rnti_ownership_update& update)
 {
   return update.ue_index != ue_index_t::invalid && update.du_index != du_index_t::invalid &&
-         update.pci != INVALID_PCI && update.rnti != rnti_t::INVALID_RNTI;
+         update.cell_index != srsran::INVALID_DU_CELL_INDEX && update.pci != INVALID_PCI &&
+         update.rnti != rnti_t::INVALID_RNTI;
 }
 
 bool ntn_beam_service_resource_manager::is_valid_lease_pool_update(const ntn_rnti_lease_pool_update& update)
 {
-  return update.du_index != du_index_t::invalid && update.pci != INVALID_PCI && !update.analog_beam_id.empty() &&
-         !update.leases.empty();
+  return update.du_index != du_index_t::invalid && update.cell_index != srsran::INVALID_DU_CELL_INDEX &&
+         update.pci != INVALID_PCI && !update.analog_beam_id.empty() && !update.leases.empty();
 }
 
 bool ntn_beam_service_resource_manager::are_slot_requests_equal(const f1ap_ntn_ul_slot_resource_request& lhs,
@@ -91,6 +92,7 @@ ntn_rnti_lease_pool_update_result ntn_beam_service_resource_manager::reserve_rnt
   }
 
   ntn_rnti_lease_pool_update_result result;
+  std::set<rnti_t>                  leases_in_update;
   for (rnti_t rnti : update.leases) {
     if (!is_crnti(rnti)) {
       result.accepted = false;
@@ -98,8 +100,8 @@ ntn_rnti_lease_pool_update_result ntn_beam_service_resource_manager::reserve_rnt
       result.reason   = "invalid_rnti";
       return result;
     }
-    const rnti_key key{update.du_index, update.pci, rnti};
-    if (rnti_leases_by_key.find(key) != rnti_leases_by_key.end() ||
+    const rnti_key key{update.du_index, update.cell_index, update.pci, rnti};
+    if (!leases_in_update.emplace(rnti).second || rnti_leases_by_key.find(key) != rnti_leases_by_key.end() ||
         access_owner_by_rnti.find(key) != access_owner_by_rnti.end()) {
       result.accepted = false;
       result.state    = "conflict";
@@ -120,7 +122,7 @@ ntn_rnti_lease_pool_update_result ntn_beam_service_resource_manager::reserve_rnt
     lease.reason         = "lease_pool";
     lease.distribution_state  = "desired";
     lease.distribution_reason = "local_reservation";
-    rnti_leases_by_key.emplace(rnti_key{update.du_index, update.pci, rnti}, std::move(lease));
+    rnti_leases_by_key.emplace(rnti_key{update.du_index, update.cell_index, update.pci, rnti}, std::move(lease));
     ++result.nof_leases_reserved;
   }
 
@@ -133,7 +135,7 @@ ntn_rnti_lease_pool_update_result ntn_beam_service_resource_manager::reserve_rnt
 void ntn_beam_service_resource_manager::mark_rnti_lease_pool_sent_to_du(const ntn_rnti_lease_pool_update& update)
 {
   for (rnti_t rnti : update.leases) {
-    auto lease_it = rnti_leases_by_key.find(rnti_key{update.du_index, update.pci, rnti});
+    auto lease_it = rnti_leases_by_key.find(rnti_key{update.du_index, update.cell_index, update.pci, rnti});
     if (lease_it == rnti_leases_by_key.end()) {
       continue;
     }
@@ -148,7 +150,7 @@ void ntn_beam_service_resource_manager::mark_rnti_lease_pool_distribution_result
     const f1ap_ntn_rnti_lease_pool_result& result)
 {
   for (rnti_t rnti : result.accepted_leases) {
-    auto lease_it = rnti_leases_by_key.find(rnti_key{update.du_index, update.pci, rnti});
+    auto lease_it = rnti_leases_by_key.find(rnti_key{update.du_index, update.cell_index, update.pci, rnti});
     if (lease_it == rnti_leases_by_key.end()) {
       continue;
     }
@@ -157,7 +159,7 @@ void ntn_beam_service_resource_manager::mark_rnti_lease_pool_distribution_result
     lease_it->second.distribution_reason = result.reject_reason.empty() ? "du_ack" : result.reject_reason;
   }
   for (rnti_t rnti : result.rejected_leases) {
-    auto lease_it = rnti_leases_by_key.find(rnti_key{update.du_index, update.pci, rnti});
+    auto lease_it = rnti_leases_by_key.find(rnti_key{update.du_index, update.cell_index, update.pci, rnti});
     if (lease_it == rnti_leases_by_key.end()) {
       continue;
     }
@@ -274,9 +276,12 @@ void ntn_beam_service_resource_manager::rollback_handover_target_rnti(ue_index_t
 }
 
 ntn_access_rnti_ownership_result
-ntn_beam_service_resource_manager::mark_rnti_offered_in_rar(du_index_t du_index, pci_t pci, rnti_t rnti)
+ntn_beam_service_resource_manager::mark_rnti_offered_in_rar(du_index_t              du_index,
+                                                            srsran::du_cell_index_t cell_index,
+                                                            pci_t                   pci,
+                                                            rnti_t                  rnti)
 {
-  const rnti_key key{du_index, pci, rnti};
+  const rnti_key key{du_index, cell_index, pci, rnti};
   auto           lease_it = rnti_leases_by_key.find(key);
   if (lease_it == rnti_leases_by_key.end()) {
     return {false, "conflict", "unexpected_rnti"};
@@ -320,7 +325,7 @@ ntn_access_rnti_ownership_result ntn_beam_service_resource_manager::validate_acc
     return {};
   }
 
-  const rnti_key key{update.du_index, update.pci, update.rnti};
+  const rnti_key key{update.du_index, update.cell_index, update.pci, update.rnti};
   const auto     lease_it = rnti_leases_by_key.find(key);
   if (authoritative_rnti_lease_validation_enabled && lease_it == rnti_leases_by_key.end()) {
     return {false, "conflict", "unexpected_rnti"};
@@ -359,7 +364,7 @@ ntn_access_rnti_ownership_result ntn_beam_service_resource_manager::register_acc
     return {};
   }
 
-  const rnti_key key{update.du_index, update.pci, update.rnti};
+  const rnti_key key{update.du_index, update.cell_index, update.pci, update.rnti};
   auto           lease_it = rnti_leases_by_key.find(key);
   if (authoritative_rnti_lease_validation_enabled && lease_it == rnti_leases_by_key.end()) {
     ntn_access_rnti_ownership conflict;

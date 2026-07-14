@@ -68,7 +68,8 @@ public:
 
   void rollback_handover_target_rnti(ue_index_t source_ue_index, std::string reason);
 
-  ntn_access_rnti_ownership_result mark_rnti_offered_in_rar(du_index_t du_index, pci_t pci, rnti_t rnti);
+  ntn_access_rnti_ownership_result
+  mark_rnti_offered_in_rar(du_index_t du_index, srsran::du_cell_index_t cell_index, pci_t pci, rnti_t rnti);
 
   unsigned expire_rnti_leases_for_analog_beam(const std::string& analog_beam_id, std::string reason);
 
@@ -123,8 +124,16 @@ public:
   ntn_beam_service_resource_snapshot get_snapshot() const;
 
 private:
-  using rnti_key = std::tuple<du_index_t, pci_t, rnti_t>;
-  using repair_key = std::tuple<ntn_resource_repair_action, ue_index_t, du_index_t, srsran::du_cell_index_t, pci_t, rnti_t, std::string>;
+  // C-RNTI uniqueness is scoped to a serving cell. The two onboard cells are allowed to reuse the same PCI, so PCI
+  // alone cannot distinguish their independently distributed lease pools.
+  using rnti_key = std::tuple<du_index_t, srsran::du_cell_index_t, pci_t, rnti_t>;
+  using repair_key = std::tuple<ntn_resource_repair_action,
+                                ue_index_t,
+                                du_index_t,
+                                srsran::du_cell_index_t,
+                                pci_t,
+                                rnti_t,
+                                std::string>;
 
   static bool is_valid_access_ownership_update(const ntn_access_rnti_ownership_update& update);
   static bool is_valid_lease_pool_update(const ntn_rnti_lease_pool_update& update);

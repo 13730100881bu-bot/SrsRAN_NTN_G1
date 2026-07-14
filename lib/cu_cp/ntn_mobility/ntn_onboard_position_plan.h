@@ -192,6 +192,57 @@ struct ntn_position_plan_submit_result {
   ntn_position_plan_reject_reason reason   = ntn_position_plan_reject_reason::none;
 };
 
+/// Decision produced by the private Initial UL active-plan auditor. It is not an RF execution result.
+enum class ntn_initial_access_plan_decision { accept, reject, audit_only };
+
+enum class ntn_initial_access_plan_reason {
+  none,
+  feature_disabled,
+  incomplete_metadata,
+  no_active_plan,
+  active_plan_not_valid,
+  satellite_mismatch,
+  catalog_version_mismatch,
+  schedule_version_mismatch,
+  source_hash_mismatch,
+  calendar_hash_mismatch,
+  cell_identity_mismatch,
+  position_not_assigned_to_cell,
+  missing_external_apply_evidence,
+  prach_occasion_not_scheduled,
+  prach_ul_beam_missing,
+  resource_port_mismatch,
+  intent_only_plan
+};
+
+const char* to_string(ntn_initial_access_plan_decision decision);
+const char* to_string(ntn_initial_access_plan_reason reason);
+
+/// Proposed private sideband metadata for auditing one Initial UL event against the current active plan.
+///
+/// No production F1AP transport carries this structure yet. In particular, this metadata must not be inferred from
+/// the legacy beam-to-NCI mapping.
+struct ntn_initial_access_plan_event {
+  std::string                           satellite_id;
+  uint64_t                              catalog_version  = 0;
+  uint64_t                              schedule_version = 0;
+  std::string                           source_content_hash;
+  std::string                           calendar_hash;
+  ntn_onboard_cell_identity             cell;
+  std::string                           position_id;
+  std::chrono::system_clock::time_point occasion_time{};
+  uint16_t                              ul_beam_port_id = ntn_access_calendar_intent::no_resource_port;
+};
+
+struct ntn_initial_access_plan_audit {
+  ntn_initial_access_plan_decision decision                = ntn_initial_access_plan_decision::reject;
+  ntn_initial_access_plan_reason   reason                  = ntn_initial_access_plan_reason::incomplete_metadata;
+  uint64_t                         active_schedule_version = 0;
+  std::string                      active_calendar_hash;
+  std::chrono::microseconds        occasion_offset{0};
+  std::string                      evidence = "cu_cp_active_plan_not_evaluated_no_rf_evidence";
+};
+
 /// Private CU-CP controller for version validation, deterministic two-cell partition, calendar audit and activation.
 class ntn_onboard_position_plan_controller
 {
@@ -235,6 +286,9 @@ public:
   audit_access_calendar(uint64_t schedule_version,
                         const std::array<ntn_onboard_cell_position_set, 2>& assignments,
                         const std::vector<ntn_access_calendar_intent>&       intents) const;
+
+  /// Audits complete sideband metadata against the currently active calendar without mutating admission state.
+  ntn_initial_access_plan_audit audit_initial_access_event(const ntn_initial_access_plan_event& event) const;
 
   const ntn_onboard_position_plan_config& config() const { return cfg; }
   ntn_position_plan_stage                 stage() const { return current_stage; }

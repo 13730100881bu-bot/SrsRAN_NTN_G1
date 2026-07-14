@@ -85,6 +85,7 @@ TEST(ntn_beam_service_resource_manager, records_access_rnti_ownership_and_releas
   ntn_access_rnti_ownership_update ownership;
   ownership.ue_index       = uint_to_ue_index(1);
   ownership.du_index       = uint_to_du_index(0);
+  ownership.cell_index     = to_du_cell_index(1);
   ownership.pci            = pci_t{1};
   ownership.rnti           = to_rnti(0x4601);
   ownership.analog_beam_id = "ANALOG-ACCESS-001";
@@ -119,6 +120,7 @@ TEST(ntn_beam_service_resource_manager, validates_access_rnti_against_authoritat
 
   ntn_rnti_lease_pool_update lease_pool;
   lease_pool.du_index       = uint_to_du_index(0);
+  lease_pool.cell_index     = to_du_cell_index(1);
   lease_pool.pci            = pci_t{1};
   lease_pool.analog_beam_id = "ANALOG-ACCESS-001";
   lease_pool.leases.push_back(to_rnti(0x4701));
@@ -131,6 +133,7 @@ TEST(ntn_beam_service_resource_manager, validates_access_rnti_against_authoritat
   ntn_access_rnti_ownership_update ownership;
   ownership.ue_index       = uint_to_ue_index(1);
   ownership.du_index       = uint_to_du_index(0);
+  ownership.cell_index     = to_du_cell_index(1);
   ownership.pci            = pci_t{1};
   ownership.rnti           = to_rnti(0x4701);
   ownership.analog_beam_id = "ANALOG-ACCESS-001";
@@ -234,11 +237,13 @@ TEST(ntn_beam_service_resource_manager, rar_offer_and_initial_ul_use_same_applie
   result.accepted_leases = lease_pool.leases;
   manager.mark_rnti_lease_pool_distribution_result(lease_pool, result);
 
-  EXPECT_TRUE(manager.mark_rnti_offered_in_rar(uint_to_du_index(0), pci_t{1}, to_rnti(0x4701)).accepted);
+  EXPECT_TRUE(
+      manager.mark_rnti_offered_in_rar(uint_to_du_index(0), to_du_cell_index(1), pci_t{1}, to_rnti(0x4701)).accepted);
 
   ntn_access_rnti_ownership_update ownership;
   ownership.ue_index       = uint_to_ue_index(1);
   ownership.du_index       = uint_to_du_index(0);
+  ownership.cell_index     = to_du_cell_index(1);
   ownership.pci            = pci_t{1};
   ownership.rnti           = to_rnti(0x4701);
   ownership.analog_beam_id = "ANALOG-ACCESS-001";
@@ -278,6 +283,7 @@ TEST(ntn_beam_service_resource_manager, expired_or_wrong_beam_lease_rejects_init
   ntn_access_rnti_ownership_update expired;
   expired.ue_index       = uint_to_ue_index(1);
   expired.du_index       = uint_to_du_index(0);
+  expired.cell_index     = to_du_cell_index(1);
   expired.pci            = pci_t{1};
   expired.rnti           = to_rnti(0x4701);
   expired.analog_beam_id = "ANALOG-ACCESS-001";
@@ -317,9 +323,60 @@ TEST(ntn_beam_service_resource_manager, low_watermark_counts_only_applied_unused
 
   EXPECT_FALSE(manager.rnti_pool_below_low_watermark(uint_to_du_index(0), to_du_cell_index(1), pci_t{1}, "ANALOG-ACCESS-001", 1));
 
-  EXPECT_TRUE(manager.mark_rnti_offered_in_rar(uint_to_du_index(0), pci_t{1}, to_rnti(0x4701)).accepted);
+  EXPECT_TRUE(
+      manager.mark_rnti_offered_in_rar(uint_to_du_index(0), to_du_cell_index(1), pci_t{1}, to_rnti(0x4701)).accepted);
 
   EXPECT_TRUE(manager.rnti_pool_below_low_watermark(uint_to_du_index(0), to_du_cell_index(1), pci_t{1}, "ANALOG-ACCESS-001", 1));
+}
+
+TEST(ntn_beam_service_resource_manager, shared_pci_cells_can_reuse_same_rnti_without_cross_cell_conflict)
+{
+  ntn_beam_service_resource_manager manager;
+  manager.set_authoritative_rnti_lease_validation_enabled(true);
+
+  ntn_rnti_lease_pool_update first_pool;
+  first_pool.du_index       = uint_to_du_index(0);
+  first_pool.cell_index     = to_du_cell_index(1);
+  first_pool.pci            = pci_t{101};
+  first_pool.analog_beam_id = "ANALOG-ACCESS-001";
+  first_pool.generation_id  = 101;
+  first_pool.leases         = {to_rnti(0x4701)};
+  apply_lease_pool(manager, first_pool);
+
+  ntn_rnti_lease_pool_update second_pool = first_pool;
+  second_pool.cell_index                 = to_du_cell_index(2);
+  second_pool.analog_beam_id             = "ANALOG-ACCESS-002";
+  second_pool.generation_id              = 102;
+  apply_lease_pool(manager, second_pool);
+
+  EXPECT_TRUE(manager
+                  .mark_rnti_offered_in_rar(
+                      first_pool.du_index, first_pool.cell_index, first_pool.pci, first_pool.leases.front())
+                  .accepted);
+  EXPECT_TRUE(manager
+                  .mark_rnti_offered_in_rar(
+                      second_pool.du_index, second_pool.cell_index, second_pool.pci, second_pool.leases.front())
+                  .accepted);
+
+  ntn_access_rnti_ownership_update first_ownership;
+  first_ownership.ue_index       = uint_to_ue_index(1);
+  first_ownership.du_index       = first_pool.du_index;
+  first_ownership.cell_index     = first_pool.cell_index;
+  first_ownership.pci            = first_pool.pci;
+  first_ownership.rnti           = first_pool.leases.front();
+  first_ownership.analog_beam_id = first_pool.analog_beam_id;
+  ASSERT_TRUE(manager.register_access_rnti_ownership(first_ownership).accepted);
+
+  ntn_access_rnti_ownership_update second_ownership = first_ownership;
+  second_ownership.ue_index                         = uint_to_ue_index(2);
+  second_ownership.cell_index                       = second_pool.cell_index;
+  second_ownership.analog_beam_id                   = second_pool.analog_beam_id;
+  EXPECT_TRUE(manager.register_access_rnti_ownership(second_ownership).accepted);
+
+  const ntn_beam_service_resource_snapshot snapshot = manager.get_snapshot();
+  EXPECT_EQ(snapshot.nof_access_rnti_owned, 2U);
+  EXPECT_EQ(snapshot.nof_access_rnti_conflicts, 0U);
+  EXPECT_EQ(snapshot.nof_rnti_leases_initial_ul_seen, 2U);
 }
 
 TEST(ntn_beam_service_resource_manager, reserves_applied_rnti_lease_for_connected_handover_target)
@@ -425,6 +482,7 @@ TEST(ntn_beam_service_resource_manager, strict_authoritative_mode_rejects_unexpe
   ntn_access_rnti_ownership_update ownership;
   ownership.ue_index       = uint_to_ue_index(1);
   ownership.du_index       = uint_to_du_index(0);
+  ownership.cell_index     = to_du_cell_index(1);
   ownership.pci            = pci_t{1};
   ownership.rnti           = to_rnti(0x4701);
   ownership.analog_beam_id = "ANALOG-ACCESS-001";
@@ -447,6 +505,7 @@ TEST(ntn_beam_service_resource_manager, reports_duplicate_access_rnti_as_conflic
   ntn_access_rnti_ownership_update first;
   first.ue_index       = uint_to_ue_index(1);
   first.du_index       = uint_to_du_index(0);
+  first.cell_index     = to_du_cell_index(1);
   first.pci            = pci_t{1};
   first.rnti           = to_rnti(0x4601);
   first.analog_beam_id = "ANALOG-ACCESS-001";
@@ -468,6 +527,46 @@ TEST(ntn_beam_service_resource_manager, reports_duplicate_access_rnti_as_conflic
   EXPECT_EQ(snapshot.access_rnti_ownerships.front().ue_index, uint_to_ue_index(1));
   EXPECT_EQ(snapshot.access_rnti_ownerships.back().ue_index, uint_to_ue_index(2));
   EXPECT_EQ(snapshot.access_rnti_ownerships.back().state, "conflict");
+}
+
+TEST(ntn_beam_service_resource_manager, missing_cell_identity_is_rejected_before_rnti_keying)
+{
+  ntn_beam_service_resource_manager manager;
+
+  ntn_rnti_lease_pool_update lease_pool;
+  lease_pool.du_index       = uint_to_du_index(0);
+  lease_pool.pci            = pci_t{1};
+  lease_pool.analog_beam_id = "ANALOG-ACCESS-001";
+  lease_pool.leases         = {to_rnti(0x4701)};
+  EXPECT_FALSE(manager.reserve_rnti_leases(lease_pool).accepted);
+
+  ntn_access_rnti_ownership_update ownership;
+  ownership.ue_index       = uint_to_ue_index(1);
+  ownership.du_index       = uint_to_du_index(0);
+  ownership.pci            = pci_t{1};
+  ownership.rnti           = to_rnti(0x4701);
+  ownership.analog_beam_id = "ANALOG-ACCESS-001";
+  EXPECT_FALSE(manager.register_access_rnti_ownership(ownership).accepted);
+  EXPECT_TRUE(manager.get_snapshot().access_rnti_ownerships.empty());
+}
+
+TEST(ntn_beam_service_resource_manager, duplicate_rnti_in_same_lease_batch_is_rejected_atomically)
+{
+  ntn_beam_service_resource_manager manager;
+
+  ntn_rnti_lease_pool_update lease_pool;
+  lease_pool.du_index       = uint_to_du_index(0);
+  lease_pool.cell_index     = to_du_cell_index(0);
+  lease_pool.pci            = pci_t{1};
+  lease_pool.analog_beam_id = "ANALOG-ACCESS-001";
+  lease_pool.leases         = {to_rnti(0x4701), to_rnti(0x4701)};
+
+  const ntn_rnti_lease_pool_update_result result = manager.reserve_rnti_leases(lease_pool);
+  EXPECT_FALSE(result.accepted);
+  EXPECT_EQ(result.state, "conflict");
+  EXPECT_EQ(result.reason, "duplicate_lease");
+  EXPECT_EQ(result.nof_leases_reserved, 0U);
+  EXPECT_TRUE(manager.get_snapshot().rnti_leases.empty());
 }
 
 TEST(ntn_beam_service_resource_manager, creates_and_clears_digital_service_slot_intent)

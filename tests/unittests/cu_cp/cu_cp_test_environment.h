@@ -28,11 +28,12 @@
 #include "test_doubles/mock_cu_up.h"
 #include "test_doubles/mock_du.h"
 #include "tests/test_doubles/f1ap/f1ap_test_messages.h"
-#include "srsran/cu_cp/cu_cp.h"
 #include "srsran/cu_cp/cell_meas_manager_config.h"
+#include "srsran/cu_cp/cu_cp.h"
 #include "srsran/cu_cp/cu_cp_configuration.h"
 #include "srsran/cu_cp/cu_cp_types.h"
 #include "srsran/ran/plmn_identity.h"
+#include <array>
 #include <optional>
 #include <unordered_map>
 
@@ -80,8 +81,11 @@ struct cu_cp_test_env_params {
   bool                                      trigger_ho_from_measurements;
   std::optional<ntn_location_mobility_config> ntn_location_mobility;
   std::optional<ntn_onboard_position_plan_source_config> ntn_onboard_position_plan;
-  bool                                                   ntn_calendar_query_stays_ready = false;
-  bool                                                   ntn_calendar_drop_query_responses = false;
+  bool                                                   ntn_calendar_query_stays_ready          = false;
+  bool                                                   ntn_calendar_drop_query_responses       = false;
+  bool                                                   ntn_calendar_query_reports_zero_intents = false;
+  bool                                                   ntn_calendar_prepare_rejects            = false;
+  bool                                                   ntn_calendar_prepare_reports_ready      = false;
 };
 
 class cu_cp_test_environment
@@ -298,7 +302,8 @@ private:
   // Attached UEs.
   std::unordered_map<ran_ue_id_t, ue_context>                              attached_ues;
   std::map<unsigned, std::unordered_map<gnb_du_ue_f1ap_id_t, ran_ue_id_t>> du_ue_id_to_ran_ue_id_map;
-  std::map<unsigned, std::optional<f1ap_ntn_ul_slot_resource_request>>      last_ntn_ul_slot_request_by_du;
+  std::map<unsigned, std::optional<f1ap_ntn_ul_slot_resource_request>>     last_ntn_ul_slot_request_by_du;
+  std::array<uint16_t, 2>                                                  last_ntn_calendar_intents_per_cell{};
 
   /// CU-CP instance.
   std::unique_ptr<cu_cp> cu_cp_inst;

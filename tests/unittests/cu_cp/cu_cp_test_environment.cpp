@@ -86,9 +86,35 @@ static bool is_ntn_access_calendar_query(const f1ap_message& pdu)
   return update.has_value() && update->operation == f1ap_ntn_access_calendar_operation::query;
 }
 
-static f1ap_message make_gnb_du_resource_coordination_response(const f1ap_message& request,
-                                                                bool ntn_calendar_query_stays_ready = false)
+static void record_ntn_calendar_prepare(const f1ap_message&      request,
+                                        std::array<uint16_t, 2>& last_ntn_calendar_intents_per_cell)
 {
+  if (!is_gnb_du_resource_coordination_request(request)) {
+    return;
+  }
+
+  const auto& asn1_request = request.pdu.init_msg().value.gnb_du_res_coordination_request();
+  const auto  update =
+      decode_f1ap_ntn_access_calendar_update(asn1_request->eutra_nr_cell_res_coordination_req_container);
+  if (!update.has_value() || update->operation != f1ap_ntn_access_calendar_operation::prepare) {
+    return;
+  }
+
+  last_ntn_calendar_intents_per_cell = {};
+  for (unsigned i = 0; i != update->cells.size() && i != last_ntn_calendar_intents_per_cell.size(); ++i) {
+    last_ntn_calendar_intents_per_cell[i] = static_cast<uint16_t>(update->cells[i].intents.size());
+  }
+}
+
+static f1ap_message
+make_gnb_du_resource_coordination_response(const f1ap_message&      request,
+                                           bool                     ntn_calendar_query_stays_ready,
+                                           bool                     ntn_calendar_query_reports_zero_intents,
+                                           bool                     ntn_calendar_prepare_rejects,
+                                           bool                     ntn_calendar_prepare_reports_ready,
+                                           std::array<uint16_t, 2>& last_ntn_calendar_intents_per_cell)
+{
+  record_ntn_calendar_prepare(request, last_ntn_calendar_intents_per_cell);
   const auto& asn1_req = request.pdu.init_msg().value.gnb_du_res_coordination_request();
 
   const std::optional<f1ap_ntn_rnti_lease_pool_update> update =
@@ -109,19 +135,25 @@ static f1ap_message make_gnb_du_resource_coordination_response(const f1ap_messag
                                                            std::chrono::system_clock::now().time_since_epoch())
                                                            .count());
     result.status = calendar_update->operation == f1ap_ntn_access_calendar_operation::prepare
-                        ? f1ap_ntn_access_calendar_result_status::preparing
+                        ? (ntn_calendar_prepare_rejects         ? f1ap_ntn_access_calendar_result_status::rejected
+                           : ntn_calendar_prepare_reports_ready ? f1ap_ntn_access_calendar_result_status::ready
+                                                                : f1ap_ntn_access_calendar_result_status::preparing)
                     : calendar_update->operation == f1ap_ntn_access_calendar_operation::query
                         ? (!ntn_calendar_query_stays_ready && now_unix_ms >= calendar_update->activation_epoch_unix_ms
                                ? f1ap_ntn_access_calendar_result_status::applied
                                : f1ap_ntn_access_calendar_result_status::ready)
                         : f1ap_ntn_access_calendar_result_status::cleared;
-    result.reject_reason = result.status == f1ap_ntn_access_calendar_result_status::applied
+    result.reject_reason = result.status == f1ap_ntn_access_calendar_result_status::rejected ? "rejected_by_mock_du"
+                           : result.status == f1ap_ntn_access_calendar_result_status::applied
                                ? "ssb_prach_software_gate_applied_no_position_or_rf_evidence"
                            : result.status == f1ap_ntn_access_calendar_result_status::preparing
                                ? "waiting_for_both_cell_slot_threads_to_arm"
                                : "accepted_by_mock_du";
-    for (unsigned i = 0; i != calendar_update->cells.size(); ++i) {
-      result.accepted_intents_per_cell[i] = static_cast<uint16_t>(calendar_update->cells[i].intents.size());
+    if (calendar_update->operation == f1ap_ntn_access_calendar_operation::query &&
+        ntn_calendar_query_reports_zero_intents) {
+      result.accepted_intents_per_cell = {};
+    } else {
+      result.accepted_intents_per_cell = last_ntn_calendar_intents_per_cell;
     }
     response_container = encode_f1ap_ntn_access_calendar_result(result);
   } else if (update.has_value()) {
@@ -420,7 +452,12 @@ bool cu_cp_test_environment::wait_for_f1ap_tx_pdu(unsigned du_idx, f1ap_message&
     if (is_gnb_du_resource_coordination_request(pdu)) {
       if (!params.ntn_calendar_drop_query_responses || !is_ntn_access_calendar_query(pdu)) {
         dus[du_idx]->push_ul_pdu(
-            make_gnb_du_resource_coordination_response(pdu, params.ntn_calendar_query_stays_ready));
+            make_gnb_du_resource_coordination_response(pdu,
+                                                       params.ntn_calendar_query_stays_ready,
+                                                       params.ntn_calendar_query_reports_zero_intents,
+                                                       params.ntn_calendar_prepare_rejects,
+                                                       params.ntn_calendar_prepare_reports_ready,
+                                                       last_ntn_calendar_intents_per_cell));
       }
       return false;
     }
@@ -433,7 +470,13 @@ bool cu_cp_test_environment::wait_for_f1ap_tx_pdu_without_auto_response(unsigned
                                                                         std::chrono::milliseconds timeout)
 {
   report_fatal_error_if_not(dus.size() >= du_idx and dus[du_idx] != nullptr, "DU index out of range");
-  return tick_until(timeout, [&]() { return dus[du_idx] != nullptr && dus[du_idx]->try_pop_dl_pdu(pdu); });
+  return tick_until(timeout, [&]() {
+    if (dus[du_idx] == nullptr || !dus[du_idx]->try_pop_dl_pdu(pdu)) {
+      return false;
+    }
+    record_ntn_calendar_prepare(pdu, last_ntn_calendar_intents_per_cell);
+    return true;
+  });
 }
 
 void cu_cp_test_environment::respond_to_f1ap_resource_coordination_request(unsigned            du_idx,
@@ -442,8 +485,12 @@ void cu_cp_test_environment::respond_to_f1ap_resource_coordination_request(unsig
   report_fatal_error_if_not(dus.size() >= du_idx and dus[du_idx] != nullptr, "DU index out of range");
   report_fatal_error_if_not(is_gnb_du_resource_coordination_request(request),
                             "Expected GNB-DU Resource Coordination Request");
-  dus[du_idx]->push_ul_pdu(
-      make_gnb_du_resource_coordination_response(request, params.ntn_calendar_query_stays_ready));
+  dus[du_idx]->push_ul_pdu(make_gnb_du_resource_coordination_response(request,
+                                                                      params.ntn_calendar_query_stays_ready,
+                                                                      params.ntn_calendar_query_reports_zero_intents,
+                                                                      params.ntn_calendar_prepare_rejects,
+                                                                      params.ntn_calendar_prepare_reports_ready,
+                                                                      last_ntn_calendar_intents_per_cell));
 }
 
 void cu_cp_test_environment::drain_f1ap_resource_coordination_requests(unsigned du_idx)
@@ -461,7 +508,12 @@ void cu_cp_test_environment::drain_f1ap_resource_coordination_requests(unsigned 
                                 "there are still F1AP DL messages to pop from DU");
       if (!params.ntn_calendar_drop_query_responses || !is_ntn_access_calendar_query(f1ap_pdu)) {
         du_it->second->push_ul_pdu(
-            make_gnb_du_resource_coordination_response(f1ap_pdu, params.ntn_calendar_query_stays_ready));
+            make_gnb_du_resource_coordination_response(f1ap_pdu,
+                                                       params.ntn_calendar_query_stays_ready,
+                                                       params.ntn_calendar_query_reports_zero_intents,
+                                                       params.ntn_calendar_prepare_rejects,
+                                                       params.ntn_calendar_prepare_reports_ready,
+                                                       last_ntn_calendar_intents_per_cell));
       }
       return true;
     });

@@ -86,6 +86,42 @@ std::map<std::string, unsigned> make_owner_map(const ntn_activated_position_plan
   return owners;
 }
 
+ntn_initial_access_plan_event make_initial_access_event(const ntn_activated_position_plan& plan)
+{
+  ntn_initial_access_plan_event event;
+  const auto ro_it = std::find_if(plan.access_calendar.begin(), plan.access_calendar.end(), [](const auto& intent) {
+    return intent.purpose == ntn_access_calendar_purpose::prach_ro;
+  });
+  if (ro_it == plan.access_calendar.end()) {
+    return event;
+  }
+  const auto beam_it = std::find_if(plan.access_calendar.begin(), plan.access_calendar.end(), [&](const auto& intent) {
+    return intent.purpose == ntn_access_calendar_purpose::prach_ul_beam && intent.nci == ro_it->nci &&
+           intent.position_id == ro_it->position_id && intent.start_time == ro_it->start_time &&
+           intent.duration == ro_it->duration;
+  });
+  if (beam_it == plan.access_calendar.end()) {
+    return event;
+  }
+  const auto cell_it = std::find_if(plan.cell_positions.begin(), plan.cell_positions.end(), [&](const auto& cell) {
+    return cell.identity.nci == ro_it->nci;
+  });
+  if (cell_it == plan.cell_positions.end()) {
+    return event;
+  }
+
+  event.satellite_id        = plan.source.satellite_id;
+  event.catalog_version     = plan.source.catalog_version;
+  event.schedule_version    = plan.source.schedule_version;
+  event.source_content_hash = plan.source.content_hash;
+  event.calendar_hash       = plan.calendar_hash;
+  event.cell                = cell_it->identity;
+  event.position_id         = ro_it->position_id;
+  event.occasion_time       = plan.source.activation_epoch + ro_it->start_time + std::chrono::microseconds{1};
+  event.ul_beam_port_id     = beam_it->port_id;
+  return event;
+}
+
 } // namespace
 
 TEST(ntn_onboard_position_plan, valid_plan_is_loaded_checked_and_held_pending_until_activation)
@@ -254,29 +290,53 @@ TEST(ntn_onboard_position_plan, rejects_satellite_hash_version_validity_activati
     bool recompute_hash;
   };
   const std::vector<test_case> cases{
-      {"satellite", ntn_position_plan_reject_reason::invalid_satellite_id,
-       [](auto& plan) { plan.satellite_id = "P99-S999"; }, true},
-      {"hash", ntn_position_plan_reject_reason::invalid_hash,
-       [](auto& plan) { plan.visible_l1_positions.front().latitude_deg += 1.0; }, false},
-      {"zero_version", ntn_position_plan_reject_reason::non_monotonic_version,
-       [](auto& plan) { plan.schedule_version = 0; }, true},
-      {"expired", ntn_position_plan_reject_reason::expired,
+      {"satellite",
+       ntn_position_plan_reject_reason::invalid_satellite_id,
+       [](auto& plan) { plan.satellite_id = "P99-S999"; },
+       true},
+      {"hash",
+       ntn_position_plan_reject_reason::invalid_hash,
+       [](auto& plan) { plan.visible_l1_positions.front().latitude_deg += 1.0; },
+       false},
+      {"zero_version",
+       ntn_position_plan_reject_reason::non_monotonic_version,
+       [](auto& plan) { plan.schedule_version = 0; },
+       true},
+      {"expired",
+       ntn_position_plan_reject_reason::expired,
        [](auto& plan) {
          plan.valid_from       = at_ms(0);
          plan.activation_epoch = at_ms(640);
          plan.valid_until      = at_ms(1280);
-       }, true},
-      {"validity", ntn_position_plan_reject_reason::invalid_validity_window,
+       },
+       true},
+      {"validity",
+       ntn_position_plan_reject_reason::invalid_validity_window,
        [](auto& plan) {
          plan.valid_from  = at_ms(3200);
          plan.valid_until = at_ms(2560);
-       }, true},
-      {"activation", ntn_position_plan_reject_reason::invalid_activation_epoch,
-       [](auto& plan) { plan.activation_epoch = at_ms(2000); }, true},
-      {"l1_format", ntn_position_plan_reject_reason::invalid_l1_id,
-       [](auto& plan) { plan.visible_l1_positions.front().position_id = "L000001"; }, true},
-      {"l1_duplicate", ntn_position_plan_reject_reason::duplicate_l1_id,
-       [](auto& plan) { plan.visible_l1_positions[1].position_id = plan.visible_l1_positions[0].position_id; }, true}};
+       },
+       true},
+      {"activation",
+       ntn_position_plan_reject_reason::invalid_activation_epoch,
+       [](auto& plan) { plan.activation_epoch = at_ms(2000); },
+       true},
+      {"activation_sub_ms",
+       ntn_position_plan_reject_reason::invalid_activation_epoch,
+       [](auto& plan) { plan.activation_epoch += std::chrono::microseconds{500}; },
+       true},
+      {"validity_sub_ms",
+       ntn_position_plan_reject_reason::invalid_validity_window,
+       [](auto& plan) { plan.valid_until += std::chrono::microseconds{500}; },
+       true},
+      {"l1_format",
+       ntn_position_plan_reject_reason::invalid_l1_id,
+       [](auto& plan) { plan.visible_l1_positions.front().position_id = "L000001"; },
+       true},
+      {"l1_duplicate",
+       ntn_position_plan_reject_reason::duplicate_l1_id,
+       [](auto& plan) { plan.visible_l1_positions[1].position_id = plan.visible_l1_positions[0].position_id; },
+       true}};
 
   for (const test_case& item : cases) {
     SCOPED_TRACE(item.name);
@@ -450,6 +510,7 @@ TEST(ntn_onboard_position_plan, deployment_rejection_removes_only_matching_pendi
   ASSERT_TRUE(controller.submit(make_plan(4, 1, 1280), at_ms(640)).accepted);
   ASSERT_TRUE(controller.pending_plan().has_value());
   const std::string first_hash = controller.pending_plan()->calendar_hash;
+  ASSERT_TRUE(controller.mark_deployment_preparing(1, first_hash));
   ASSERT_TRUE(controller.mark_deployment_applied(1, first_hash));
   ASSERT_TRUE(controller.advance_time(at_ms(1280)));
 
@@ -467,6 +528,208 @@ TEST(ntn_onboard_position_plan, deployment_rejection_removes_only_matching_pendi
   EXPECT_TRUE(controller.active_has_external_apply_evidence());
   EXPECT_EQ(controller.deployment_stage(), ntn_position_plan_deployment_stage::rejected);
   EXPECT_EQ(controller.deployment_detail(), "static_prach_misaligned");
+}
+
+TEST(ntn_onboard_position_plan, deployment_feedback_is_monotonic_and_idempotent)
+{
+  ntn_onboard_position_plan_config config = make_config();
+  config.require_external_apply           = true;
+  ntn_onboard_position_plan_controller controller(config);
+
+  ASSERT_TRUE(controller.submit(make_plan(4, 1, 1920), at_ms(1280)).accepted);
+  ASSERT_TRUE(controller.pending_plan().has_value());
+  const std::string calendar_hash = controller.pending_plan()->calendar_hash;
+
+  EXPECT_FALSE(controller.mark_deployment_ready(1, calendar_hash));
+  EXPECT_FALSE(controller.mark_deployment_applied(1, calendar_hash));
+  EXPECT_TRUE(controller.mark_deployment_retryable(1, calendar_hash, "du_not_connected"));
+  EXPECT_TRUE(controller.mark_deployment_preparing(1, calendar_hash));
+  EXPECT_TRUE(controller.mark_deployment_preparing(1, calendar_hash));
+  EXPECT_TRUE(controller.mark_deployment_ready(1, calendar_hash));
+  EXPECT_TRUE(controller.mark_deployment_ready(1, calendar_hash));
+  EXPECT_TRUE(controller.mark_deployment_retryable(1, calendar_hash, "late_retry"));
+  EXPECT_EQ(controller.deployment_stage(), ntn_position_plan_deployment_stage::ready);
+  EXPECT_TRUE(controller.mark_deployment_applied(1, calendar_hash));
+  EXPECT_TRUE(controller.mark_deployment_applied(1, calendar_hash));
+  EXPECT_TRUE(controller.mark_deployment_ready(1, calendar_hash));
+  EXPECT_TRUE(controller.mark_deployment_preparing(1, calendar_hash));
+  EXPECT_EQ(controller.deployment_stage(), ntn_position_plan_deployment_stage::applied);
+  EXPECT_EQ(controller.deployment_detail(), "ssb_prach_software_gate_applied_no_position_or_rf_evidence");
+}
+
+TEST(ntn_onboard_position_plan, matching_initial_access_event_is_accepted_against_active_software_gate_snapshot)
+{
+  ntn_onboard_position_plan_config config = make_config();
+  config.require_external_apply           = true;
+  ntn_onboard_position_plan_controller controller(config);
+
+  ASSERT_TRUE(controller.submit(make_plan(8, 1, 1920), at_ms(1280)).accepted);
+  ASSERT_TRUE(controller.pending_plan().has_value());
+  const std::string calendar_hash = controller.pending_plan()->calendar_hash;
+  ASSERT_TRUE(controller.mark_deployment_preparing(1, calendar_hash));
+  ASSERT_TRUE(controller.mark_deployment_applied(1, calendar_hash));
+  ASSERT_TRUE(controller.advance_time(at_ms(1920)));
+  ASSERT_TRUE(controller.active_plan().has_value());
+
+  const ntn_initial_access_plan_event event = make_initial_access_event(*controller.active_plan());
+  ASSERT_FALSE(event.position_id.empty());
+  const ntn_initial_access_plan_audit audit = controller.audit_initial_access_event(event);
+
+  EXPECT_EQ(audit.decision, ntn_initial_access_plan_decision::accept);
+  EXPECT_EQ(audit.reason, ntn_initial_access_plan_reason::none);
+  EXPECT_EQ(audit.active_schedule_version, 1U);
+  EXPECT_EQ(audit.active_calendar_hash, calendar_hash);
+  EXPECT_EQ(audit.evidence, "cu_cp_active_plan_event_match_software_gate_snapshot_no_rf_evidence");
+
+  const auto ro_it = std::find_if(controller.active_plan()->access_calendar.begin(),
+                                  controller.active_plan()->access_calendar.end(),
+                                  [&](const auto& intent) {
+                                    return intent.position_id == event.position_id &&
+                                           intent.purpose == ntn_access_calendar_purpose::prach_ro;
+                                  });
+  ASSERT_NE(ro_it, controller.active_plan()->access_calendar.end());
+  ntn_initial_access_plan_event exact_start = event;
+  exact_start.occasion_time                 = controller.active_plan()->source.activation_epoch + ro_it->start_time;
+  EXPECT_EQ(controller.audit_initial_access_event(exact_start).decision, ntn_initial_access_plan_decision::accept);
+
+  ntn_initial_access_plan_event next_cycle = event;
+  next_cycle.occasion_time += config.max_prach_interval;
+  EXPECT_EQ(controller.audit_initial_access_event(next_cycle).decision, ntn_initial_access_plan_decision::accept);
+
+  ntn_initial_access_plan_event exact_end = event;
+  exact_end.occasion_time = controller.active_plan()->source.activation_epoch + ro_it->start_time + ro_it->duration;
+  EXPECT_EQ(controller.audit_initial_access_event(exact_end).reason,
+            ntn_initial_access_plan_reason::prach_occasion_not_scheduled);
+}
+
+TEST(ntn_onboard_position_plan, initial_access_event_rejects_wrong_version_owner_window_and_port)
+{
+  ntn_onboard_position_plan_config config = make_config();
+  config.require_external_apply           = true;
+  ntn_onboard_position_plan_controller controller(config);
+
+  ASSERT_TRUE(controller.submit(make_plan(8, 1, 1920), at_ms(1280)).accepted);
+  const std::string calendar_hash = controller.pending_plan()->calendar_hash;
+  ASSERT_TRUE(controller.mark_deployment_preparing(1, calendar_hash));
+  ASSERT_TRUE(controller.mark_deployment_applied(1, calendar_hash));
+  ASSERT_TRUE(controller.advance_time(at_ms(1920)));
+  ASSERT_TRUE(controller.active_plan().has_value());
+  const ntn_initial_access_plan_event valid_event = make_initial_access_event(*controller.active_plan());
+  ASSERT_FALSE(valid_event.position_id.empty());
+
+  ntn_initial_access_plan_event wrong_satellite = valid_event;
+  wrong_satellite.satellite_id                  = "P01-S002";
+  EXPECT_EQ(controller.audit_initial_access_event(wrong_satellite).reason,
+            ntn_initial_access_plan_reason::satellite_mismatch);
+
+  ntn_initial_access_plan_event wrong_catalog = valid_event;
+  ++wrong_catalog.catalog_version;
+  EXPECT_EQ(controller.audit_initial_access_event(wrong_catalog).reason,
+            ntn_initial_access_plan_reason::catalog_version_mismatch);
+
+  ntn_initial_access_plan_event wrong_version = valid_event;
+  ++wrong_version.schedule_version;
+  EXPECT_EQ(controller.audit_initial_access_event(wrong_version).reason,
+            ntn_initial_access_plan_reason::schedule_version_mismatch);
+
+  ntn_initial_access_plan_event wrong_source_hash = valid_event;
+  wrong_source_hash.source_content_hash            = "sha256:00";
+  EXPECT_EQ(controller.audit_initial_access_event(wrong_source_hash).reason,
+            ntn_initial_access_plan_reason::source_hash_mismatch);
+
+  ntn_initial_access_plan_event wrong_calendar_hash = valid_event;
+  wrong_calendar_hash.calendar_hash                  = "sha256:00";
+  EXPECT_EQ(controller.audit_initial_access_event(wrong_calendar_hash).reason,
+            ntn_initial_access_plan_reason::calendar_hash_mismatch);
+
+  ntn_initial_access_plan_event unknown_cell = valid_event;
+  unknown_cell.cell                           = make_cell(0x123450003ULL, 303);
+  EXPECT_EQ(controller.audit_initial_access_event(unknown_cell).reason,
+            ntn_initial_access_plan_reason::cell_identity_mismatch);
+
+  ntn_initial_access_plan_event wrong_owner    = valid_event;
+  const auto&                   first_identity = controller.active_plan()->cell_positions[0].identity;
+  wrong_owner.cell = first_identity.nci == valid_event.cell.nci && first_identity.pci == valid_event.cell.pci
+                         ? controller.active_plan()->cell_positions[1].identity
+                         : first_identity;
+  EXPECT_EQ(controller.audit_initial_access_event(wrong_owner).reason,
+            ntn_initial_access_plan_reason::position_not_assigned_to_cell);
+
+  ntn_initial_access_plan_event outside_window = valid_event;
+  outside_window.occasion_time += std::chrono::milliseconds{10};
+  EXPECT_EQ(controller.audit_initial_access_event(outside_window).reason,
+            ntn_initial_access_plan_reason::prach_occasion_not_scheduled);
+
+  ntn_initial_access_plan_event wrong_port = valid_event;
+  ++wrong_port.ul_beam_port_id;
+  EXPECT_EQ(controller.audit_initial_access_event(wrong_port).reason,
+            ntn_initial_access_plan_reason::resource_port_mismatch);
+
+  ntn_initial_access_plan_event expired = valid_event;
+  expired.occasion_time                 = controller.active_plan()->source.valid_until;
+  EXPECT_EQ(controller.audit_initial_access_event(expired).reason,
+            ntn_initial_access_plan_reason::active_plan_not_valid);
+}
+
+TEST(ntn_onboard_position_plan, pending_or_intent_only_plan_never_claims_runtime_initial_access_evidence)
+{
+  ntn_onboard_position_plan_config external_config = make_config();
+  external_config.require_external_apply           = true;
+  ntn_onboard_position_plan_controller pending_controller(external_config);
+  ASSERT_TRUE(pending_controller.submit(make_plan(4), at_ms(1280)).accepted);
+  ASSERT_TRUE(pending_controller.pending_plan().has_value());
+  const ntn_initial_access_plan_event pending_event = make_initial_access_event(*pending_controller.pending_plan());
+  EXPECT_EQ(pending_controller.audit_initial_access_event(pending_event).reason,
+            ntn_initial_access_plan_reason::no_active_plan);
+
+  ntn_onboard_position_plan_controller intent_controller(make_config());
+  ASSERT_TRUE(intent_controller.submit(make_plan(4), at_ms(1920)).accepted);
+  ASSERT_TRUE(intent_controller.active_plan().has_value());
+  const ntn_initial_access_plan_audit intent_audit =
+      intent_controller.audit_initial_access_event(make_initial_access_event(*intent_controller.active_plan()));
+  EXPECT_EQ(intent_audit.decision, ntn_initial_access_plan_decision::audit_only);
+  EXPECT_EQ(intent_audit.reason, ntn_initial_access_plan_reason::intent_only_plan);
+  EXPECT_EQ(intent_audit.evidence, "cu_cp_intent_calendar_event_match_no_du_or_rf_evidence");
+
+  ntn_onboard_position_plan_controller disabled_controller(make_config(false));
+  const ntn_initial_access_plan_audit  disabled_audit = disabled_controller.audit_initial_access_event({});
+  EXPECT_EQ(disabled_audit.decision, ntn_initial_access_plan_decision::audit_only);
+  EXPECT_EQ(disabled_audit.reason, ntn_initial_access_plan_reason::feature_disabled);
+}
+
+TEST(ntn_onboard_position_plan, initial_access_audit_switches_atomically_with_active_plan_version)
+{
+  ntn_onboard_position_plan_config config = make_config();
+  config.require_external_apply           = true;
+  ntn_onboard_position_plan_controller controller(config);
+
+  ASSERT_TRUE(controller.submit(make_plan(4, 1, 1280, 1), at_ms(640)).accepted);
+  std::string calendar_hash = controller.pending_plan()->calendar_hash;
+  ASSERT_TRUE(controller.mark_deployment_preparing(1, calendar_hash));
+  ASSERT_TRUE(controller.mark_deployment_applied(1, calendar_hash));
+  ASSERT_TRUE(controller.advance_time(at_ms(1280)));
+  const ntn_initial_access_plan_event version_one_event = make_initial_access_event(*controller.active_plan());
+  EXPECT_EQ(controller.audit_initial_access_event(version_one_event).decision,
+            ntn_initial_access_plan_decision::accept);
+
+  ASSERT_TRUE(controller.submit(make_plan(4, 2, 3200, 1), at_ms(1920)).accepted);
+  const ntn_initial_access_plan_event version_two_pending_event = make_initial_access_event(*controller.pending_plan());
+  EXPECT_EQ(controller.audit_initial_access_event(version_two_pending_event).reason,
+            ntn_initial_access_plan_reason::schedule_version_mismatch);
+  EXPECT_EQ(controller.audit_initial_access_event(version_one_event).decision,
+            ntn_initial_access_plan_decision::accept);
+
+  calendar_hash = controller.pending_plan()->calendar_hash;
+  ASSERT_TRUE(controller.mark_deployment_preparing(2, calendar_hash));
+  ASSERT_TRUE(controller.mark_deployment_applied(2, calendar_hash));
+  ASSERT_TRUE(controller.advance_time(at_ms(3200)));
+  const ntn_initial_access_plan_event version_two_event = make_initial_access_event(*controller.active_plan());
+  EXPECT_EQ(controller.audit_initial_access_event(version_two_event).decision,
+            ntn_initial_access_plan_decision::accept);
+  ntn_initial_access_plan_event version_one_after_switch = version_one_event;
+  version_one_after_switch.occasion_time                 = version_two_event.occasion_time;
+  EXPECT_EQ(controller.audit_initial_access_event(version_one_after_switch).reason,
+            ntn_initial_access_plan_reason::schedule_version_mismatch);
 }
 
 TEST(ntn_onboard_position_plan, access_calendar_hash_is_canonical_and_changes_with_executable_content)

@@ -11022,7 +11022,7 @@ void cu_cp_impl::try_prepare_ntn_onboard_position_plan()
   update.cells.reserve(2);
   for (unsigned i = 0; i != pending_plan->cell_positions.size(); ++i) {
     f1ap_ntn_access_calendar_cell cell;
-    cell.du_cell_index = matches[i][0].cell->cell_index;
+    cell.du_cell_index = to_f1ap_du_cell_index(matches[i][0].cell->cell_index);
     cell.nci           = pending_plan->cell_positions[i].identity.nci;
     cell.pci           = pending_plan->cell_positions[i].identity.pci;
     for (const ntn_access_calendar_intent& intent : pending_plan->access_calendar) {
@@ -11104,6 +11104,9 @@ void cu_cp_impl::try_prepare_ntn_onboard_position_plan()
                 ntn_onboard_position_plan_ctrl->active_plan().has_value() &&
                 ntn_onboard_position_plan_ctrl->active_plan()->source.schedule_version == update.schedule_version &&
                 ntn_onboard_position_plan_ctrl->active_plan()->calendar_hash == update.calendar_hash;
+            const auto deployment                  = ntn_onboard_position_plan_ctrl->deployment_stage();
+            const bool query_already_advanced_plan = deployment == ntn_position_plan_deployment_stage::ready ||
+                                                     deployment == ntn_position_plan_deployment_stage::applied;
             const bool response_after_prepare_deadline =
                 std::chrono::system_clock::now() >=
                 prepared_plan.source.activation_epoch - cfg.mobility.onboard_position_plan.du_prepare_guard;
@@ -11111,6 +11114,9 @@ void cu_cp_impl::try_prepare_ntn_onboard_position_plan()
               // A duplicate response for the plan that is already active is stale but not an orphan deployment.
             } else if (!pending_matches) {
               should_clear_orphan = true;
+            } else if (query_already_advanced_plan) {
+              // A query sent after prepare may complete first and provide newer ready/applied state. Ignore the older
+              // prepare completion in full, including a timeout/reject, so it cannot roll back the same plan.
             } else if (response_after_prepare_deadline) {
               ntn_onboard_position_plan_ctrl->reject_pending_deployment(
                   update.schedule_version,
@@ -11296,12 +11302,16 @@ void cu_cp_impl::query_ntn_onboard_position_plan_application()
               ntn_onboard_position_plan_ctrl->active_plan().has_value() &&
               ntn_onboard_position_plan_ctrl->active_plan()->source.schedule_version == update.schedule_version &&
               ntn_onboard_position_plan_ctrl->active_plan()->calendar_hash == update.calendar_hash;
+          const auto deployment = ntn_onboard_position_plan_ctrl.has_value()
+                                      ? ntn_onboard_position_plan_ctrl->deployment_stage()
+                                      : ntn_position_plan_deployment_stage::disabled;
           if (active_matches && !pending_matches) {
             // Ignore a duplicate query response for the plan that is already active.
           } else if (ntn_onboard_position_plan_ctrl.has_value() && !pending_matches) {
             should_clear_rejected = true;
-          } else if (ntn_onboard_position_plan_ctrl.has_value() &&
-                     response_time >= queried_plan.source.valid_until) {
+          } else if (query_for_prepare && deployment == ntn_position_plan_deployment_stage::applied) {
+            // The same plan has already reached stronger applied evidence through a later completion path.
+          } else if (ntn_onboard_position_plan_ctrl.has_value() && response_time >= queried_plan.source.valid_until) {
             ntn_onboard_position_plan_ctrl->reject_pending_deployment(
                 update.schedule_version,
                 update.calendar_hash,
@@ -11309,8 +11319,8 @@ void cu_cp_impl::query_ntn_onboard_position_plan_application()
                 "du_query_response_arrived_after_valid_until");
             should_clear_rejected = true;
           } else if (ntn_onboard_position_plan_ctrl.has_value() && !query_for_prepare &&
-                     response_time >= queried_plan.source.activation_epoch +
-                                          cfg.mobility.onboard_position_plan.du_apply_timeout) {
+                     response_time >=
+                         queried_plan.source.activation_epoch + cfg.mobility.onboard_position_plan.du_apply_timeout) {
             ntn_onboard_position_plan_ctrl->reject_pending_deployment(
                 update.schedule_version,
                 update.calendar_hash,
@@ -11318,8 +11328,9 @@ void cu_cp_impl::query_ntn_onboard_position_plan_application()
                 "du_application_response_arrived_after_deadline");
             should_clear_rejected = true;
           } else if (ntn_onboard_position_plan_ctrl.has_value() && query_for_prepare &&
-                     response_time >= queried_plan.source.activation_epoch -
-                                          cfg.mobility.onboard_position_plan.du_prepare_guard) {
+                     deployment == ntn_position_plan_deployment_stage::preparing &&
+                     response_time >=
+                         queried_plan.source.activation_epoch - cfg.mobility.onboard_position_plan.du_prepare_guard) {
             ntn_onboard_position_plan_ctrl->reject_pending_deployment(
                 update.schedule_version,
                 update.calendar_hash,
@@ -11327,6 +11338,19 @@ void cu_cp_impl::query_ntn_onboard_position_plan_application()
                 "du_armed_response_arrived_after_guard");
             should_clear_rejected = true;
           } else if (ntn_onboard_position_plan_ctrl.has_value() && response.calendar_result.has_value()) {
+            std::array<size_t, 2> expected_intents_per_cell{};
+            for (const ntn_access_calendar_intent& intent : queried_plan.access_calendar) {
+              for (unsigned i = 0; i != queried_plan.cell_positions.size(); ++i) {
+                if (intent.nci == queried_plan.cell_positions[i].identity.nci) {
+                  ++expected_intents_per_cell[i];
+                  break;
+                }
+              }
+            }
+            const bool response_accepts_calendar =
+                response.calendar_result->status == f1ap_ntn_access_calendar_result_status::preparing ||
+                response.calendar_result->status == f1ap_ntn_access_calendar_result_status::ready ||
+                response.calendar_result->status == f1ap_ntn_access_calendar_result_status::applied;
             if (response.calendar_result->catalog_version != update.catalog_version ||
                 response.calendar_result->schedule_version != update.schedule_version ||
                 response.calendar_result->source_content_hash != update.source_content_hash ||
@@ -11336,6 +11360,18 @@ void cu_cp_impl::query_ntn_onboard_position_plan_application()
                   update.calendar_hash,
                   ntn_position_plan_reject_reason::calendar_hash_mismatch,
                   "du_query_response_version_or_hash_mismatch");
+              should_clear_rejected = true;
+            } else if (response_accepts_calendar &&
+                       (static_cast<size_t>(response.calendar_result->accepted_intents_per_cell[0]) !=
+                            expected_intents_per_cell[0] ||
+                        static_cast<size_t>(response.calendar_result->accepted_intents_per_cell[1]) !=
+                            expected_intents_per_cell[1])) {
+              ntn_onboard_position_plan_ctrl->reject_pending_deployment(
+                  update.schedule_version,
+                  update.calendar_hash,
+                  query_for_prepare ? ntn_position_plan_reject_reason::du_prepare_rejected
+                                    : ntn_position_plan_reject_reason::du_activation_not_applied,
+                  "du_query_accepted_intent_count_mismatch");
               should_clear_rejected = true;
             } else if (response.calendar_result->status == f1ap_ntn_access_calendar_result_status::preparing) {
               // Keep polling until both scheduler slot threads report armed or the prepare guard expires.
