@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "planningSeed": "global-45-seed-3528",
+  "selectedScenario": null,
+  "selectionRule": "selectedScenario may reference only a scenario with auditStatus=exact_pass",
+  "generatedOn": "2026-07-12",
+  "serviceRegion": {
+    "scope": "global_land_57",
+    "latitudeBandDeg": [-57, 57],
+    "minimumElevationDeg": 45,
+    "incumbentReleaseDeg": 42
+  },
+  "searchSpace": {
+    "inclinationsDeg": [58, 60, 62],
+    "planes": "36..48",
+    "satellitesPerPlane": "72..96",
+    "phaseFactor": "all legal F, plus RAAN and phase offsets"
+  },
+  "exactAudit": {
+    "status": "not_run",
+    "durationDays": 7,
+    "method": "45-degree interval union with threshold-crossing root finding",
+    "reportPath": null
+  },
+  "snapshotAudit": {
+    "status": "fail",
+    "reportPath": "./global-constellation-snapshot.json",
+    "timeSeconds": 0,
+    "uncoveredL1": 23,
+    "maximumVisibleL1PerSatellite": 206,
+    "satellitesOver256L1": 0,
+    "note": "Coarse single-epoch evidence only; it is sufficient to reject F=0 at t=0 but cannot prove any alternative."
+  },
+  "coarseAudit": {
+    "status": "pass",
+    "scenarioId": "global-45-f1-snapshot-candidate",
+    "reportPath": "./global-constellation-f1-day-coarse.json",
+    "durationDays": 1,
+    "stepSeconds": 120,
+    "epochCount": 720,
+    "maximumUncoveredL1": 0,
+    "minimumCandidateCount": 1,
+    "maximumVisibleL1PerSatellite": 209,
+    "maximumSatellitesOver256L1": 0,
+    "note": "All 720 fixed-step samples passed; this remains coarse and is ineligible for selectedScenario."
+  },
+  "scenarios": [
+    {
+      "id": "global-45-seed-3528",
+      "label": "全球45°接入种子",
+      "walker": "Walker Delta 60°:3528/42/0",
+      "inclinationDeg": 60,
+      "planes": 42,
+      "satellitesPerPlane": 84,
+      "satelliteCount": 3528,
+      "phaseFactor": 0,
+      "onboardCellCount": 7056,
+      "auditStatus": "seed",
+      "eligibleForSelection": false,
+      "coarseGridAudit": "snapshot_fail_23_uncovered",
+      "sevenDayEventAudit": "not_run",
+      "exactCoverageResult": "not_run",
+      "rfValidation": "not_run",
+      "note": "This input seed already has 23 uncovered L1 at the saved t=0 snapshot; it is not a passed global coverage or RF result."
+    },
+    {
+      "id": "global-45-f1-snapshot-candidate",
+      "label": "同规模 F=1 单时刻候选",
+      "walker": "Walker Delta 60°:3528/42/1",
+      "inclinationDeg": 60,
+      "planes": 42,
+      "satellitesPerPlane": 84,
+      "satelliteCount": 3528,
+      "phaseFactor": 1,
+      "onboardCellCount": 7056,
+      "auditStatus": "coarse",
+      "eligibleForSelection": false,
+      "coarseGridAudit": "one_day_120s_720_of_720_pass",
+      "snapshotReportPath": "./global-constellation-f1-snapshot.json",
+      "coarseReportPath": "./global-constellation-f1-day-coarse.json",
+      "sevenDayEventAudit": "not_run",
+      "exactCoverageResult": "not_run",
+      "rfValidation": "not_run",
+      "note": "One day / 120-second coarse sampling passed 720/720, with peak visible load 209/256 and no capacity overflow; this does not prove continuity."
+    }
+  ],
+  "auditLevels": {
+    "seed": "Parameters and deterministic registries exist; coverage has not been accepted.",
+    "coarse": "A declared spatial/time grid was evaluated; gaps between samples may remain.",
+    "exact_pass": "A declared event-driven horizon completed without a modeled failure."
+  }
+}

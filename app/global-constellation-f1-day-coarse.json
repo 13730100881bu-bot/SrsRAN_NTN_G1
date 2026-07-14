@@ -1,0 +1,5091 @@
+{
+  "schemaVersion": 1,
+  "auditLevel": "coarse",
+  "exact": false,
+  "mode": "fixed_step_sampling",
+  "scenario": {
+    "altitudeKm": 500,
+    "inclinationDeg": 60,
+    "planes": 42,
+    "satellitesPerPlane": 84,
+    "phaseFactor": 1,
+    "raanOffsetDeg": 0,
+    "phaseOffsetDeg": 0,
+    "satelliteCount": 3528,
+    "minimumElevationDeg": 45,
+    "l1CapacityPerSatellite": 256
+  },
+  "catalog": {
+    "version": "global-land-l1-v1",
+    "l1Count": 36411,
+    "scope": {
+      "longitudeDeg": [
+        -180,
+        180
+      ],
+      "latitudeDeg": [
+        -57,
+        57
+      ],
+      "surface": "land-center-samples"
+    }
+  },
+  "sampling": {
+    "requestedDays": 1,
+    "stepSeconds": 120,
+    "epochCount": 720
+  },
+  "epochs": [
+    {
+      "timeSeconds": 0,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 1080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 1200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 1320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 1440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 1560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 1680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 1800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 1920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 2040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 2160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 2280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 2400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 2520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 2640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 2760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 2880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 3000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 3120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 3240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 3360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 3480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 3600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 3720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 3840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 3960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 4080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 4200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 4320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 4440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 4560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 4680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 4800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 4920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 5040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 5160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 5280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 5400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 5520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 5640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 5760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 5880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 6000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 6120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 6240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 6360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 6480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 6600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 6720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 6840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 6960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 7080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 7200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 7320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 7440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 7560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 7680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 7800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 7920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 8040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 8160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 8280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 8400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 8520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 8640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 8760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 8880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 9000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 9120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 9240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 9360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 9480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 9600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 9720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 9840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 9960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 10080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 10200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 10320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 10440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 10560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 10680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 10800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 10920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 11040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 11160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 11280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 11400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 11520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 11640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 11760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 11880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 12000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 12120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 12240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 12360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 12480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 12600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 12720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 12840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 12960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 13080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 13200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 13320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 13440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 13560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 13680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 13800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 13920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 14040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 14160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 14280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 14400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 14520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 14640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 14760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 14880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 15000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 15120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 15240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 15360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 15480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 209,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 15600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 15720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 15840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 15960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 16080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 16200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 16320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 16440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 16560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 16680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 16800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 16920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 17040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 17160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 17280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 17400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 17520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 17640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 17760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 17880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 18000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 18120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 18240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 18360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 18480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 18600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 18720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 18840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 18960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 19080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 19200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 19320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 19440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 19560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 19680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 19800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 19920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 20040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 20160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 20280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 20400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 20520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 20640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 20760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 20880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 21000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 21120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 21240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 21360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 21480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 21600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 21720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 21840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 21960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 22080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 22200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 22320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 22440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 22560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 22680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 22800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 22920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 23040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 23160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 23280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 23400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 23520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 23640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 23760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 23880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 24000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 24120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 24240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 24360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 24480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 24600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 24720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 24840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 24960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 25080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 25200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 25320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 25440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 25560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 25680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 25800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 25920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 26040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 26160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 26280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 26400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 26520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 26640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 26760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 26880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 27000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 27120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 27240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 27360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 27480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 27600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 27720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 27840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 27960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 28080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 28200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 209,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 28320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 28440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 28560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 28680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 28800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 28920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 29040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 29160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 29280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 29400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 29520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 29640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 29760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 29880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 30000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 30120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 30240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 30360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 30480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 30600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 30720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 30840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 30960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 31080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 31200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 31320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 31440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 31560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 31680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 31800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 31920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 32040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 32160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 32280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 32400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 32520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 32640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 32760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 32880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 33000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 33120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 33240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 33360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 33480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 33600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 33720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 33840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 33960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 34080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 34200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 34320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 34440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 34560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 34680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 34800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 34920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 35040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 35160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 35280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 35400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 35520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 35640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 35760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 35880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 36000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 36120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 36240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 36360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 36480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 36600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 36720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 36840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 36960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 37080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 37200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 37320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 37440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 37560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 37680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 37800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 37920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 38040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 38160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 38280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 38400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 38520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 38640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 38760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 38880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 39000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 39120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 39240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 39360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 39480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 39600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 39720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 39840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 39960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 40080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 40200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 40320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 40440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 40560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 40680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 40800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 40920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 41040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 41160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 41280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 41400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 41520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 41640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 41760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 41880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 42000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 42120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 42240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 42360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 42480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 42600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 42720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 42840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 42960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 43080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 43200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 43320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 43440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 43560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 43680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 43800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 43920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 44040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 44160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 44280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 44400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 44520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 44640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 44760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 44880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 45000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 45120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 45240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 45360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 45480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 45600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 45720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 45840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 45960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 46080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 46200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 46320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 46440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 46560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 46680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 46800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 46920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 47040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 47160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 47280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 47400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 47520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 47640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 47760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 47880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 48000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 48120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 48240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 48360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 48480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 48600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 48720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 48840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 48960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 49080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 49200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 49320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 49440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 49560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 49680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 49800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 49920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 50040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 50160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 50280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 50400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 50520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 50640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 50760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 50880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 51000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 51120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 51240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 51360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 51480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 51600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 51720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 51840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 51960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 52080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 52200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 52320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 52440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 52560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 52680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 52800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 52920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 53040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 53160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 53280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 53400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 53520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 53640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 53760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 53880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 54000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 54120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 54240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 54360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 54480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 54600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 54720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 54840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 54960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 55080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 55200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 55320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 55440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 55560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 55680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 55800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 55920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 56040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 56160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 56280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 56400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 56520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 56640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 56760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 56880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 57000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 57120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 57240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 57360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 57480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 57600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 57720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 57840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 57960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 58080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 58200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 58320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 58440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 58560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 58680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 58800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 58920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 59040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 59160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 59280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 59400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 59520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 59640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 59760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 59880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 60000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 209,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 60120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 60240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 60360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 60480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 60600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 60720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 60840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 60960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 61080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 61200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 61320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 61440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 61560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 61680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 61800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 61920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 62040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 62160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 62280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 62400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 62520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 62640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 62760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 62880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 63000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 63120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 63240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 63360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 63480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 63600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 63720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 63840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 63960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 64080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 64200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 64320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 64440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 64560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 64680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 64800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 64920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 65040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 65160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 65280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 65400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 65520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 65640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 65760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 65880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 66000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 66120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 66240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 66360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 66480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 66600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 66720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 66840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 66960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 67080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 67200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 67320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 67440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 67560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 67680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 67800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 67920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 68040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 68160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 68280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 68400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 68520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 68640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 68760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 68880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 69000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 69120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 69240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 69360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 69480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 69600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 69720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 69840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 69960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 70080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 70200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 70320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 70440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 70560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 70680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 70800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 70920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 71040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 71160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 71280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 71400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 71520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 71640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 71760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 71880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 72000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 72120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 72240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 72360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 72480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 72600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 72720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 72840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 72960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 73080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 73200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 73320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 73440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 73560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 73680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 73800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 73920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 74040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 74160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 74280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 74400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 74520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 74640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 74760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 74880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 75000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 75120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 75240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 75360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 75480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 75600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 75720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 75840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 75960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 76080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 76200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 76320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 76440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 76560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 76680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 76800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 76920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 77040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 77160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 77280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 77400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 77520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 77640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 77760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 77880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 78000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 78120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 78240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 78360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 78480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 78600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 78720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 78840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 78960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 79080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 79200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 79320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 79440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 79560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 79680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 79800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 79920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 80040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 80160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 80280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 80400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 80520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 80640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 80760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 80880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 81000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 81120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 81240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 81360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 81480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 81600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 81720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 81840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 81960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 82080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 82200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 82320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 82440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 82560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 82680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 82800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 82920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 83040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 83160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 83280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 83400,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 83520,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 83640,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 83760,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 83880,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 84000,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 84120,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 84240,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 84360,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 84480,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 84600,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 84720,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 84840,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 84960,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 85080,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 85200,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 85320,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 85440,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 85560,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 85680,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 85800,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 85920,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 208,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 86040,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 86160,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    },
+    {
+      "timeSeconds": 86280,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 206,
+      "satellitesOver256L1": 0
+    }
+  ],
+  "summary": {
+    "maximumUncoveredL1": 0,
+    "minimumCandidateCount": 1,
+    "maximumVisibleL1PerSatellite": 209,
+    "maximumSatellitesOver256L1": 0
+  },
+  "limitations": [
+    "This is fixed-step discrete sampling and must not be described as exact or continuous coverage.",
+    "A coarse or snapshot report cannot set selectedScenario; only a separate exact_pass audit may do so.",
+    "The 256-L1 comparison is a scheduling-capacity check, not RF, power, interference, or gateway validation."
+  ]
+}

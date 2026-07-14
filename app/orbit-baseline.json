@@ -1,0 +1,35 @@
+{
+  "shell": "LEO-GLOBAL-45-ENGINEERING-CANDIDATE",
+  "walker": "Walker Delta 60°:3528/42/1",
+  "designStatus": "coarse_candidate",
+  "altitudeKm": 500,
+  "inclinationDeg": 60,
+  "planes": 42,
+  "satellitesPerPlane": 84,
+  "totalSatellites": 3528,
+  "phaseFactor": 1,
+  "raanOffsetDeg": 0,
+  "phaseOffsetDeg": 0,
+  "epoch": "2026-01-01T00:00:00Z",
+  "serviceLatitudeLimitDeg": 57,
+  "thresholdsDeg": {
+    "hard": 45,
+    "preferred": 50,
+    "premium": 60,
+    "release": 42
+  },
+  "checkpoints": [
+    { "name": "北京", "lat": 39.9042, "lon": 116.4074, "core": true },
+    { "name": "新加坡", "lat": 1.3521, "lon": 103.8198, "core": true },
+    { "name": "东京", "lat": 35.6762, "lon": 139.6503, "core": true },
+    { "name": "悉尼", "lat": -33.8688, "lon": 151.2093, "core": true },
+    { "name": "开罗", "lat": 30.0444, "lon": 31.2357, "core": true },
+    { "name": "约翰内斯堡", "lat": -26.2041, "lon": 28.0473, "core": true },
+    { "name": "伦敦", "lat": 51.5074, "lon": -0.1278, "core": true },
+    { "name": "纽约", "lat": 40.7128, "lon": -74.006, "core": true },
+    { "name": "洛杉矶", "lat": 34.0522, "lon": -118.2437, "core": true },
+    { "name": "墨西哥城", "lat": 19.4326, "lon": -99.1332, "core": true },
+    { "name": "圣保罗", "lat": -23.5505, "lon": -46.6333, "core": true },
+    { "name": "布宜诺斯艾利斯", "lat": -34.6037, "lon": -58.3816, "core": true }
+  ]
+}

@@ -1,0 +1,91 @@
+{
+  "model": {
+    "altitudeKm": 500,
+    "inclinationDeg": 53,
+    "phaseFactor": 1,
+    "sampleStepSeconds": 120,
+    "sampleCount": 720,
+    "l1Positions": 2620,
+    "l1CapacityPerSatellite": 84
+  },
+  "originalBaseline": {
+    "planes": 24,
+    "satellitesPerPlane": 24,
+    "satelliteCount": 576,
+    "successfulSamples": 2,
+    "minimumUnassigned": 0,
+    "averageUnassigned": 70.79027777777777,
+    "maximumUnassigned": 194,
+    "minimumCandidateCount": 1,
+    "minimumActiveSatellites": 33,
+    "maximumActiveSatellites": 39,
+    "pciConflictSamples": 0,
+    "rawReassignments": 1386682,
+    "minimumFleetCapacityHeadroom": 236,
+    "minimumPeakSatelliteHeadroom": 0
+  },
+  "minimumFeasible": {
+    "planes": 27,
+    "satellitesPerPlane": 24,
+    "satelliteCount": 648,
+    "successfulSamples": 720,
+    "minimumUnassigned": 0,
+    "averageUnassigned": 0,
+    "maximumUnassigned": 0,
+    "minimumCandidateCount": 2,
+    "minimumActiveSatellites": 35,
+    "maximumActiveSatellites": 43,
+    "pciConflictSamples": 0,
+    "rawReassignments": 1337563,
+    "minimumFleetCapacityHeadroom": 656,
+    "minimumPeakSatelliteHeadroom": 0
+  },
+  "recommended": {
+    "planes": 30,
+    "satellitesPerPlane": 24,
+    "satelliteCount": 720,
+    "successfulSamples": 720,
+    "minimumUnassigned": 0,
+    "averageUnassigned": 0,
+    "maximumUnassigned": 0,
+    "minimumCandidateCount": 2,
+    "minimumActiveSatellites": 37,
+    "maximumActiveSatellites": 45,
+    "pciConflictSamples": 0,
+    "rawReassignments": 1261561,
+    "minimumFleetCapacityHeadroom": 1076,
+    "minimumPeakSatelliteHeadroom": 0
+  },
+  "sameSizeComparison": {
+    "planes": 24,
+    "satellitesPerPlane": 30,
+    "satelliteCount": 720,
+    "successfulSamples": 720,
+    "minimumUnassigned": 0,
+    "averageUnassigned": 0,
+    "maximumUnassigned": 0,
+    "minimumCandidateCount": 2,
+    "minimumActiveSatellites": 37,
+    "maximumActiveSatellites": 44,
+    "pciConflictSamples": 0,
+    "rawReassignments": 1275134,
+    "minimumFleetCapacityHeadroom": 1076,
+    "minimumPeakSatelliteHeadroom": 0
+  },
+  "rejectedSmallerOrNearby": [
+    { "planes": 24, "satellitesPerPlane": 24, "firstFailureSeconds": 0, "unassignedCount": 157 },
+    { "planes": 24, "satellitesPerPlane": 25, "firstFailureSeconds": 0, "unassignedCount": 38 },
+    { "planes": 25, "satellitesPerPlane": 24, "firstFailureSeconds": 0, "unassignedCount": 180 },
+    { "planes": 24, "satellitesPerPlane": 26, "firstFailureSeconds": 0, "unassignedCount": 69 },
+    { "planes": 26, "satellitesPerPlane": 24, "firstFailureSeconds": 0, "unassignedCount": 113 },
+    { "planes": 25, "satellitesPerPlane": 25, "firstFailureSeconds": 0, "unassignedCount": 18 },
+    { "planes": 24, "satellitesPerPlane": 27, "firstFailureSeconds": 240, "unassignedCount": 8 },
+    { "planes": 24, "satellitesPerPlane": 28, "firstFailureSeconds": 83640, "unassignedCount": 6 },
+    { "planes": 28, "satellitesPerPlane": 24, "firstFailureSeconds": 68040, "unassignedCount": 2 }
+  ],
+  "metricDefinitions": {
+    "minimumFleetCapacityHeadroom": "min_epoch(serving_satellite_count * 84 - 2620); aggregate candidate capacity only, not geometric or local matching margin",
+    "minimumPeakSatelliteHeadroom": "84 - max_epoch(max_assigned_L1_on_one_satellite)",
+    "rawReassignments": "sum of previously assigned L1 positions whose owner changes or disappears between independent 120-second optimizer snapshots; newly acquired positions after an unassigned snapshot are not counted, and this is not an on-air handover count"
+  }
+}

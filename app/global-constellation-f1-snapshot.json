@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "auditLevel": "coarse",
+  "exact": false,
+  "mode": "snapshot",
+  "scenario": {
+    "altitudeKm": 500,
+    "inclinationDeg": 60,
+    "planes": 42,
+    "satellitesPerPlane": 84,
+    "phaseFactor": 1,
+    "raanOffsetDeg": 0,
+    "phaseOffsetDeg": 0,
+    "satelliteCount": 3528,
+    "minimumElevationDeg": 45,
+    "l1CapacityPerSatellite": 256
+  },
+  "catalog": {
+    "version": "global-land-l1-v1",
+    "l1Count": 36411,
+    "scope": {
+      "longitudeDeg": [
+        -180,
+        180
+      ],
+      "latitudeDeg": [
+        -57,
+        57
+      ],
+      "surface": "land-center-samples"
+    }
+  },
+  "sampling": {
+    "requestedDays": 1,
+    "stepSeconds": 120,
+    "epochCount": 1
+  },
+  "epochs": [
+    {
+      "timeSeconds": 0,
+      "uncoveredL1": 0,
+      "minimumCandidates": 1,
+      "maximumVisibleL1PerSatellite": 207,
+      "satellitesOver256L1": 0
+    }
+  ],
+  "summary": {
+    "maximumUncoveredL1": 0,
+    "minimumCandidateCount": 1,
+    "maximumVisibleL1PerSatellite": 207,
+    "maximumSatellitesOver256L1": 0
+  },
+  "limitations": [
+    "This is fixed-step discrete sampling and must not be described as exact or continuous coverage.",
+    "A coarse or snapshot report cannot set selectedScenario; only a separate exact_pass audit may do so.",
+    "The 256-L1 comparison is a scheduling-capacity check, not RF, power, interference, or gateway validation."
+  ]
+}

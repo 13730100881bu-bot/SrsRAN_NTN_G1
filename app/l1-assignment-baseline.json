@@ -1,0 +1,23 @@
+{
+  "model": "per-l1-dinic-capacity-84-walker-720-30",
+  "planes": 30,
+  "satellitesPerPlane": 24,
+  "satelliteCount": 720,
+  "sampleStepSeconds": 120,
+  "sampleCount": 720,
+  "successfulSamples": 720,
+  "failedSamples": 0,
+  "successRate": 1,
+  "minimumUnassigned": 0,
+  "maximumUnassigned": 0,
+  "averageUnassigned": 0,
+  "minimumCandidateCount": 2,
+  "minimumActiveSatellites": 37,
+  "maximumActiveSatellites": 45,
+  "peakSatelliteLoad": 84,
+  "minimumFleetCapacityHeadroom": 1076,
+  "minimumPeakSatelliteHeadroom": 0,
+  "pciConflictSamples": 0,
+  "rawReassignments": 1261561,
+  "generatedOn": "2026-07-12"
+}
