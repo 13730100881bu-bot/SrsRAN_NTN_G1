@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "region": "china-ntn-demo",
+  "cells": [
+    {
+      "nci": "0x19b0",
+      "satellite_id": "SAT-CN-001",
+      "gnb_id_bit_length": 32,
+      "plmn": "00101",
+      "pci": 10,
+      "band": 78,
+      "ssb_arfcn": 632628,
+      "ssb_scs": 30,
+      "ssb_period": 20,
+      "ssb_offset": 0,
+      "ssb_duration": 1,
+      "enabled": true
+    },
+    {
+      "nci": "0x19b1",
+      "satellite_id": "SAT-CN-002",
+      "gnb_id_bit_length": 32,
+      "plmn": "00101",
+      "pci": 11,
+      "band": 78,
+      "ssb_arfcn": 632628,
+      "ssb_scs": 30,
+      "ssb_period": 20,
+      "ssb_offset": 0,
+      "ssb_duration": 1,
+      "enabled": true
+    },
+    {
+      "nci": "0x19b2",
+      "satellite_id": "SAT-CN-003",
+      "gnb_id_bit_length": 32,
+      "plmn": "00101",
+      "pci": 12,
+      "band": 78,
+      "ssb_arfcn": 632628,
+      "ssb_scs": 30,
+      "ssb_period": 20,
+      "ssb_offset": 0,
+      "ssb_duration": 1,
+      "enabled": true
+    }
+  ],
+  "xn_relations": [
+    {
+      "source_satellite_id": "SAT-CN-001",
+      "target_satellite_id": "SAT-CN-002",
+      "bidirectional": true,
+      "handover_allowed": true
+    },
+    {
+      "source_satellite_id": "SAT-CN-002",
+      "target_satellite_id": "SAT-CN-003",
+      "bidirectional": true,
+      "handover_allowed": true
+    }
+  ],
+  "relations": [
+    {
+      "serving_nci": "0x19b0",
+      "neighbor_nci": "0x19b1",
+      "report_cfg_ids": [2],
+      "handover_allowed": true
+    },
+    {
+      "serving_nci": "0x19b1",
+      "neighbor_nci": "0x19b0",
+      "report_cfg_ids": [2],
+      "handover_allowed": true
+    },
+    {
+      "serving_nci": "0x19b1",
+      "neighbor_nci": "0x19b2",
+      "report_cfg_ids": [2],
+      "handover_allowed": true
+    },
+    {
+      "serving_nci": "0x19b2",
+      "neighbor_nci": "0x19b1",
+      "report_cfg_ids": [2],
+      "handover_allowed": true
+    }
+  ]
+}

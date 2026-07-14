@@ -23,5 +23,6 @@
 ########################################################################
 file(GLOB CONFIG_FILES
   "*.yml"
+  "*.json"
 )
 install(FILES ${CONFIG_FILES} DESTINATION ${DATA_DIR})

@@ -1,0 +1,2617 @@
+# CU-CP-only NTN mobility example for a LEO satellite at 500 km.
+# This file intentionally does not configure DU/RU/PHY/MAC/SIB19 NTN features.
+# Digital service beams are 15 km hex cells; analog access beams are 7-cell CU-CP eligibility clusters.
+
+cu_cp:
+  amf:
+    addr: 127.0.1.100
+    bind_addr: 127.0.0.1
+    supported_tracking_areas:
+      - tac: 1
+        plmn_list:
+          - plmn: "00101"
+            tai_slice_support_list:
+              - sst: 1
+  e1ap:
+    bind_addr: 127.0.20.1
+  f1ap:
+    bind_addr: 127.0.10.1
+  mobility:
+    trigger_handover_from_measurements: false
+    cells:
+      - nr_cell_id: 0x66c001
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c002
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c003
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c004
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c005
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c006
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c007
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c008
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c009
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c00a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c00b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c00c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c00d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c00e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c00f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c010
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c011
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c012
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c013
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c014
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c015
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c016
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c017
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c018
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c019
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c01a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c01b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c01c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c01d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c01e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c01f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c020
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c021
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c022
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c023
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c024
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c025
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c026
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c027
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c028
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c029
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c02a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c02b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c02c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c02d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c02e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c02f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c030
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c031
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c032
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c033
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c034
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c035
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c036
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c037
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c038
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c039
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c03a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c03b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c03c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c03d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c03e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c03f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c040
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c041
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c042
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c043
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c044
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c045
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c046
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c047
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c048
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c049
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c04a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c04b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c04c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c04d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c04e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c04f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c050
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c051
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c052
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c053
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c054
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c055
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c056
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c057
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c058
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c059
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c05a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c05b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c05c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c05d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c05e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c05f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c060
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c061
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c062
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c063
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c064
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c065
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c066
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c067
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c068
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c069
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c06a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c06b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c06c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c06d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c06e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c06f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c070
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c071
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c072
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c073
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c074
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c075
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c076
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c077
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c078
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c079
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c07a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c07b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c07c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c07d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c07e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c07f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c080
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c081
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c082
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c083
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c084
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c085
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c086
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c087
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c088
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c089
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c08a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c08b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c08c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c08d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c08e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c08f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c090
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c091
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c092
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c093
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c094
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c095
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c096
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c097
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c098
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c099
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c09a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c09b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c09c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c09d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c09e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c09f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0a0
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0a1
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0a2
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0a3
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0a4
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0a5
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0a6
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0a7
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0a8
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0a9
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0aa
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0ab
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0ac
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0ad
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0ae
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0af
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0b0
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0b1
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0b2
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0b3
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0b4
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0b5
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0b6
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0b7
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0b8
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0b9
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0ba
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0bb
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0bc
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0bd
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0be
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0bf
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0c0
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0c1
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0c2
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0c3
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0c4
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0c5
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0c6
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0c7
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0c8
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0c9
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0ca
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0cb
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0cc
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0cd
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0ce
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0cf
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0d0
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0d1
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0d2
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0d3
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0d4
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0d5
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0d6
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0d7
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0d8
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0d9
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0da
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0db
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0dc
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0dd
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0de
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0df
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0e0
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0e1
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0e2
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0e3
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0e4
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0e5
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0e6
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0e7
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0e8
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0e9
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0ea
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0eb
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0ec
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0ed
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0ee
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0ef
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0f0
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0f1
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0f2
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0f3
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0f4
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0f5
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0f6
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0f7
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0f8
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0f9
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0fa
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0fb
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0fc
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0fd
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0fe
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c0ff
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c100
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c101
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c102
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c103
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c104
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c105
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c106
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c107
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c108
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c109
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c10a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c10b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c10c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c10d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c10e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c10f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c110
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c111
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c112
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c113
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c114
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c115
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c116
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c117
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c118
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c119
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c11a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c11b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c11c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c11d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c11e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c11f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c120
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c121
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c122
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c123
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c124
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c125
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c126
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c127
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c128
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c129
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c12a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c12b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c12c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c12d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c12e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c12f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c130
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c131
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c132
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c133
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c134
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c135
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c136
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c137
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c138
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c139
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c13a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c13b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c13c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c13d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c13e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c13f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c140
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c141
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c142
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c143
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c144
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c145
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c146
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c147
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c148
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c149
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c14a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c14b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c14c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c14d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c14e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c14f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c150
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c151
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c152
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c153
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c154
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c155
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c156
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c157
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c158
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c159
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c15a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c15b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c15c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c15d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c15e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c15f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c160
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c161
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c162
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c163
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c164
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c165
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c166
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c167
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c168
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c169
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c16a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c16b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c16c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c16d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c16e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c16f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c170
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c171
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c172
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c173
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c174
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c175
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c176
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c177
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c178
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c179
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c17a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c17b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c17c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c17d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c17e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c17f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c180
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c181
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c182
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c183
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c184
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c185
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c186
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c187
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c188
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c189
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c18a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c18b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c18c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c18d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c18e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c18f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c190
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c191
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c192
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c193
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c194
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c195
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c196
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c197
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c198
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c199
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c19a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c19b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c19c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c19d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c19e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c19f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1a0
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1a1
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1a2
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1a3
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1a4
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1a5
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1a6
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1a7
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1a8
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1a9
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1aa
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1ab
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1ac
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1ad
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1ae
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1af
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1b0
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1b1
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1b2
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1b3
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1b4
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1b5
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1b6
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1b7
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1b8
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1b9
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1ba
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1bb
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1bc
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1bd
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1be
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1bf
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1c0
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1c1
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1c2
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1c3
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1c4
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1c5
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1c6
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1c7
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1c8
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1c9
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1ca
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1cb
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1cc
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1cd
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1ce
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1cf
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1d0
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1d1
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1d2
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1d3
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1d4
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1d5
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1d6
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1d7
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1d8
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1d9
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1da
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1db
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1dc
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1dd
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1de
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1df
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1e0
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1e1
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1e2
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1e3
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1e4
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1e5
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1e6
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1e7
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1e8
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1e9
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1ea
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1eb
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1ec
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1ed
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1ee
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1ef
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1f0
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1f1
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1f2
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1f3
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1f4
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1f5
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1f6
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1f7
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1f8
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1f9
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1fa
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1fb
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1fc
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1fd
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1fe
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c1ff
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c200
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c201
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c202
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c203
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c204
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c205
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c206
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c207
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c208
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c209
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c20a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c20b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c20c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c20d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c20e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c20f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c210
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c211
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c212
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c213
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c214
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c215
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c216
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c217
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c218
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c219
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c21a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c21b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c21c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c21d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c21e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c21f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c220
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c221
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c222
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c223
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c224
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c225
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c226
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c227
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c228
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c229
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c22a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c22b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c22c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c22d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c22e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c22f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c230
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c231
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c232
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c233
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c234
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c235
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c236
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c237
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c238
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c239
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c23a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c23b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c23c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c23d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c23e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c23f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c240
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c241
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c242
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c243
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c244
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c245
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c246
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c247
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c248
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c249
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c24a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c24b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c24c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c24d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c24e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c24f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c250
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c251
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c252
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c253
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c254
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c255
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c256
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c257
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c258
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c259
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c25a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c25b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c25c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c25d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c25e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c25f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c260
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c261
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c262
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c263
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c264
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c265
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c266
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c267
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c268
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c269
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c26a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c26b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c26c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c26d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c26e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c26f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c270
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c271
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c272
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c273
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c274
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c275
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c276
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c277
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c278
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c279
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c27a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c27b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c27c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c27d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c27e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c27f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c280
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c281
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c282
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c283
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c284
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c285
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c286
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c287
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c288
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c289
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c28a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c28b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c28c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c28d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c28e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c28f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c290
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c291
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c292
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c293
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c294
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c295
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c296
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c297
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c298
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c299
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c29a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c29b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c29c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c29d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c29e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c29f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2a0
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2a1
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2a2
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2a3
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2a4
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2a5
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2a6
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2a7
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2a8
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2a9
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2aa
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2ab
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2ac
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2ad
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2ae
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2af
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2b0
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2b1
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2b2
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2b3
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2b4
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2b5
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2b6
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2b7
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2b8
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2b9
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2ba
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2bb
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2bc
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2bd
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2be
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2bf
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2c0
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2c1
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2c2
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2c3
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2c4
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2c5
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2c6
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2c7
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2c8
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2c9
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2ca
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2cb
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2cc
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2cd
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2ce
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2cf
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2d0
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2d1
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2d2
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2d3
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2d4
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2d5
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2d6
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2d7
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2d8
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2d9
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2da
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2db
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2dc
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2dd
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2de
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2df
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2e0
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2e1
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2e2
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2e3
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2e4
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2e5
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2e6
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2e7
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2e8
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2e9
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2ea
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2eb
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2ec
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2ed
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2ee
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2ef
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2f0
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2f1
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2f2
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2f3
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2f4
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2f5
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2f6
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2f7
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2f8
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2f9
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2fa
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2fb
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2fc
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2fd
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2fe
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c2ff
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c300
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c301
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c302
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c303
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c304
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c305
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c306
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c307
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c308
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c309
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c30a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c30b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c30c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c30d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c30e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c30f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c310
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c311
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c312
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c313
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c314
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c315
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c316
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c317
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c318
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c319
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c31a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c31b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c31c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c31d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c31e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c31f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c320
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c321
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c322
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c323
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c324
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c325
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c326
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c327
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c328
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c329
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c32a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c32b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c32c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c32d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c32e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c32f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c330
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c331
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c332
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c333
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c334
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c335
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c336
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c337
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c338
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c339
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c33a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c33b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c33c
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c33d
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c33e
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c33f
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c340
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c341
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c342
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c343
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c344
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c345
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c346
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c347
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c348
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c349
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c34a
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+      - nr_cell_id: 0x66c34b
+        periodic_report_cfg_id: 1
+        gnb_id_bit_length: 22
+    report_configs:
+      - report_cfg_id: 1
+        report_type: periodical
+        report_interval_ms: 1024
+      - report_cfg_id: 2
+        report_type: event_triggered
+        event_triggered_report_type: a3
+        meas_trigger_quantity: rsrp
+        meas_trigger_quantity_offset_db: 6
+        hysteresis_db: 0
+        time_to_trigger_ms: 100
+        report_interval_ms: 1024
+    ntn_location_mobility:
+      enabled: true
+      # 843 service beams cover the 500 km / 50 deg / 15 km LEO footprint.
+      # 137 access beam groups collect nearby service beams for RRC access decisions.
+      # max_nof_served_beams=0 keeps all visible beams in the inventory; service capacity is capped below.
+      # max_nof_loaded_digital_service_beams=0 would remove the CU-CP cap on beams ready to carry UE traffic.
+      beam_table_json_file: configs/leo_500km_beam_table.json
+      served_beam_min_elevation_deg: 50.0
+      max_nof_served_beams: 0
+      max_nof_active_analog_access_beams: 16
+      max_nof_loaded_digital_service_beams: 256
+      # Prepared target beams are kept briefly for UE moves, then released if unused.
+      preheated_beam_hold_time_ms: 5000
+      preheated_beam_min_ready_time_ms: 1000
+      analog_rebalance_pair_cooldown_ms: 10000
+      digital_target_reservation_hold_time_ms: 5000
+      served_beam_hopping_enabled: true
+      served_beam_hopping_dwell_updates: 3
+      multi_beam_load_balancing_enabled: true
+      demand_aware_beam_scheduling_enabled: true
+      multi_beam_headroom_admission_enabled: true
+      multi_beam_load_balancing_min_ue_delta: 2
+      multi_beam_load_balancing_max_handovers_per_eval: 1
+      multi_beam_load_balancing_handover_cooldown_ms: 30000
+      satellite_state_source: circular_orbit
+      satellite_state_update_period_ms: 1000
+      predictive_service_window_horizon_ms: 10000
+      predictive_handover_lead_time_ms: 3000
+      circular_orbit_altitude_m: 500000.0
+      circular_orbit_inclination_deg: 53.0
+      circular_orbit_raan_deg: 0.0
+      circular_orbit_argument_of_latitude_deg: 0.0
+      measurement_report_period_ms: 0
+      time_to_trigger_ms: 1000
+      max_report_gap_ms: 750
+      location_max_age_ms: 5000
+      handover_retry_timeout_ms: 2000
+      required_consecutive_location_reports: 3
+      boundary_hysteresis_m: 5000.0
+      max_horizontal_accuracy_m: 250.0
+      core_network_reporting_local_forwarding_enabled: false
+      core_network_reporting_amf_control_enabled: true
+      core_network_reporting_min_report_interval_ms: 0
+
+log:
+  filename: /tmp/cu_cp_leo_500km_ntn.log
+  all_level: info
+
+pcap:
+  ngap_enable: true
+  ngap_filename: /tmp/cu_cp_leo_500km_ngap.pcap
+  f1ap_enable: true
+  f1ap_filename: /tmp/cu_cp_leo_500km_f1ap.pcap
+  e1ap_enable: true
+  e1ap_filename: /tmp/cu_cp_leo_500km_e1ap.pcap
