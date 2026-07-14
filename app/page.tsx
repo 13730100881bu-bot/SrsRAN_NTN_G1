@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
-import { BeamPlanner } from "./beam-planner";
+import { GlobalPlanner } from "./global-planner";
 
 export const metadata: Metadata = {
-  title: "星地波位规划台 · CN-G01",
-  description: "面向中国区域的 NTN 两级波位编排、复用规划与多星接管可视化。",
+  title: "NTN全球陆地接入方案",
+  description: "42×84、F=1星座的全球陆地覆盖检查、单星容量结论与星载双小区80 ms接入日历。",
 };
 
 export default function Home() {
-  return <BeamPlanner />;
+  return <GlobalPlanner />;
 }

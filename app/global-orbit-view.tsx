@@ -1,0 +1,229 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import * as THREE from "three";
+import {
+  EARTH_RADIUS_KM,
+  ORBIT_RADIUS_KM,
+  propagateSatellite,
+  satellites,
+  type SatelliteDefinition,
+} from "./orbit-model";
+
+type GlobalOrbitViewProps = {
+  timeSeconds: number;
+  selectedSatelliteId: string;
+  onSelectSatellite: (id: string) => void;
+};
+
+const shellRadius = ORBIT_RADIUS_KM / EARTH_RADIUS_KM;
+
+export function GlobalOrbitView({ timeSeconds, selectedSatelliteId, onSelectSatellite }: GlobalOrbitViewProps) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const stateRef = useRef<{
+    renderer: THREE.WebGLRenderer;
+    camera: THREE.PerspectiveCamera;
+    scene: THREE.Scene;
+    world: THREE.Group;
+    instances: THREE.InstancedMesh;
+    selected: THREE.Mesh;
+    orbitLine: THREE.Line;
+    frame: number;
+  } | null>(null);
+  const [webglAvailable, setWebglAvailable] = useState(true);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return undefined;
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance" });
+    } catch {
+      const timer = window.setTimeout(() => setWebglAvailable(false), 0);
+      return () => window.clearTimeout(timer);
+    }
+
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setClearColor(0x0b222b, 1);
+    host.appendChild(renderer.domElement);
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
+    camera.position.set(0, 0.2, 4.2);
+    const world = new THREE.Group();
+    scene.add(world);
+
+    const earth = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 40, 24),
+      new THREE.MeshStandardMaterial({ color: 0x173b45, roughness: 0.85, metalness: 0.05 }),
+    );
+    world.add(earth);
+    const grid = new THREE.LineSegments(
+      new THREE.WireframeGeometry(new THREE.SphereGeometry(1.004, 24, 12)),
+      new THREE.LineBasicMaterial({ color: 0x315e68, transparent: true, opacity: 0.45 }),
+    );
+    world.add(grid);
+
+    const bandGeometry = new THREE.BufferGeometry();
+    const bandPoints: THREE.Vector3[] = [];
+    for (const latitude of [-57, 57]) {
+      const latitudeRad = latitude * Math.PI / 180;
+      for (let index = 0; index <= 128; index += 1) {
+        const longitude = index / 128 * Math.PI * 2;
+        bandPoints.push(new THREE.Vector3(
+          Math.cos(latitudeRad) * Math.cos(longitude),
+          Math.sin(latitudeRad),
+          Math.cos(latitudeRad) * Math.sin(longitude),
+        ));
+      }
+    }
+    bandGeometry.setFromPoints(bandPoints);
+    const band = new THREE.LineSegments(bandGeometry, new THREE.LineBasicMaterial({ color: 0x5c98a6, transparent: true, opacity: 0.65 }));
+    world.add(band);
+
+    const satelliteGeometry = new THREE.IcosahedronGeometry(0.009, 0);
+    const satelliteMaterial = new THREE.MeshBasicMaterial({ color: 0x70cfee });
+    const instances = new THREE.InstancedMesh(satelliteGeometry, satelliteMaterial, satellites.length);
+    instances.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    world.add(instances);
+
+    const selected = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(0.028, 1),
+      new THREE.MeshBasicMaterial({ color: 0xffb95c }),
+    );
+    world.add(selected);
+
+    const orbitLine = new THREE.Line(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({ color: 0xffb95c, transparent: true, opacity: 0.7 }),
+    );
+    world.add(orbitLine);
+
+    scene.add(new THREE.AmbientLight(0xffffff, 1.4));
+    const key = new THREE.DirectionalLight(0xb8e8ff, 2.2);
+    key.position.set(2, 1.5, 3);
+    scene.add(key);
+
+    const resize = () => {
+      const { width, height } = host.getBoundingClientRect();
+      renderer.setSize(Math.max(1, width), Math.max(1, height), false);
+      camera.aspect = Math.max(1, width) / Math.max(1, height);
+      camera.updateProjectionMatrix();
+    };
+    const observer = new ResizeObserver(resize);
+    observer.observe(host);
+    resize();
+
+    let dragging = false;
+    let previousX = 0;
+    let previousY = 0;
+    const down = (event: PointerEvent) => {
+      dragging = true;
+      previousX = event.clientX;
+      previousY = event.clientY;
+      renderer.domElement.setPointerCapture(event.pointerId);
+    };
+    const move = (event: PointerEvent) => {
+      if (!dragging) return;
+      world.rotation.y += (event.clientX - previousX) * 0.005;
+      world.rotation.x = THREE.MathUtils.clamp(world.rotation.x + (event.clientY - previousY) * 0.005, -1.2, 1.2);
+      previousX = event.clientX;
+      previousY = event.clientY;
+    };
+    const up = (event: PointerEvent) => {
+      if (!dragging) return;
+      const movement = Math.hypot(event.clientX - previousX, event.clientY - previousY);
+      dragging = false;
+      if (movement > 3) return;
+      const bounds = renderer.domElement.getBoundingClientRect();
+      const pointer = new THREE.Vector2(
+        (event.clientX - bounds.left) / bounds.width * 2 - 1,
+        -(event.clientY - bounds.top) / bounds.height * 2 + 1,
+      );
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(pointer, camera);
+      const hit = raycaster.intersectObject(instances, false)[0];
+      if (hit?.instanceId !== undefined) onSelectSatellite(satellites[hit.instanceId].id);
+    };
+    renderer.domElement.addEventListener("pointerdown", down);
+    renderer.domElement.addEventListener("pointermove", move);
+    renderer.domElement.addEventListener("pointerup", up);
+
+    const render = () => {
+      renderer.render(scene, camera);
+      if (stateRef.current) stateRef.current.frame = requestAnimationFrame(render);
+    };
+    stateRef.current = { renderer, camera, scene, world, instances, selected, orbitLine, frame: requestAnimationFrame(render) };
+
+    return () => {
+      observer.disconnect();
+      renderer.domElement.removeEventListener("pointerdown", down);
+      renderer.domElement.removeEventListener("pointermove", move);
+      renderer.domElement.removeEventListener("pointerup", up);
+      if (stateRef.current) cancelAnimationFrame(stateRef.current.frame);
+      stateRef.current = null;
+      world.traverse((object) => {
+        if (object instanceof THREE.Mesh || object instanceof THREE.Line || object instanceof THREE.LineSegments) {
+          object.geometry.dispose();
+          const material = object.material;
+          if (Array.isArray(material)) material.forEach((item) => item.dispose());
+          else material.dispose();
+        }
+      });
+      renderer.dispose();
+      renderer.domElement.remove();
+    };
+  }, [onSelectSatellite]);
+
+  useEffect(() => {
+    const state = stateRef.current;
+    if (!state) return;
+    const matrix = new THREE.Matrix4();
+    satellites.forEach((definition, index) => {
+      const propagated = propagateSatellite(definition, timeSeconds);
+      matrix.makeTranslation(
+        propagated.ecefKm[0] / EARTH_RADIUS_KM,
+        propagated.ecefKm[2] / EARTH_RADIUS_KM,
+        -propagated.ecefKm[1] / EARTH_RADIUS_KM,
+      );
+      state.instances.setMatrixAt(index, matrix);
+    });
+    state.instances.instanceMatrix.needsUpdate = true;
+
+    const definition = satellites.find(({ id }) => id === selectedSatelliteId) ?? satellites[0];
+    const propagated = propagateSatellite(definition, timeSeconds);
+    state.selected.position.set(
+      propagated.ecefKm[0] / EARTH_RADIUS_KM,
+      propagated.ecefKm[2] / EARTH_RADIUS_KM,
+      -propagated.ecefKm[1] / EARTH_RADIUS_KM,
+    );
+
+    const points: THREE.Vector3[] = [];
+    for (let index = 0; index <= 144; index += 1) {
+      const synthetic: SatelliteDefinition = { ...definition, phaseDeg: index / 144 * 360 };
+      const sample = propagateSatellite(synthetic, timeSeconds);
+      points.push(new THREE.Vector3(
+        sample.ecefKm[0] / EARTH_RADIUS_KM,
+        sample.ecefKm[2] / EARTH_RADIUS_KM,
+        -sample.ecefKm[1] / EARTH_RADIUS_KM,
+      ));
+    }
+    state.orbitLine.geometry.dispose();
+    state.orbitLine.geometry = new THREE.BufferGeometry().setFromPoints(points);
+  }, [selectedSatelliteId, timeSeconds]);
+
+  if (!webglAvailable) {
+    return (
+      <div className="orbit-fallback" role="status">
+        <b>WebGL 不可用</b>
+        <span>已切换到二维地图和数据表；轨道传播与波位审计仍可查看。</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="global-orbit-canvas" ref={hostRef} aria-label={`500 km 轨道壳层，GPU 实例化显示 ${satellites.length} 颗卫星`}>
+      <div className="orbit-overlay"><span>GPU实例化 · 简化显示</span><b>{satellites.length.toLocaleString("en-US")}颗卫星</b><small>拖动旋转 · 点击选星 · 仅突出所选轨道面</small></div>
+      <span className="sr-only">轨道半径为地球半径的 {shellRadius.toFixed(3)} 倍。</span>
+    </div>
+  );
+}

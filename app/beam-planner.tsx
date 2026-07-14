@@ -2,23 +2,26 @@
 
 import type { CSSProperties, FormEvent, KeyboardEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { axisForL1Cell, CHINA_SERVICE_OUTLINE, l1Catalog, l1CellById, l1CellForAxis, type L1CatalogCell } from "./beam-catalog";
+import { BeamHoppingView } from "./beam-hopping-view";
+import { OrbitConstellationView } from "./orbit-view";
+import { baseline, satellites } from "./orbit-model";
 
-type View = "national" | "cluster" | "handover";
-type ColorMode = "service" | "reuse" | "ta";
+type View = "national" | "cluster" | "handover" | "orbit" | "hopping";
+type ColorMode = "region" | "reuse" | "kind";
 
 type BeamCell = {
   id: string;
   u: number;
   v: number;
   reuse: number;
-  tac: number;
-  nci: string;
   region: string;
-  satellite: string;
-  status: "ready" | "candidate";
+  catalogId: string;
+  catalogKind: "full" | "edge";
+  childCount: number;
 };
 
-type CanvasCell = BeamCell & { x: number; y: number; radius: number; guard: boolean };
+type CanvasCell = BeamCell & { x: number; y: number; radius: number };
 
 const REUSE_COLORS = ["#45a8e5", "#ff9b54", "#53c68c", "#ec6f9d", "#9678d3", "#42bbb2", "#e4c64d"];
 const REGION_OPTIONS = ["全国", "华北", "华东", "华南", "西部"];
@@ -33,19 +36,13 @@ const L2_POSITIONS = [
 ];
 
 const TAKEOVER_PHASES = [
-  { name: "A 主用 / B 候选", note: "SAT-B 进入 eligible 集合，尚不承载业务。", a: 1, b: 0.18 },
-  { name: "B 预应用", note: "目标资源下发，等待 DU applied feedback。", a: 1, b: 0.46 },
-  { name: "A+B 重叠", note: "短时重叠服务，波位身份与邻接关系保持不变。", a: 0.82, b: 0.82 },
-  { name: "B 主用 / A 释放", note: "SAT-B 成为 primary，SAT-A 清理旧执行状态。", a: 0.16, b: 1 },
+  { name: "源星持有波位", note: "管理中心保留完整 candidate 全集；当前 L1 仍由源星的星载小区服务。", a: 1, b: 0, source: "position owner", target: "candidate" },
+  { name: "目标资源就绪", note: "目标星预留资源并等待 applied；就绪后可用不同 NCI / PCI 广播发现信号，但服务所有权仍在源星。", a: 1, b: 0.45, source: "position owner", target: "discovery RF" },
+  { name: "测量重叠与切换", note: "源、目标短时同时可测，连接态 UE 执行跨小区切换；到计划 epoch 后 position_id 的服务所有权转给目标星。", a: 0.55, b: 1, source: "handover source", target: "position owner" },
+  { name: "目标星主用", note: "目标星把该 L1 纳入本星两个小区之一；其他 L1 可按各自日历独立接管。", a: 0, b: 1, source: "candidate", target: "position owner" },
 ];
 
-const CHINA_OUTLINE = [
-  [0.08, 0.35], [0.14, 0.25], [0.12, 0.16], [0.22, 0.12], [0.29, 0.17], [0.39, 0.13],
-  [0.49, 0.2], [0.58, 0.18], [0.66, 0.09], [0.79, 0.06], [0.9, 0.13], [0.87, 0.24],
-  [0.79, 0.29], [0.88, 0.39], [0.83, 0.49], [0.75, 0.53], [0.71, 0.62], [0.64, 0.65],
-  [0.59, 0.76], [0.52, 0.74], [0.48, 0.64], [0.4, 0.61], [0.34, 0.53], [0.23, 0.55],
-  [0.17, 0.48], [0.1, 0.47],
-] as const;
+const CHINA_OUTLINE = CHINA_SERVICE_OUTLINE;
 
 function mod(value: number, base: number) {
   return ((value % base) + base) % base;
@@ -55,30 +52,30 @@ function signed(value: number, width = 5) {
   return `${value >= 0 ? "+" : "-"}${Math.abs(value).toString().padStart(width, "0")}`;
 }
 
-function shortAxis(value: number) {
-  return `${value >= 0 ? "+" : "-"}${Math.abs(value)}`;
-}
-
-function makeL1ShortId(parent: Pick<BeamCell, "u" | "v">) {
-  return `CN1.1.${shortAxis(parent.u)}.${shortAxis(parent.v)}`;
+function makeL1ShortId(parent: Pick<BeamCell, "catalogId">) {
+  return parent.catalogId;
 }
 
 function makeBeamCell(u: number, v: number, region = "华东 / 沿海核心"): BeamCell {
-  const hash = Math.abs((u * 73856093) ^ (v * 19349663));
+  const catalog = l1CellForAxis(u, v);
+  return makeBeamCellForCatalog(catalog, region);
+}
+
+function makeBeamCellForCatalog(catalog: L1CatalogCell, region = regionForPoint(catalog.x, catalog.y)): BeamCell {
+  const { u, v } = axisForL1Cell(catalog);
   return {
     id: `CN-G01-L1-U${signed(u)}-V${signed(v)}`,
     u,
     v,
     reuse: mod(u + 3 * v, 7),
-    tac: 31000 + mod(Math.floor(hash / 19), 138),
-    nci: `0x${mod(hash, 0xffffff).toString(16).toUpperCase().padStart(6, "0")}`,
     region,
-    satellite: mod(u + v, 3) === 0 ? "SAT-B07" : "SAT-A12",
-    status: mod(u - v, 11) === 0 ? "candidate" : "ready",
+    catalogId: catalog.id,
+    catalogKind: catalog.kind,
+    childCount: catalog.childCount,
   };
 }
 
-function makeL2Identity(parent: Pick<BeamCell, "u" | "v">, position: (typeof L2_POSITIONS)[number]) {
+function makeL2Identity(parent: Pick<BeamCell, "u" | "v" | "catalogId">, position: (typeof L2_POSITIONS)[number]) {
   const centerQ = 3 * parent.u + parent.v;
   const centerR = -parent.u + 2 * parent.v;
   const q = centerQ + position.q;
@@ -87,19 +84,8 @@ function makeL2Identity(parent: Pick<BeamCell, "u" | "v">, position: (typeof L2_
     q,
     r,
     id: `CN-G01-L2-Q${signed(q)}-R${signed(r)}`,
-    shortId: `CN1.2.${shortAxis(q)}.${shortAxis(r)}`,
+    shortId: `${parent.catalogId}-${position.id.slice(1)}`,
   };
-}
-
-function pointInPolygon(x: number, y: number, polygon: readonly (readonly [number, number])[]) {
-  let inside = false;
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const [xi, yi] = polygon[i];
-    const [xj, yj] = polygon[j];
-    const intersects = yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi;
-    if (intersects) inside = !inside;
-  }
-  return inside;
 }
 
 function regionForPoint(x: number, y: number) {
@@ -107,6 +93,13 @@ function regionForPoint(x: number, y: number) {
   if (x > 0.58 && y <= 0.42) return "华北 / 核心服务区";
   if (x > 0.48 && y > 0.58) return "华南 / 沿海核心";
   return "西部 / 常规服务区";
+}
+
+function regionColor(region: string, alpha = 0.78) {
+  if (region.startsWith("华北")) return `rgba(69, 168, 229, ${alpha})`;
+  if (region.startsWith("华东")) return `rgba(83, 198, 140, ${alpha})`;
+  if (region.startsWith("华南")) return `rgba(239, 173, 85, ${alpha})`;
+  return `rgba(150, 120, 211, ${alpha})`;
 }
 
 function drawHex(context: CanvasRenderingContext2D, x: number, y: number, radius: number) {
@@ -124,14 +117,12 @@ function drawHex(context: CanvasRenderingContext2D, x: number, y: number, radius
 function NationalCanvas({
   mode,
   region,
-  showGuard,
   showLabels,
   selected,
   onSelect,
 }: {
   mode: ColorMode;
   region: string;
-  showGuard: boolean;
   showLabels: boolean;
   selected: BeamCell;
   onSelect: (cell: BeamCell) => void;
@@ -183,36 +174,28 @@ function NationalCanvas({
       context.strokeStyle = "#aeb9b7";
       context.lineWidth = 1.4;
       context.stroke();
+      context.beginPath();
+      context.ellipse(marginX + 0.6 * mapWidth, marginY + 0.83 * mapHeight, 0.04 * mapWidth, 0.032 * mapHeight, 0, 0, Math.PI * 2);
+      context.fillStyle = "#e8ece8";
+      context.fill();
+      context.strokeStyle = "#aeb9b7";
+      context.stroke();
 
-      const radius = Math.max(5.2, Math.min(8.2, width / 112));
-      const xStep = Math.sqrt(3) * radius;
-      const yStep = radius * 1.5;
-      const cells: CanvasCell[] = [];
-      let row = 0;
-      for (let y = marginY + radius; y < marginY + mapHeight; y += yStep, row += 1) {
-        const offset = row % 2 ? xStep / 2 : 0;
-        for (let x = marginX + radius + offset; x < marginX + mapWidth; x += xStep) {
-          const nx = (x - marginX) / mapWidth;
-          const ny = (y - marginY) / mapHeight;
-          const inside = pointInPolygon(nx, ny, CHINA_OUTLINE);
-          const guard = !inside && showGuard && CHINA_OUTLINE.some(([px, py]) => Math.hypot(nx - px, ny - py) < 0.055);
-          if (!inside && !guard) continue;
-          const u = Math.round((nx - 0.5) * 310);
-          const v = Math.round((ny - 0.48) * 190);
-          const base = makeBeamCell(u, v, regionForPoint(nx, ny));
-          const cell = { ...base, x, y, radius, guard };
-          cells.push(cell);
-          drawHex(context, x, y, radius - 0.45);
-          if (guard) context.fillStyle = "rgba(115, 129, 132, 0.12)";
-          else if (mode === "reuse") context.fillStyle = `${REUSE_COLORS[base.reuse]}b8`;
-          else if (mode === "ta") context.fillStyle = mod(base.tac, 2) === 0 ? "#50b7a4a8" : "#efad55a8";
-          else context.fillStyle = base.status === "ready" ? "#3ea6d69a" : "#bdc9c9a8";
-          context.fill();
-          context.strokeStyle = "rgba(255,255,255,.62)";
-          context.lineWidth = 0.7;
-          context.stroke();
-        }
-      }
+      const radius = Math.max(2.15, Math.min(4.25, width / 235));
+      const cells: CanvasCell[] = l1Catalog.map((catalog) => {
+        const x = marginX + catalog.x * mapWidth;
+        const y = marginY + catalog.y * mapHeight;
+        const base = makeBeamCellForCatalog(catalog);
+        drawHex(context, x, y, radius);
+        if (mode === "reuse") context.fillStyle = `${REUSE_COLORS[base.reuse]}c2`;
+        else if (mode === "kind") context.fillStyle = catalog.kind === "edge" ? "#efad55d0" : "#50b7a4c8";
+        else context.fillStyle = regionColor(base.region);
+        context.fill();
+        context.strokeStyle = "rgba(255,255,255,.5)";
+        context.lineWidth = 0.45;
+        context.stroke();
+        return { ...base, x, y, radius };
+      });
       cellsRef.current = cells;
 
       const highlightCenter: Record<string, [number, number]> = {
@@ -232,8 +215,8 @@ function NationalCanvas({
       }
 
       const selectedCanvas = cells.reduce<CanvasCell | null>((closest, item) => {
-        if (item.guard) return closest;
         if (!closest) return item;
+        if (item.catalogId === selected.catalogId) return item;
         const currentDistance = Math.abs(item.u - selected.u) + Math.abs(item.v - selected.v);
         const closestDistance = Math.abs(closest.u - selected.u) + Math.abs(closest.v - selected.v);
         return currentDistance < closestDistance ? item : closest;
@@ -270,14 +253,13 @@ function NationalCanvas({
     const observer = new ResizeObserver(draw);
     observer.observe(parent);
     return () => observer.disconnect();
-  }, [mode, region, selected, showGuard, showLabels]);
+  }, [mode, region, selected, showLabels]);
 
   const selectFromPointer = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();
     const x = event.clientX - bounds.left;
     const y = event.clientY - bounds.top;
     const closest = cellsRef.current.reduce<CanvasCell | null>((best, item) => {
-      if (item.guard) return best;
       if (!best) return item;
       return Math.hypot(item.x - x, item.y - y) < Math.hypot(best.x - x, best.y - y) ? item : best;
     }, null);
@@ -287,7 +269,7 @@ function NationalCanvas({
   const handleKey = (event: KeyboardEvent<HTMLCanvasElement>) => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      const firstReady = cellsRef.current.find((cell) => !cell.guard);
+      const firstReady = cellsRef.current[0];
       if (firstReady) onSelect(firstReady);
     }
   };
@@ -298,7 +280,7 @@ function NationalCanvas({
       className="national-canvas"
       role="button"
       tabIndex={0}
-      aria-label="全国一级波位目录。点击任一六边形查看详细信息。"
+      aria-label="大陆及海南 2,620 个地固一级波位目录。点击任一六边形查看波位详情。"
       onPointerDown={selectFromPointer}
       onKeyDown={handleKey}
       data-testid="national-grid"
@@ -307,15 +289,16 @@ function NationalCanvas({
 }
 
 function ClusterView({ parent, selectedChild, onSelect }: { parent: BeamCell; selectedChild: number; onSelect: (index: number) => void }) {
+  const visiblePositions = L2_POSITIONS.slice(0, parent.childCount);
   return (
     <div className="cluster-stage" data-testid="cluster-stage">
       <div className="cluster-caption">
         <span>L1 信令服务轮廓</span>
-        <strong>1 个 access cell · 7 个数字业务位置</strong>
+        <strong>{parent.catalogId} · {parent.childCount} 个 L2 业务位置{parent.catalogKind === "edge" ? "（边缘裁剪）" : ""} · 星载小区运行时归属</strong>
       </div>
       <div className="cluster-grid">
         <div className="parent-ring" aria-hidden="true" />
-        {L2_POSITIONS.map((position, index) => {
+        {visiblePositions.map((position, index) => {
           const identity = makeL2Identity(parent, position);
           return (
             <button
@@ -338,7 +321,7 @@ function ClusterView({ parent, selectedChild, onSelect }: { parent: BeamCell; se
       <div className="cluster-rule rule-intra">同 L1：资源重配</div>
       <div className="cluster-rule rule-inter">跨 L1：目标 ready 后 HO</div>
       <div className="l2-id-strip" aria-label="当前一级波位的七个二级波位 ID">
-        {L2_POSITIONS.map((position, index) => {
+        {visiblePositions.map((position, index) => {
           const identity = makeL2Identity(parent, position);
           return (
             <button type="button" key={position.id} className={selectedChild === index ? "active" : ""} onClick={() => onSelect(index)} aria-pressed={selectedChild === index}>
@@ -351,24 +334,24 @@ function ClusterView({ parent, selectedChild, onSelect }: { parent: BeamCell; se
   );
 }
 
-function HandoverView({ phase, onPhase }: { phase: number; onPhase: (phase: number) => void }) {
+function HandoverView({ phase, onPhase, parent }: { phase: number; onPhase: (phase: number) => void; parent: BeamCell }) {
   const current = TAKEOVER_PHASES[phase];
   return (
     <div className="handover-stage" data-testid="handover-stage">
       <div className="satellite-row">
         <div className="satellite-card sat-a" style={{ opacity: 0.35 + current.a * 0.65 }}>
-          <span className="sat-symbol">SAT</span><b>SAT-A12</b><small>{phase === 3 ? "released" : "primary"}</small>
+          <span className="sat-symbol">SAT</span><b>P08-S12</b><small>{current.source}</small>
         </div>
         <div className="handover-arrow"><span>assignment</span><b>→</b></div>
         <div className="satellite-card sat-b" style={{ opacity: 0.35 + current.b * 0.65 }}>
-          <span className="sat-symbol">SAT</span><b>SAT-B07</b><small>{phase === 3 ? "primary" : "candidate"}</small>
+          <span className="sat-symbol">SAT</span><b>P09-S07</b><small>{current.target}</small>
         </div>
       </div>
       <div className="beam-takeover">
         <div className="signal-line line-a" style={{ opacity: current.a }} />
         <div className="signal-line line-b" style={{ opacity: current.b }} />
         <div className="takeover-hex">
-          <span>地固 L1</span><b>U+00125 / V-00037</b><small>NCI · TAC · 7 个 L2 均不变</small>
+          <span>地固波位 position_id</span><b>{parent.catalogId}</b><small>源、目标分别使用各自星载 NCI / PCI</small>
         </div>
       </div>
       <div className="phase-tabs" role="group" aria-label="接管阶段">
@@ -386,61 +369,76 @@ function HandoverView({ phase, onPhase }: { phase: number; onPhase: (phase: numb
 
 export function BeamPlanner() {
   const [view, setView] = useState<View>("national");
-  const [colorMode, setColorMode] = useState<ColorMode>("reuse");
+  const [colorMode, setColorMode] = useState<ColorMode>("region");
   const [region, setRegion] = useState("全国");
-  const [showGuard, setShowGuard] = useState(true);
   const [showLabels, setShowLabels] = useState(true);
-  const [selected, setSelected] = useState(() => makeBeamCell(125, -37));
+  const [selected, setSelected] = useState(() => makeBeamCellForCatalog(l1CellById("A1970") ?? l1Catalog[0]));
   const [selectedChild, setSelectedChild] = useState(0);
   const [phase, setPhase] = useState(0);
   const [search, setSearch] = useState("");
   const [searchError, setSearchError] = useState("");
+  const [orbitTime, setOrbitTime] = useState(0);
+  const [selectedSatelliteId, setSelectedSatelliteId] = useState("P01-S01");
 
-  const selectedL2 = L2_POSITIONS[selectedChild];
+  const selectedL2 = L2_POSITIONS[Math.min(selectedChild, selected.childCount - 1)];
   const selectedL2Identity = makeL2Identity(selected, selectedL2);
   const selectedL2Reuse = mod(selectedL2.q + 3 * selectedL2.r, 7);
-  const activeMetric = view === "national" ? "全国目录" : view === "cluster" ? "两级结构" : "多星接管";
 
   const submitSearch = (event: FormEvent) => {
     event.preventDefault();
     const value = search.trim();
+    const catalogMatch = value.match(/^A\d{4}$/i);
+    if (catalogMatch) {
+      const catalog = l1CellById(value);
+      if (catalog) {
+        const axis = axisForL1Cell(catalog);
+        setSelected(makeBeamCell(axis.u, axis.v));
+        setSelectedChild(0);
+        setSearchError("");
+        setView("cluster");
+        return;
+      }
+    }
     const match = value.match(/^CN1\.1\.([+-]\d+)\.([+-]\d+)$/i) ?? value.match(/^CN-G01-L1-U([+-]\d+)-V([+-]\d+)$/i);
     if (!match) {
-      setSearchError("请输入 L1 短号，例如 CN1.1.+125.-37");
+      setSearchError("请输入 L1 短号（如 A1427）或完整 position_id");
       return;
     }
     setSelected(makeBeamCell(Number(match[1]), Number(match[2])));
+    setSelectedChild(0);
     setSearchError("");
     setView("cluster");
   };
 
   const metrics = useMemo(() => [
-    { label: "规划 L1", value: "≈ 2,620", note: "信令跳变单元" },
-    { label: "规划 L2", value: "≈ 18,340", note: "数字业务位置" },
-    { label: "Tracking Area", value: "≈ 138", note: "约 19 个 L1 / TA" },
-    { label: "当前视图", value: activeMetric, note: "CN-G01 · v0.3" },
-  ], [activeMetric]);
+    { label: "规划 L1", value: l1Catalog.length.toLocaleString("en-US"), note: "固定信令跳变目录" },
+    { label: "80 ms SSB 容量", value: "≤ 84 L1", note: "双小区日历推导值，非协议常量" },
+    { label: "每星小区", value: "2 NCI", note: "每小区 8 模拟 / 64 数字资源" },
+    { label: "参考星座", value: `${satellites.length} 星`, note: `${baseline.planes} 面 × ${baseline.satellitesPerPlane} 星 · 一期离线仿真` },
+  ], []);
 
   return (
     <main className="planner-shell">
       <header className="topbar">
         <div className="brand-block">
-          <div className="brand-mark">CN</div>
-          <div><p>NTN BEAM PLANNING</p><h1>星地波位规划台</h1></div>
+          <div className="brand-mark">L1</div>
+          <div><p>ONBOARD NTN BEAM PLANNING</p><h1>星载双小区与跳波束规划台</h1></div>
         </div>
         <nav className="view-tabs" aria-label="主视图">
           <button type="button" className={view === "national" ? "active" : ""} onClick={() => setView("national")} aria-pressed={view === "national"}>全国目录</button>
           <button type="button" className={view === "cluster" ? "active" : ""} onClick={() => setView("cluster")} aria-pressed={view === "cluster"}>L1 / L2 编排</button>
           <button type="button" className={view === "handover" ? "active" : ""} onClick={() => setView("handover")} aria-pressed={view === "handover"}>多星接管</button>
+          <button type="button" className={view === "orbit" ? "active" : ""} onClick={() => setView("orbit")} aria-pressed={view === "orbit"}>轨道星座</button>
+          <button type="button" className={view === "hopping" ? "active" : ""} onClick={() => setView("hopping")} aria-pressed={view === "hopping"}>跳波束接入</button>
         </nav>
-        <div className="version-chip"><span />规划草案 v0.3</div>
+        <div className="version-chip"><span />双小区仿真 v0.7</div>
       </header>
 
       <section className="metric-strip" aria-label="方案规模">
         {metrics.map((metric) => <article key={metric.label}><span>{metric.label}</span><strong>{metric.value}</strong><small>{metric.note}</small></article>)}
       </section>
 
-      <div className="workspace-grid">
+      <div className={`workspace-grid ${view === "orbit" || view === "hopping" ? "workspace-full" : ""}`}>
         <aside className="control-panel" aria-label="规划控制">
           <div className="panel-heading"><span>01</span><div><p>PLANNING SCOPE</p><h2>规划范围</h2></div></div>
           <div className="region-list" role="group" aria-label="区域筛选">
@@ -450,21 +448,20 @@ export function BeamPlanner() {
           <div className="control-section">
             <label className="section-label">着色方式</label>
             <div className="segmented-control" role="group" aria-label="着色方式">
-              <button type="button" className={colorMode === "service" ? "active" : ""} onClick={() => setColorMode("service")} aria-pressed={colorMode === "service"}>状态</button>
+              <button type="button" className={colorMode === "region" ? "active" : ""} onClick={() => setColorMode("region")} aria-pressed={colorMode === "region"}>区域</button>
               <button type="button" className={colorMode === "reuse" ? "active" : ""} onClick={() => setColorMode("reuse")} aria-pressed={colorMode === "reuse"}>复用</button>
-              <button type="button" className={colorMode === "ta" ? "active" : ""} onClick={() => setColorMode("ta")} aria-pressed={colorMode === "ta"}>TA</button>
+              <button type="button" className={colorMode === "kind" ? "active" : ""} onClick={() => setColorMode("kind")} aria-pressed={colorMode === "kind"}>完整 / 边缘</button>
             </div>
             {colorMode === "reuse" && <div className="reuse-legend" aria-label="复用色图例">{REUSE_COLORS.map((color, index) => <span key={color} style={{ background: color }} title={`复用色 ${index}`}>{index}</span>)}</div>}
           </div>
 
           <div className="control-section toggles">
-            <label><span><b>完整 guard ring</b><small>边界外保留一圈 L1</small></span><input type="checkbox" checked={showGuard} onChange={(event) => setShowGuard(event.target.checked)} /></label>
             <label><span><b>区域标签</b><small>只影响显示，不改变目录</small></span><input type="checkbox" checked={showLabels} onChange={(event) => setShowLabels(event.target.checked)} /></label>
           </div>
 
           <form className="beam-search" onSubmit={submitSearch}>
             <label htmlFor="beam-id">定位一级波位</label>
-            <div><input id="beam-id" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="CN1.1.+125.-37" /><button type="submit">定位</button></div>
+            <div><input id="beam-id" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="A1427 / CN-G01-L1-U…" /><button type="submit">定位</button></div>
             {searchError && <p role="alert">{searchError}</p>}
           </form>
 
@@ -473,31 +470,33 @@ export function BeamPlanner() {
 
         <section className="stage-panel" aria-label="波位画布">
           <div className="stage-header">
-            <div><p>{view === "national" ? "NATIONAL CATALOG" : view === "cluster" ? "LOCAL HIERARCHY" : "RUNTIME ASSIGNMENT"}</p><h2>{view === "national" ? "全国地固波位目录" : view === "cluster" ? "一级与二级波位编排" : "卫星接管不改变波位身份"}</h2></div>
-            <div className="stage-status"><span className="pulse" />{view === "handover" ? TAKEOVER_PHASES[phase].name : `${region} · ${showGuard ? "含 guard" : "仅 service"}`}</div>
+            <div><p>{view === "national" ? "GROUND-FIXED POSITION CATALOG" : view === "cluster" ? "L1 / L2 HIERARCHY" : view === "handover" ? "POSITION OWNERSHIP TRANSFER" : view === "orbit" ? "ORBIT CONSTELLATION" : "DUAL-CELL BEAM CALENDAR"}</p><h2>{view === "national" ? "大陆及海南地固 L1 波位目录" : view === "cluster" ? "一级与二级波位平铺编排" : view === "handover" ? "跨星 L1 所有权与小区切换" : view === "orbit" ? "大陆及海南一期参考星座" : "星载双小区跳波束资源日历"}</h2></div>
+            <div className="stage-status"><span className="pulse" />{view === "handover" ? TAKEOVER_PHASES[phase].name : view === "orbit" ? `${baseline.shell} · ${baseline.planes} × ${baseline.satellitesPerPlane}` : view === "hopping" ? `${selectedSatelliteId} · 2 × (8 / 64)` : `${region} · ${l1Catalog.length.toLocaleString("en-US")} L1`}</div>
           </div>
           <div className={`visual-stage view-${view}`}>
-            {view === "national" && <NationalCanvas mode={colorMode} region={region} showGuard={showGuard} showLabels={showLabels} selected={selected} onSelect={setSelected} />}
+            {view === "national" && <NationalCanvas mode={colorMode} region={region} showLabels={showLabels} selected={selected} onSelect={(cell) => { setSelected(cell); setSelectedChild(0); }} />}
             {view === "cluster" && <ClusterView parent={selected} selectedChild={selectedChild} onSelect={setSelectedChild} />}
-            {view === "handover" && <HandoverView phase={phase} onPhase={setPhase} />}
+            {view === "handover" && <HandoverView phase={phase} onPhase={setPhase} parent={selected} />}
+            {view === "orbit" && <OrbitConstellationView beam={selected} time={orbitTime} onTimeChange={setOrbitTime} selectedId={selectedSatelliteId} onSelectedIdChange={setSelectedSatelliteId} />}
+            {view === "hopping" && <BeamHoppingView beam={selected} time={orbitTime} onTimeChange={setOrbitTime} selectedSatelliteId={selectedSatelliteId} onSelectedSatelliteChange={setSelectedSatelliteId} />}
           </div>
           <div className="stage-footer">
-            <span><b>固定几何</b>波位 ID 与卫星无关</span><span><b>完整父子关系</b>每个 L1 固定 7 个 L2</span><span><b>运行态分离</b>assignment 单独管理</span>
+            <span><b>固定几何</b>2,620 个 L1 与其 L2 position_id 保持地固</span><span><b>{view === "orbit" ? "一期范围" : view === "hopping" ? "接入硬约束" : "运行时归属"}</b>{view === "orbit" ? "大陆及海南连续覆盖" : view === "hopping" ? "空闲 L1 仍需 SSB，RO 必须配 UL 波束" : "L1 由当前卫星划入两个星载小区"}</span><span><b>小区身份</b>{view === "hopping" ? "星载 CU-CP 决策、无线执行层落地" : "NCI 与 PCI 跟随星载小区"}</span>
           </div>
         </section>
 
         <aside className="inspector-panel" aria-label="波位详情">
           <div className="panel-heading"><span>02</span><div><p>SELECTION</p><h2>当前选择</h2></div></div>
           <div className="selection-id">
-            <span>L1 · {selected.status.toUpperCase()}</span>
+            <span>L1 · GROUND FIXED</span>
             <h3>{makeL1ShortId(selected)}</h3>
-            <button type="button" onClick={() => setView("cluster")}>展开 7 个 L2 →</button>
+            <button type="button" onClick={() => setView("cluster")}>展开 {selected.childCount} 个 L2 →</button>
             <details className="export-key"><summary>查看导出键</summary><code>{selected.id}</code></details>
           </div>
           <dl className="detail-grid">
-            <div><dt>NCI</dt><dd>{selected.nci}</dd></div><div><dt>TAC</dt><dd>{selected.tac}</dd></div>
+            <div><dt>运行时小区</dt><dd>由当前星载双小区划分</dd></div><div><dt>NCI / PCI</dt><dd>跟随星载小区</dd></div>
             <div><dt>轴坐标</dt><dd>U {signed(selected.u)} / V {signed(selected.v)}</dd></div><div><dt>L1 复用色</dt><dd><i style={{ background: REUSE_COLORS[selected.reuse] }} />R{selected.reuse}</dd></div>
-            <div><dt>服务区域</dt><dd>{selected.region}</dd></div><div><dt>运行卫星</dt><dd>{selected.satellite}</dd></div>
+            <div><dt>服务区域</dt><dd>{selected.region}</dd></div><div><dt>目录类型</dt><dd>{selected.catalogKind === "full" ? "完整 7 波位组" : `边缘 ${selected.childCount} 波位组`}</dd></div>
           </dl>
 
           <div className="l2-inspector">
@@ -507,17 +506,17 @@ export function BeamPlanner() {
             <dl><div><dt>全局轴坐标</dt><dd>Q {signed(selectedL2Identity.q)} / R {signed(selectedL2Identity.r)}</dd></div><div><dt>名义半径</dt><dd>15 km</dd></div><div><dt>复用色</dt><dd>R{selectedL2Reuse}</dd></div><div><dt>服务资源</dt><dd>PDU / DRB · SR/SRS</dd></div></dl>
           </div>
 
-          <div className="invariant-box"><p>当前不变量</p><ul><li>小区身份不绑定 satellite_id</li><li>同 L1 的 L2 切换不触发 HO</li><li>DU applied feedback 后才视为 ready</li></ul></div>
+          <div className="invariant-box"><p>当前不变量</p><ul><li>{selected.catalogId} 的 position_id 与地面几何保持不变</li><li>每颗卫星固定运行两个星载 NR 小区</li><li>波位跨星接管时，服务 NCI / PCI 随目标星小区改变</li><li>数字 L2 收到 applied feedback 后才视为 ready</li></ul></div>
         </aside>
       </div>
 
       <section className="decision-strip">
-        <div><span>DECISION 01</span><b>全国一张连续网格</b><p>省界和运营区只作为属性，不切割波位几何。</p></div>
-        <div><span>DECISION 02</span><b>L1 是信令服务小区</b><p>NCI、TAC、SIB19、PRACH 与 Paging 在这里稳定。</p></div>
-        <div><span>DECISION 03</span><b>L2 是业务跳变位置</b><p>服务 PDU/DRB、QoS 与 SR/SRS，按需求激活。</p></div>
-        <div><span>DECISION 04</span><b>多星只改变执行者</b><p>接管更新 assignment，不重编号、不改变邻接。</p></div>
+        <div><span>DECISION 01</span><b>地面只固定波位</b><p>L1/L2 保存稳定 position_id；不再预设全国固定分区。</p></div>
+        <div><span>DECISION 02</span><b>NCI / PCI 属于星载小区</b><p>每星两个小区长期持有身份，波位按当前日历动态归属。</p></div>
+        <div><span>DECISION 03</span><b>84 是带假设的日历保证量</b><p>80 ms 含 4 次 SSB occasion；最差 21 个 DL 端口机会各假设 2 次顺序子访问，得到每小区 42、每星 84。</p></div>
+        <div><span>DECISION 04</span><b>按波位跨星接管</b><p>目标资源 ready/applied 后切换 position_id；终端执行跨 NCI / PCI 移动。</p></div>
       </section>
-      <footer><span>CN-G01 · CHINA NATIONAL NTN GRID</span><p>规划值用于方案推演，不是协议常量；正式 service mask 需接入运营边界数据。</p></footer>
+      <footer><span>CHINA MAINLAND + HAINAN · GROUND-FIXED BEAM POSITIONS</span><p>20/80/640 ms、84 L1 与 8/64 资源均为一期仿真参数或推导值，不是协议常量或已实现的无线能力。</p></footer>
     </main>
   );
 }

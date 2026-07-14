@@ -13,32 +13,81 @@ async function render() {
   );
 }
 
-test("server-renders the NTN beam planning console", async () => {
+test("server-renders the conclusion-first NTN engineering review", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
-  const html = await response.text();
-  assert.match(html, /星地波位规划台/);
-  assert.match(html, /全国地固波位目录/);
-  assert.match(html, /CN-G01/);
-  assert.match(html, /CN1\.1\.\+125\.-37/);
-  assert.match(html, /CN1\.2\.\+338\.-199/);
-  assert.match(html, /CN-G01-L2-Q\+00338-R-00199/);
-  assert.match(html, /L1 \/ L2 编排/);
-  assert.match(html, /多星接管/);
+  const html = (await response.text()).replaceAll("<!-- -->", "");
+  assert.match(html, /NTN 全球陆地接入方案/);
+  assert.match(html, /57°S～57°N陆地/);
+  assert.match(html, /60° · 42×84 · F=1/);
+  assert.match(html, /3,528颗卫星/);
+  assert.match(html, /方案结论/);
+  assert.match(html, /全球覆盖/);
+  assert.match(html, /卫星负载/);
+  assert.match(html, /跳波束日历/);
+  assert.match(html, /离散覆盖与L1日历可行/);
+  assert.match(html, /F=0已淘汰/);
+  assert.match(html, /720 \/ 720/);
+  assert.match(html, /209 \/ 256/);
+  assert.match(html, /余量47个L1/);
+  assert.match(html, /PRACH接入日历/);
+  assert.match(html, /待连续验收/);
+  assert.doesNotMatch(html, /动作演示|STEP|当前无选定方案|为什么还不能写/);
+  assert.doesNotMatch(html, /64 个地固|地固 NCI|NCI 属于地固|每星 84 个 L1/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
 });
 
-test("removes the disposable starter preview", async () => {
+test("audit evidence rejects F=0 and keeps the sampled F=1 candidate unselected", async () => {
+  const [audit, seedSnapshot, f1Day, planner, css] = await Promise.all([
+    readFile(new URL("../app/global-constellation-audit.json", import.meta.url), "utf8").then(JSON.parse),
+    readFile(new URL("../app/global-constellation-snapshot.json", import.meta.url), "utf8").then(JSON.parse),
+    readFile(new URL("../app/global-constellation-f1-day-coarse.json", import.meta.url), "utf8").then(JSON.parse),
+    readFile(new URL("../app/global-planner.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/global.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.equal(audit.selectedScenario, null);
+  assert.equal(seedSnapshot.summary.maximumUncoveredL1, 23);
+  assert.equal(f1Day.sampling.epochCount, 720);
+  assert.equal(f1Day.summary.maximumUncoveredL1, 0);
+  assert.equal(f1Day.summary.maximumVisibleL1PerSatellite, 209);
+  assert.equal(f1Day.exact, false);
+  assert.match(planner, /F=0已淘汰/);
+  assert.match(planner, /一天、120 s固定步长检查/);
+  assert.match(planner, /事件驱动连续检查尚未执行/);
+  assert.match(planner, /SSB跳波束日历/);
+  assert.match(planner, /PRACH接入日历/);
+  assert.match(planner, /128 \/ 128次机会/);
+  assert.match(planner, /两个星载小区/);
+  assert.match(planner, /<details className="technical-details/);
+  assert.doesNotMatch(planner, /<details[^>]*\sopen(?:=|>)/);
+
+  const navOrder = ["audit", "coverage", "orbit", "access"].map((key) => planner.indexOf(`${key}: {`));
+  assert.ok(navOrder.every((index) => index >= 0));
+  assert.deepEqual([...navOrder].sort((left, right) => left - right), navOrder);
+  assert.match(planner, /aria-pressed=/);
+
+  assert.match(css, /@media \(max-width: 760px\)/);
+  assert.match(css, /\.global-header nav \{[^}]*overflow-x:\s*auto/);
+  assert.match(css, /\.global-workspace \{[^}]*grid-template-columns:\s*1fr/);
+  assert.match(css, /\.calendar-grid \{[^}]*grid-template-columns:\s*repeat\(2,\s*1fr\)/);
+  assert.match(css, /\.decision-hero \{[^}]*grid-template-columns:\s*1fr/);
+  assert.match(css, /@media \(max-width: 430px\)/);
+  assert.match(css, /\.global-metrics \{[^}]*grid-template-columns:\s*1fr/);
+});
+
+test("active page uses the global planner and retains the local-only Sites shell", async () => {
   const [page, layout, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
 
-  assert.match(page, /BeamPlanner/);
+  assert.match(page, /GlobalPlanner/);
   assert.match(layout, /lang="zh-CN"/);
+  assert.match(layout, /NTN全球陆地接入方案/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
 });
