@@ -1,0 +1,126 @@
+# NTN 星载双小区接入日历跨层执行
+
+本文记录 CUCP-036 的实现边界：把 CUCP-035 已完成审计的双小区 `AccessCalendarIntent` 通过 F1AP 下发到 DU/MAC，并在 MAC scheduler 对现有合法 SSB/PRACH opportunity 做版本化软件授权。该功能默认关闭；关闭时 terrestrial 和旧 NTN 路径不变。
+
+## 配置与状态
+
+```yaml
+ntn_onboard_position_plan:
+  enabled: true
+  du_execution_enabled: true
+  du_prepare_horizon_ms: 4000
+  du_prepare_guard_ms: 1000
+  du_apply_timeout_ms: 500
+  satellite_id: P01-S001
+  plan_json_file: /path/to/management-center-plan.json
+  cell_ncis: [4886691841, 4886691842]
+  cell_pcis: [101, 101]
+```
+
+`du_execution_enabled` 默认是 `false`。开启后，CU-CP 的 plan 状态仍使用：
+
+```text
+received -> validated -> calendar_checked -> pending -> active
+```
+
+并附带独立 deployment 状态：
+
+```text
+not_sent -> preparing -> ready -> applied
+                         \-> rejected / unsupported
+```
+
+`preparing` 表示 scheduler command 已入队但两个 cell 的 slot thread 尚未全部确认 armed；只有两侧都消费同一 version/hash 后才进入 `ready`。只有同一 catalog/schedule version、source/calendar hash 且 accepted intent 数完整匹配的 DU/MAC `applied` feedback 到达后，CU-CP 才允许 pending plan 在 `activation_epoch` 后变为 active。迟到、错版本/hash 或 silent-drop response 会 reject 并 clear，新计划失败不改变旧 active。
+
+`du_prepare_horizon_ms`、`du_prepare_guard_ms` 和 `du_apply_timeout_ms` 是可配置软件时限，不是协议常量。CU-CP 只在 plain-SFN 可无歧义映射的 prepare horizon 内下发；guard 前未 armed，或 activation 后 apply timeout 内未两侧 applied，都会回滚。prepare/query/clear 使用独立异步 lane，丢失的 F1 response 不会阻塞 clear。
+
+开启 DU execution 时，启动校验还会提前约束当前实现包络：最多 256 个 L1、最多 2560 个 intent，并保证一个 PRACH cycle 在最密的 NR numerology `mu=4` 下不超过 scheduler gate 的 16384 slots。该限制只作用于执行 profile；关闭 DU execution 时，管理中心下发的完整 candidate inventory 仍可保留 257 个及以上 L1，再由计划状态明确报告 `schedule_overflow`，不会在输入层裁剪。
+
+## 私有 F1AP contract
+
+实现复用标准 `GNBDUResourceCoordinationRequest/Response` 已有的 opaque OCTET STRING，不新增 3GPP IE，不修改 `include/srsran/asn1/**` 或 generated ASN.1。
+
+私有 payload 支持：
+
+- `prepare`：一次携带两个星载小区及完整 checked calendar；
+- `query`：按 version/hash 查询 `preparing/ready/applied/cleared/rejected`；
+- `clear`：撤销 superseded、超时或被 CU-CP 拒绝的 deployment；
+- result 回显 catalog/schedule version、source/calendar hash、activation slot 和每小区 accepted intent 数。
+
+decoder 限制两个小区、最多 256 个唯一 `G######`、最多 2560 个 intent，并验证长度、时间、enum、direction/purpose/port 组合和 64-bit 时间范围。两个 NCI 必须不同；两个 PCI 可以按规划复用。
+
+## DU/MAC/scheduler 行为
+
+CU-CP 直接扫描 DU served-cell inventory，以 `(NCI, PCI, DU cell index)` 唯一解析两个星载小区，不使用 legacy beam-to-NCI repository。当前原子 envelope 要求两个小区属于同一 DU；跨 DU 会明确拒绝 `cross_du_calendar_not_supported`。
+
+DU 在一次 MAC 调用前验证两个 cell 都存在、active 且 NCI/PCI 匹配。MAC 把微秒窗口编译成 cell numerology 的 slot mask，再为两个 cell prepare；任一 cell 失败会持久保存 partial-cleanup record，持续 clear 已 prepare 的另一 cell，并在 cleanup 完成前拒绝新 prepare。旧 active plan 不变。零 visible L1 是合法的显式 deny-all calendar，不会退化为 terrestrial allow-all。
+
+微秒 intent 到 scheduler slot request 的转换位于私有纯编译器 `mac_ntn_access_calendar_compiler.h`，production 与 focused test 共用同一实现。它精确校验 wall-clock/slot 映射、validity/cycle/window 对齐、direction/purpose、范围和整数溢出，并只合并完全相同窗口的 purpose mask；不做四舍五入。
+
+scheduler gate 只过滤现有静态配置能够产生的 SSB 和 PRACH opportunity：
+
+- gate 仅在 opt-in prepare 时分配；null/no snapshot 时恒 `allow`，保持默认 terrestrial 调度和内存路径；
+- prepare 在 control path 校验并编译固定大小 mask；
+- slot path 不做字符串比较、动态分配、日志或锁；
+- gate API 可按 future target slot 选择 pending/active；当前集成保持静态 lookahead prefill，只在当前 `sl_tx` result 做 final suppression；
+- 两个 cell 都 armed 后按同一 activation epoch 切换；clear 新版本时恢复仍有效的 previous active snapshot；
+- 同 version/hash prepare 幂等，支持 F1 timeout 重试；同 version 异 hash 明确拒绝。
+
+plain `slot_point` 只有约 5.12 s 的 wrap-safe activation horizon。CU-CP 会把远期计划保持为 `not_sent`，进入配置的 prepare horizon 后才下发；MAC 仍比较 wall-clock 期望 slot 数与映射后的 `slot_difference`，不会静默映射到错误 SFN。validity 以显式 slot duration 传入，并由 slot thread 转成 `slot_point_extended`，因此一小时有效期可跨 plain SFN wrap；超过 extended half-horizon 会拒绝。
+
+MAC 的 wall-clock/slot mapper 使用纳秒精度；`mu=4` 的 62.5 microsecond slot 不会被截断成 62 microseconds。日历的微秒输入只有在乘以 cell slot rate 后得到整数 slot 时才接受，未对齐窗口会显式拒绝。
+
+## 证据边界
+
+当前 `applied` 的准确含义是：
+
+```text
+ssb_prach_software_gate_applied_no_position_or_rf_evidence
+```
+
+它不表示：
+
+- `position_id` 或 `port_id` 已转换为模拟波束；
+- SIB/Paging/RAR 已按每个窗口执行；这些仍是 coalescing intent；
+- FAPI/PHY 已携带 beam token；
+- OFH `BeamId` 已配置；
+- SDR/ZMQ 或真实 O-RU 已切换波束；
+- RF 已应用或已有硬件 telemetry。
+
+SSB/PRACH 保持静态 future prefill，只在当前 `sched_result` 交 MAC/PHY 前做 final suppression；因此 clear 在下一 cell slot 可恢复 previous active 的实际 PDU，不受 lookahead cache 污染。两个软件 slot thread 均 armed 且共享 activation epoch，但真实 RF 的原子 bank switch 仍没有证据，不能声称瞬时 RF rollback。
+
+仓库级下沉审计也确认当前没有可复用的设备闭环：FAPI PRACH/SSB beamforming 尚未填充，OFH section type 1/type 3 的 `BeamId` 仍固定为 0，`ru_controller` 没有 beam bank、定时 arm/query 或 applied telemetry。MAC 在 software gate 编译时只保留 slot window 和 purpose mask，尚未把 `position_id`/`port_id` 转为硬件句柄。因此本阶段没有修改 generated ASN.1、PHY、OFH 或 RU/RF；在缺少设备映射时向这些层增加占位字段不能构成运行证据。
+
+这里的 `port_id` 是每小区 0..15 的可复用模拟资源槽；同一端口会在不同窗口服务不同 `position_id`。它不是 eAxC、OFH `BeamId` 或阵列权重索引，不能直接下沉。仓库内可以继续增加 `ru_ntn_beam_controller` 契约、FAPI/OFH `BeamId` plumbing 和 dummy/spy backend，并将证据提升到 `command_sent`；但在管理中心映射和设备回执缺失时，仍不得返回 `device_applied`。
+
+## 管理中心 Web producer
+
+`web_replicas/ntn_beam_planner` 增加 candidate/test-only plan exporter：
+
+- 输出完整 visible L1 inventory，257 个也不裁剪；
+- baseline 使用版本化管理中心 registry `app/onboard-cell-identity-registry.json`（`mc-ntn-onboard-cell-registry-v1`），显式保存 3528 星/7056 cell 的 opaque NCI、PCI 和 bank；运行时已删除 `centralNci`/ordinal 派生路径；
+- 每星必须恰好两 cell、全局 NCI 唯一且在 36-bit 范围内；PCI 保留管理中心输入并允许复用，只做 topology conflict audit，不在 Web 运行时重算；
+- 非 baseline Walker audit 必须显式提供匹配的 registry 文件，缺失、额外或错误 identity fail closed；
+- canonical SHA-256 与 C++ `compute_ntn_position_plan_content_hash()` 共享 golden vector；
+- 不导出 Web preview calendar，F1AP 只承载 CU-CP audited calendar；
+- 不接入 GIS runtime，也不把 coarse/exact=false 结果表述为全球连续覆盖。
+
+## 下一阶段最小硬件接口
+
+真实波束跳变至少需要管理中心提供：
+
+```text
+  (nci, position_id, cell_local_port, direction)
+    -> {sector, eAxC, BeamId or opaque hardware_beam_handle/weights}
+```
+
+并需要 capability-negotiated adapter：
+
+```text
+prepare_bank(version, hash, activation, entries)
+arm_at(clock_domain, absolute_slot_and_symbol)
+cancel(version, hash)
+query_status() -> prepared / armed / command_sent / device_applied / rejected
+```
+
+设备能力必须包含并发 beam 数、UL/DL 支持、切换粒度与 guard、时钟域、atomic bank switch。若走 OFH，还需 O-RU M-plane beam table、非零 type-1/type-3 BeamId、PRACH capture/token 回传及设备 telemetry。只有设备回执或硬件 loopback 才能把状态提升为 `device_applied`。

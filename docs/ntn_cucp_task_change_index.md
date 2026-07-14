@@ -1,0 +1,176 @@
+# NTN CU-CP Task Change Index
+
+Last updated: 2026-07-13
+
+This file maps the CUCP task chain to the main feature changes and
+representative code areas. It is a compact lookup table for future agents.
+
+Git provenance note: the maintained change series is rooted at the official
+`srsran/srsRAN_Project` commit
+`4bf1543936d062686d64c10724d2f27a9854f065`. This file reconstructs the
+task-to-feature relationship; it is not a claim that every historical task maps
+one-to-one to a commit. Use it to find the right feature area, then use
+`git log -- <path>` and inspect the listed code/tests for the exact implementation.
+
+## How To Use
+
+- Do not read archived task cards by default.
+- Use this file when you need to answer "which task introduced this concept?" or
+  "where should I look for this feature?"
+- Open the source/test files listed under a task before modifying behavior.
+- CUCP-000 to CUCP-003 are bootstrap/history, not the practical start of the
+  current feature sequence.
+
+## Current High-Level Code Groups
+
+CU-CP contracts and status:
+
+- `include/srsran/cu_cp/cu_cp_command_handler.h`
+- `include/srsran/cu_cp/ntn_location.h`
+- `include/srsran/cu_cp/ntn_beam_service_resources.h`
+- `include/srsran/cu_cp/ntn_qos_policy.h`
+- `include/srsran/cu_cp/ntn_service_switch_over.h`
+- `include/srsran/cu_cp/ntn_ue_capability.h`
+
+CU-CP implementation:
+
+- `lib/cu_cp/cu_cp_impl.cpp`
+- `lib/cu_cp/cu_cp_impl.h`
+- `lib/cu_cp/ntn_mobility/`
+- `lib/cu_cp/cell_meas_manager/`
+- `lib/cu_cp/paging/`
+- `lib/cu_cp/routines/mobility/`
+- `lib/cu_cp/routines/ue_context_release_routine.*`
+
+O-CU-CP observability:
+
+- `apps/units/o_cu_cp/cu_cp/cu_cp_cmdline_commands.h`
+- `tests/unittests/apps/units/o_cu_cp/cu_cp/cu_cp_unit_config_test.cpp`
+
+Representative CU-CP tests:
+
+- `tests/unittests/cu_cp/cu_cp_ntn_mobility_test.cpp`
+- `tests/unittests/cu_cp/cu_cp_paging_test.cpp`
+- `tests/unittests/cu_cp/ntn_mobility/`
+- `tests/unittests/cu_cp/cu_cp_test_environment.*`
+
+Task-scoped CU/DU coordination areas used by later resource tasks:
+
+- `include/srsran/f1ap/**`
+- `lib/f1ap/**`
+- `include/srsran/du/**`
+- `lib/du/**`
+- `include/srsran/mac/**`
+- `lib/mac/**`
+- `tests/unittests/f1ap/**`
+- `tests/unittests/du_manager/**`
+- `tests/unittests/mac/**`
+
+Treat those non-CU-CP areas as exact, feature-driven surfaces. Do not expand
+them casually.
+
+## Task-To-Change Map
+
+| Task | Feature / design change | Representative implementation and tests |
+|---|---|---|
+| CUCP-000 | Imported older goal-mode diff for review. Historical only. | Archived task card only. |
+| CUCP-001 | CU-CP NTN code map and scope inventory. Historical only. | `docs/cucp_analysis.md`, archived code-map notes. |
+| CUCP-002 | Early CU-CP NTN config validation baseline. Historical bootstrap. | O-CU-CP config translator/validator tests; older run summaries. |
+| CUCP-003 | Early NTN mobility runtime contract. Historical bootstrap. | Early runtime contract notes and CU-CP config/runtime files. |
+| CUCP-004 | Established project baseline and task sequence. Practical start of the current chain. | Mostly documentation and guard scripts; do not continue expanding this area for normal feature work. |
+| CUCP-005 | Runtime taxonomy: candidate, active, loaded, draining, assistance, UE runtime context. | `include/srsran/cu_cp/ntn_location.h`, `include/srsran/cu_cp/cu_cp_command_handler.h`, `lib/cu_cp/cu_cp_impl.*`. |
+| CUCP-006 | Full candidate inventory. Candidate beams are never capped by loaded/served limits. | `lib/cu_cp/cell_meas_manager/`, `lib/cu_cp/ntn_mobility/ntn_beam_assignment_repository.cpp`, `tests/unittests/cu_cp/cell_meas_manager/`. |
+| CUCP-007 | Demand-driven loaded service calendar and SR/SRS intent. Empty candidate beams do not consume service resources. | `lib/cu_cp/ntn_mobility/ntn_served_beam_scheduler.*`, `ntn_served_beam_selector.*`, `cu_cp_impl.cpp`, scheduler-focused NTN tests. |
+| CUCP-008 | CU-CP NTN assistance snapshot: ephemeris, TA, Koffset, Kmac, UL sync, t-Service. | `lib/cu_cp/ntn_mobility/ntn_assistance_snapshot_generator.*`, `tests/unittests/cu_cp/ntn_mobility/ntn_assistance_snapshot_test.cpp`. |
+| CUCP-009 | Admission and mobility gates using NTN runtime state. Stale/draining/candidate policy starts driving UE setup, reestablishment, HO, PDU demand. | `lib/cu_cp/cu_cp_impl.cpp`, `lib/cu_cp/mobility_manager/`, `tests/unittests/cu_cp/cu_cp_ntn_mobility_test.cpp`. |
+| CUCP-010 | NGAP/core mapping: mapped cell, derived TAC, TAI, location reporting. | `include/srsran/cu_cp/ntn_location.h`, `lib/ngap/ngap_asn1_helpers.h`, `lib/cu_cp/cu_cp_impl.cpp`, NGAP/CU-CP tests. |
+| CUCP-011 | Service/feeder switch-over resilience: soft/hard switch-over, draining, safe degradation. | `include/srsran/cu_cp/ntn_service_switch_over.h`, `lib/cu_cp/ntn_mobility/ntn_service_switch_over_controller.*`, related tests. |
+| CUCP-012 | NTN observability and examples for state/assistance/beams/UEs. | `apps/units/o_cu_cp/cu_cp/cu_cp_cmdline_commands.h`, config/example files, O-CU-CP command tests. |
+| CUCP-013 | RRC/SIB19 assistance packaging contract, ASN.1 pack/unpack verified, no real DU SI scheduling yet. | `lib/cu_cp/ntn_mobility/ntn_sib19_assistance_builder.*`, `tests/unittests/cu_cp/ntn_mobility/ntn_sib19_assistance_test.cpp`. |
+| CUCP-014 | QoS-aware service policy: ARP/5QI/GBR/slice prioritization for placement, service admission, and observability. | `include/srsran/cu_cp/ntn_qos_policy.h`, `lib/cu_cp/ntn_mobility/ntn_qos_policy.*`, `ntn_beam_placement_planner.*`, QoS tests. |
+| CUCP-015 | Beam-derived TAC and paging/idle assistance. Beam ID suffix maps to 24-bit TAC. | `lib/cu_cp/ntn_mobility/ntn_beam_tac.*`, `lib/cu_cp/paging/`, `tests/unittests/cu_cp/cu_cp_paging_test.cpp`, `ntn_beam_tac_test.cpp`. |
+| CUCP-016 | Service-area and paging observability: TAC validity, paging recommendation eligibility/reasons. | `include/srsran/cu_cp/cu_cp_command_handler.h`, `lib/cu_cp/cu_cp_impl.cpp`, O-CU-CP `ntn_state` / `ntn_beams` tests. |
+| CUCP-017 | Two-level analog/digital hex beam model. Default LEO profile: 843 digital beams, 137 analog beams. | `utils/ntn/generate_leo_beam_table.py`, `configs/leo_500km_beam_table.json`, `configs/leo_500km_cucp_ntn.yml`, beam table parser/generator tests. |
+| CUCP-018 | Access DU assignment policy. Analog access DU selected first; same-DU digital service preferred. | `lib/cu_cp/ntn_mobility/ntn_beam_placement_planner.*`, `lib/cu_cp/cu_cp_impl.cpp`, placement planner and O-CU-CP tests. |
+| CUCP-019 | Pre-service inter-DU relocation for signaling-only UEs before first service demand. | `lib/cu_cp/cu_cp_impl.cpp`, `lib/cu_cp/routines/mobility/`, UE runtime/status fields, CU-CP mobility tests. |
+| CUCP-020 | Connected beam-to-beam mobility policy: location-driven target preload before existing HO routine. | `lib/cu_cp/cu_cp_impl.cpp`, `lib/cu_cp/routines/mobility/intra_cu_handover_routine.cpp`, `cell_meas_manager` NTN helpers, mobility tests. |
+| CUCP-021 | Access/service layer contract. RRC setup creates analog access only; first PDU/DRB binds digital service. | `include/srsran/cu_cp/cu_cp_command_handler.h`, `lib/cu_cp/cu_cp_impl.cpp`, `tests/unittests/cu_cp/cu_cp_ntn_mobility_test.cpp`. |
+| CUCP-022 | Resource-domain guard policy: analog/digital caps, reuse groups, explicit conflicts, blocked reasons. | `include/srsran/cu_cp/ntn_location.h`, `lib/cu_cp/cell_meas_manager/ntn_beam_table_json.cpp`, `ntn_beam_placement_planner.*`, resource tests. |
+| CUCP-023 | Analog access release after ICS and digital service ownership. Control-only UE state. | `include/srsran/cu_cp/ntn_beam_service_resources.h`, `lib/cu_cp/ntn_mobility/ntn_beam_service_resource_manager.*`, `cu_cp_impl.cpp`, PDU/session tests. |
+| CUCP-024 | Beam service resource manager: analog C-RNTI ownership contract and digital SR/SRS intent snapshot. | `lib/cu_cp/ntn_mobility/ntn_beam_service_resource_manager.*`, `tests/unittests/cu_cp/ntn_mobility/ntn_beam_service_resource_manager_test.cpp`. |
+| CUCP-025 | CU-CP-authoritative real RNTI and digital SR/SRS architecture. DU/MAC execute; terrestrial paths remain. | `include/srsran/f1ap/ntn_ul_slot_resource_request.h`, F1AP/DU/MAC resource interfaces, resource manager tests. |
+| CUCP-026 | RNTI lease pool distribution through private F1AP resource coordination before access. | `include/srsran/f1ap/ntn_rnti_lease_pool.h`, `include/srsran/f1ap/cu_cp/f1ap_cu_resource_coordination.h`, `lib/f1ap/*/gnb_du_resource_coordination*`, F1AP CU/DU tests. |
+| CUCP-027 | RNTI lease lifecycle and access readiness: reserved, sent, applied, offered, initial UL, committed, released, expired, conflict. | `lib/cu_cp/ntn_mobility/ntn_beam_service_resource_manager.*`, `lib/mac/rnti_manager.h`, `lib/mac/mac_sched/mac_rach_handler.cpp`, MAC/RNTI tests. |
+| CUCP-028 | SR/SRS application feedback. DU applied/rejected response gates service-bound state; scheduler consistency tested. | `include/srsran/f1ap/ntn_ul_slot_resource_request.h`, F1AP UE context setup/modification, DU PUCCH/SRS managers, scheduler SR/SRS tests. |
+| CUCP-029 | Connected HO target resource reservation. Target C-RNTI and target SR/SRS must be ready before RRC HO command. | `lib/cu_cp/cu_cp_impl.cpp`, resource manager handover APIs, F1AP/DU UE context target paths, CU-CP/F1AP tests. |
+| CUCP-030 | Resource consistency auditor. CU-CP queries DU NTN resource snapshots and generates repair actions. | `lib/cu_cp/ntn_mobility/ntn_beam_service_resource_manager.*`, F1AP private audit payloads, DU/MAC resource snapshot APIs, audit tests. |
+| CUCP-031 | Repair executor and guarded recovery: resend, apply, clear, rollback, conflict block. | `lib/cu_cp/cu_cp_impl.cpp`, resource manager repair state, F1AP feedback paths, repair tests. |
+| CUCP-032 | SIB19 DU SI broadcast application. CU-CP sends active/candidate dynamic SIB19 updates and clears draining/stale updates. | `lib/cu_cp/ntn_mobility/ntn_sib19_broadcast_controller.*`, F1AP resource coordination, DU SI update, MAC SIB PDU assembler tests. |
+| CUCP-033 | UE NTN capability gate. `nonTerrestrialNetwork-r17` required for UE-specific NTN service/HO/release hints. | `include/srsran/cu_cp/ntn_ue_capability.h`, `lib/cu_cp/ntn_mobility/ntn_ue_capability_gate.*`, CU-CP capability tests. |
+| CUCP-034 | UE capability profile policy for `leo_ngso`: NGSO/both/implicit-both match, GSO-only is supported but profile-blocked. | `include/srsran/cu_cp/ntn_ue_capability.h`, `lib/cu_cp/ntn_mobility/ntn_ue_capability_gate.cpp`, `lib/cu_cp/cu_cp_impl.cpp`, O-CU-CP status tests. |
+| CUCP-035 | Versioned management-center onboard L1 plan: complete inventory validation, explicit two-cell NCI/PCI profile, deterministic partition, configurable access-calendar dry-run, timer-safe atomic activation and synchronized read-only OAM. Independent opt-in profile; no RF application. | `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.*`, `lib/cu_cp/cu_cp_impl.*`, `include/srsran/cu_cp/cu_cp_configuration.h`, `include/srsran/cu_cp/cu_cp_command_handler.h`, O-CU-CP config/`ntn_state`, `tests/unittests/cu_cp/ntn_mobility/ntn_*position_plan*`, `ntn_access_calendar_audit_test.cpp`. |
+| CUCP-036 | Versioned access-calendar cross-layer deployment: private F1AP prepare/query/clear, same-DU two-cell validation, both-slot-thread armed barrier, configurable prepare/apply deadlines, persistent rollback cleanup, extended validity, `mu=4`-exact wall-clock mapping, execution-envelope startup validation, opt-in scheduler SSB/PRACH software gate, applied/clear feedback and Web candidate plan exporter backed by a versioned explicit identity registry. Default off. Evidence explicitly stops before position/port beam steering and RF application. | `include/srsran/f1ap/ntn_access_calendar.h`, F1AP resource-coordination procedures, `du_manager_impl.*`, `include/srsran/mac/mac_manager.h`, `lib/mac/mac_impl.h`, `lib/mac/mac_ntn_access_calendar_manager.h`, `lib/mac/mac_ntn_access_calendar_compiler.h`, `lib/mac/mac_dl/mac_cell_time_mapper_impl.*`, `include/srsran/scheduler/ntn_access_calendar.h`, `lib/scheduler/ntn_access_calendar_gate.h`, `cell_scheduler.*`, `lib/cu_cp/cu_cp_impl.*`, `web_replicas/ntn_beam_planner/app/position-plan-model.ts`, `app/onboard-cell-identity-registry.json`, `docs/ntn_access_calendar_cross_layer_execution.md`, focused F1AP/DU/MAC/scheduler/CU-CP/Web tests. |
+
+## Current Useful Validation Notes
+
+CUCP-035 focused evidence (WSL build tree):
+
+```bash
+cmake --build build/ai-clean --target ntn_mobility_test -j1
+ctest --test-dir build/ai-clean -R '^(ntn_onboard_position_plan|ntn_access_calendar_audit)\.' --output-on-failure
+```
+
+The position-plan/calendar suites passed 21/21. The current `cu_cp_impl.cpp.o`, four
+O-CU-CP config objects and `cu_cp_unit_config_test.cpp.o` compiled successfully;
+after relinking the current archives/test binary, the focused terrestrial-default,
+independent-profile, two-identity validation and `ntn_state` tests passed 4/4.
+An earlier full `-L ntn_mobility` run passed 147/153; its six failures were pre-existing
+placement/rebalance policy expectations outside CUCP-035. Broad `srsran_cu_cp` and
+dependency-heavy config-target builds exceeded the staged time budget, so closeout uses
+the current object/archive plus focused-test evidence.
+
+CUCP-034 focused evidence:
+
+```bash
+cmake --build build/ai-clean --target ntn_mobility_test -j 1
+cmake --build build/ai-clean --target cu_cp_unit_config_test -j 1
+cmake --build build/ai-clean --target srsran_cu_cp -j 1
+bash -lc "cd /mnt/d/code/srsRAN_Project-main && ctest --test-dir build/ai-clean -R 'ntn_ue_capability_gate|cu_cp_ntn_mobility_test.unsupported_ntn_ue_capability_blocks_first_digital_service_binding|cu_cp_unit_config.ntn_(state|ues)' --output-on-failure"
+```
+
+The focused CTest run passed 12/12.
+
+Direct Windows `ctest --test-dir build/ai-clean` may fail if CTest generated
+include files refer to `/mnt/d/...`; run ctest through WSL in that case.
+
+CUCP-036 closeout evidence (2026-07-14):
+
+```bash
+ctest --test-dir build/ai-clean -R '^(ntn_onboard_position_plan|ntn_access_calendar_audit)\.' --output-on-failure
+cmake --build build/ai-clean --target mac_ntn_access_calendar_compiler_test -j1
+ctest --test-dir build/ai-clean -R '^mac_ntn_access_calendar_compiler_test$' --output-on-failure
+cd web_replicas/ntn_beam_planner
+node --import tsx --test tests/satellite-cell.test.mjs tests/position-plan-export.test.mjs
+npm run build
+```
+
+The current position-plan and calendar-audit suites passed 26/26, and the official
+MAC calendar compiler target passed 7/7. Standalone focused binaries using the current
+sources passed the scheduler gate 10/10, MAC two-cell manager 3/3, nanosecond slot mapper
+51/51, F1 CU resource-coordination 12/12 and F1 DU resource-coordination 6/6. The Web
+identity/plan suites passed 14/14; focused ESLint, targeted TypeScript and the production
+build also passed. The registry contains 3528 satellites and 7056 unique opaque 36-bit
+NCIs, with SHA-256
+`7475821350e104b57a70d979d630f4b29a6cecb89ca0eca7b16dddf2ffee6a4a`.
+
+`du_manager_impl.cpp`, the expanded DU procedure test source, `cell_scheduler.cpp`,
+`scheduler_impl.cpp`, `mac_impl.cpp`, the O-CU-CP validator and the O-CU-CP config test
+source all passed focused `-fsyntax-only -Werror`/object compilation. The dependency-heavy
+`du_manager_procedure_test`, `common_scheduler_test`, `sched_no_ue_test` and current
+`cu_cp_unit_config_test` binaries did not finish linking within their bounded build
+windows. In the config attempt, the final `libsrsran_cu_cp_app_unit.a` was rebuilt before
+the 604.2 s run reached unrelated NGAP dependencies; therefore no stale config binary is
+reported as current runtime evidence. `srsran_cu_cp` was not rerun because it would repeat
+the same broad dependency rebuild without adding focused evidence.
+
+`applied` in CUCP-036 means the SSB/PRACH scheduler software gate consumed the matching snapshot. It is not position/port beam steering, PHY/OFH command evidence, or RU/RF telemetry.

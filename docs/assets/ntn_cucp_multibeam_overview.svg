@@ -1,0 +1,212 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1120" viewBox="0 0 1600 1120" role="img" aria-labelledby="title desc">
+  <title id="title">CU-CP NTN 多波束控制面方案</title>
+  <desc id="desc">展示卫星状态、可见波束选择、hopping window、DU placement、用户驱动SR/SRS时隙、UE 位置驱动切换和 NGAP 位置上报的控制面闭环。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#314156"/>
+    </marker>
+    <marker id="arrow-soft" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#60718a"/>
+    </marker>
+    <style>
+      .bg { fill: #f5f7fb; }
+      .panel { fill: #ffffff; stroke: #d7deea; stroke-width: 1.5; }
+      .panel-title { font: 700 22px "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif; fill: #162235; }
+      .title { font: 800 36px "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif; fill: #111827; }
+      .subtitle { font: 400 18px "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif; fill: #536276; }
+      .box { fill: #ffffff; stroke: #9fb0c8; stroke-width: 1.8; }
+      .box-blue { fill: #eaf4ff; stroke: #3b82f6; stroke-width: 2; }
+      .box-green { fill: #eaf8f0; stroke: #22a06b; stroke-width: 2; }
+      .box-amber { fill: #fff5db; stroke: #d99a12; stroke-width: 2; }
+      .box-slate { fill: #eef2f7; stroke: #68758a; stroke-width: 2; }
+      .box-red { fill: #fff0ef; stroke: #e2554f; stroke-width: 2; }
+      .label { font: 700 17px "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif; fill: #162235; }
+      .small { font: 400 13px "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif; fill: #46566d; }
+      .tiny { font: 400 11px "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif; fill: #536276; }
+      .mono { font: 600 12px Consolas, "Cascadia Mono", monospace; fill: #2b3b51; }
+      .arrow { stroke: #314156; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
+      .arrow-soft { stroke: #60718a; stroke-width: 2; fill: none; marker-end: url(#arrow-soft); }
+      .dash { stroke-dasharray: 7 6; }
+      .active { fill: #c9f2d8; stroke: #16a05d; stroke-width: 3; }
+      .candidate { fill: #ffe5a8; stroke: #d99a12; stroke-width: 3; }
+      .draining { fill: #d9e9ff; stroke: #3b82f6; stroke-width: 3; }
+      .inactive { fill: #e8edf4; stroke: #7b8798; stroke-width: 2.5; }
+      .sat { fill: #ffffff; stroke: #374151; stroke-width: 2; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1600" height="1120"/>
+
+  <text class="title" x="64" y="62">CU-CP NTN 多波束控制面方案</text>
+  <text class="subtitle" x="64" y="94">LEO 500 km：CU-CP 负责 beam-set hopping、DU placement、用户驱动 SR/SRS 时隙计划、位置移动性与 NGAP 上报。</text>
+
+  <rect class="panel" x="50" y="124" width="1500" height="238" rx="12"/>
+  <text class="panel-title" x="78" y="162">1. 从卫星状态到 active served beam set</text>
+
+  <rect class="box-blue" x="82" y="198" width="172" height="86" rx="10"/>
+  <text class="label" x="106" y="226">卫星状态</text>
+  <text class="small" x="106" y="250">ECEF / circular orbit</text>
+  <text class="small" x="106" y="270">CLI: ntn_sat_geo</text>
+
+  <rect class="box" x="82" y="294" width="172" height="44" rx="8"/>
+  <text class="small" x="106" y="320">静态 beam table</text>
+
+  <rect class="box" x="306" y="218" width="180" height="92" rx="10"/>
+  <text class="label" x="330" y="248">selector</text>
+  <text class="small" x="330" y="272">按仰角筛 visible pool</text>
+  <text class="mono" x="330" y="292">min_elevation_deg</text>
+
+  <rect class="box-amber" x="538" y="218" width="196" height="92" rx="10"/>
+  <text class="label" x="562" y="248">scheduler</text>
+  <text class="small" x="562" y="272">visible pool 内轮转窗口</text>
+  <text class="mono" x="562" y="292">dwell_updates = 3</text>
+
+  <rect class="box-green" x="786" y="218" width="202" height="92" rx="10"/>
+  <text class="label" x="810" y="248">active window</text>
+  <text class="small" x="810" y="272">最多 3 个 active beam</text>
+  <text class="mono" x="810" y="292">max_nof_served_beams</text>
+
+  <rect class="box" x="1040" y="218" width="202" height="92" rx="10"/>
+  <text class="label" x="1064" y="248">placement</text>
+  <text class="small" x="1064" y="272">检查 DU served-cell</text>
+  <text class="small" x="1064" y="292">UE/DRB load -> SR/SRS</text>
+
+  <rect class="box-slate" x="1294" y="218" width="202" height="92" rx="10"/>
+  <text class="label" x="1318" y="248">repository</text>
+  <text class="small" x="1318" y="272">active / candidate</text>
+  <text class="small" x="1318" y="292">state + SR/SRS offset</text>
+
+  <path class="arrow" d="M254 241 H306"/>
+  <path class="arrow-soft" d="M254 316 C276 316 281 264 306 264"/>
+  <path class="arrow" d="M486 264 H538"/>
+  <path class="arrow" d="M734 264 H786"/>
+  <path class="arrow" d="M988 264 H1040"/>
+  <path class="arrow" d="M1242 264 H1294"/>
+
+  <rect class="panel" x="50" y="392" width="958" height="456" rx="12"/>
+  <text class="panel-title" x="78" y="430">2. 5 beam 示例：hopping window + placement 状态</text>
+  <text class="small" x="78" y="456">active 只来自当前 window；只有有 UE/DRB 负载的 active/draining 波位才获得 SR/SRS slot plan。</text>
+
+  <rect class="box" x="96" y="492" width="390" height="262" rx="12"/>
+  <text class="label" x="122" y="524">visible pool</text>
+  <text class="tiny" x="122" y="546">由 satellite state + beam table 得到，按仰角排序</text>
+
+  <circle class="active" cx="176" cy="626" r="48"/>
+  <text class="label" x="139" y="620">0001</text>
+  <text class="tiny" x="144" y="642">active</text>
+  <circle class="active" cx="286" cy="584" r="48"/>
+  <text class="label" x="249" y="578">0002</text>
+  <text class="tiny" x="254" y="600">active</text>
+  <circle class="active" cx="394" cy="626" r="48"/>
+  <text class="label" x="357" y="620">0003</text>
+  <text class="tiny" x="362" y="642">active</text>
+  <circle class="candidate" cx="232" cy="710" r="39"/>
+  <text class="small" x="203" y="708">0004</text>
+  <text class="tiny" x="199" y="728">candidate</text>
+  <circle class="candidate" cx="350" cy="710" r="39"/>
+  <text class="small" x="321" y="708">0005</text>
+  <text class="tiny" x="317" y="728">candidate</text>
+
+  <rect class="box-green" x="546" y="500" width="384" height="112" rx="12"/>
+  <text class="label" x="574" y="532">window k</text>
+  <text class="small" x="574" y="556">CN-BEAM-0001 / 0002 / 0003 进入 active 候选</text>
+  <text class="small" x="574" y="580">dwell 未满时保持窗口，仰角小幅排序变化不重置</text>
+
+  <rect class="box-amber" x="546" y="642" width="384" height="92" rx="12"/>
+  <text class="label" x="574" y="674">outside window</text>
+  <text class="small" x="574" y="698">CN-BEAM-0004 / 0005 保持 candidate</text>
+  <text class="small" x="574" y="718">等待后续 dwell 轮转或 DU 状态变化</text>
+
+  <rect class="box-blue" x="546" y="760" width="384" height="72" rx="12"/>
+  <text class="label" x="574" y="790">CU-CP SR/SRS slot plan</text>
+  <text class="small" x="574" y="812">loaded beam gets UE-weighted service slots</text>
+  <text class="tiny" x="574" y="828">0003: SR 0/4 SRS 2/4; 0002: SR/SRS 3/4</text>
+
+  <path class="arrow" d="M486 610 C515 595 515 556 546 556"/>
+  <path class="arrow" d="M486 710 C522 710 520 690 546 690"/>
+  <path class="arrow-soft dash" d="M740 612 C752 650 750 720 740 764"/>
+
+  <rect class="panel" x="1038" y="392" width="512" height="456" rx="12"/>
+  <text class="panel-title" x="1066" y="430">3. Beam 状态机和 DU 边界</text>
+
+  <circle class="inactive" cx="1164" cy="542" r="55"/>
+  <text class="label" x="1124" y="538">inactive</text>
+  <text class="tiny" x="1131" y="560">不可见/未服务</text>
+
+  <circle class="candidate" cx="1396" cy="542" r="55"/>
+  <text class="label" x="1353" y="538">candidate</text>
+  <text class="tiny" x="1350" y="560">可见但未服务</text>
+
+  <circle class="active" cx="1396" cy="724" r="55"/>
+  <text class="label" x="1362" y="720">active</text>
+  <text class="tiny" x="1352" y="742">可作为 HO target</text>
+
+  <circle class="draining" cx="1164" cy="724" r="55"/>
+  <text class="label" x="1123" y="720">draining</text>
+  <text class="tiny" x="1120" y="742">保留旧负载</text>
+
+  <path class="arrow" d="M1219 542 H1341"/>
+  <text class="tiny" x="1246" y="525">visible but outside window</text>
+  <path class="arrow" d="M1396 597 V669"/>
+  <text class="tiny" x="1415" y="636">placement accepted</text>
+  <path class="arrow" d="M1341 724 H1219"/>
+  <text class="tiny" x="1242" y="704">leaves window with load</text>
+  <path class="arrow" d="M1164 669 V597"/>
+  <text class="tiny" x="1062" y="636">load cleared</text>
+
+  <rect class="box" x="1088" y="782" width="380" height="44" rx="8"/>
+  <text class="small" x="1110" y="810">DU/RU/PHY 真实 beam activation 不在 CU-CP v1 内</text>
+
+  <rect class="panel" x="50" y="878" width="720" height="188" rx="12"/>
+  <text class="panel-title" x="78" y="916">4. UE 位置驱动 handover</text>
+  <rect class="box" x="82" y="946" width="116" height="58" rx="8"/>
+  <text class="small" x="105" y="970">UE location</text>
+  <text class="tiny" x="105" y="990">lat/lon/time</text>
+  <rect class="box" x="246" y="946" width="128" height="58" rx="8"/>
+  <text class="small" x="268" y="970">filters</text>
+  <text class="tiny" x="268" y="990">stale/accuracy</text>
+  <rect class="box-amber" x="422" y="946" width="128" height="58" rx="8"/>
+  <text class="small" x="442" y="970">candidate</text>
+  <text class="tiny" x="442" y="990">TTT + reports</text>
+  <rect class="box-green" x="598" y="946" width="128" height="58" rx="8"/>
+  <text class="small" x="620" y="970">F1AP HO</text>
+  <text class="tiny" x="620" y="990">success/failure</text>
+  <path class="arrow" d="M198 975 H246"/>
+  <path class="arrow" d="M374 975 H422"/>
+  <path class="arrow" d="M550 975 H598"/>
+  <path class="arrow-soft dash" d="M662 1004 C650 1046 482 1048 486 1004"/>
+  <text class="tiny" x="450" y="1040">failure cleanup 后，后续位置报告可 retry</text>
+
+  <rect class="panel" x="820" y="878" width="730" height="188" rx="12"/>
+  <text class="panel-title" x="848" y="916">5. 核心网上报和观测接口</text>
+  <rect class="box-blue" x="852" y="946" width="154" height="58" rx="8"/>
+  <text class="small" x="878" y="970">active/draining</text>
+  <text class="tiny" x="878" y="990">core-reportable gate</text>
+  <rect class="box-green" x="1060" y="946" width="168" height="58" rx="8"/>
+  <text class="small" x="1084" y="970">NGAP LocationReport</text>
+  <text class="tiny" x="1084" y="990">standard NR NTN TAI</text>
+  <rect class="box" x="1284" y="946" width="192" height="58" rx="8"/>
+  <text class="small" x="1310" y="970">ntn_beams</text>
+  <text class="tiny" x="1310" y="990">status/window/SR/SRS/load</text>
+  <path class="arrow" d="M1006 975 H1060"/>
+  <path class="arrow-soft" d="M1228 975 H1284"/>
+
+  <rect x="1214" y="42" width="300" height="98" rx="10" fill="#ffffff" stroke="#d7deea" stroke-width="1.5"/>
+  <circle class="active" cx="1242" cy="66" r="9"/>
+  <text class="tiny" x="1260" y="70">active: 可服务 / 可触发目标 HO</text>
+  <circle class="candidate" cx="1242" cy="91" r="9"/>
+  <text class="tiny" x="1260" y="95">candidate: 可见但不作为目标</text>
+  <circle class="draining" cx="1402" cy="66" r="9"/>
+  <text class="tiny" x="1420" y="70">draining: 旧负载保留</text>
+  <circle class="inactive" cx="1402" cy="91" r="9"/>
+  <text class="tiny" x="1420" y="95">inactive: 不服务</text>
+  <rect class="box-blue" x="1233" y="114" width="18" height="12" rx="2"/>
+  <text class="tiny" x="1260" y="125">SR/SRS: loaded active/draining</text>
+
+  <circle class="sat" cx="1430" cy="162" r="20"/>
+  <path d="M1395 187 C1424 207 1464 205 1498 184" stroke="#68758a" stroke-width="2" fill="none"/>
+  <path d="M1419 181 C1390 214 1369 251 1349 294" stroke="#3b82f6" stroke-width="1.8" fill="none" opacity="0.45"/>
+  <path d="M1438 182 C1420 220 1408 258 1398 304" stroke="#3b82f6" stroke-width="1.8" fill="none" opacity="0.45"/>
+  <path d="M1452 181 C1459 223 1474 260 1490 304" stroke="#3b82f6" stroke-width="1.8" fill="none" opacity="0.45"/>
+</svg>
