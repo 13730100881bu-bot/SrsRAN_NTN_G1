@@ -127,6 +127,12 @@ public:
     return release_context;
   }
 
+  rrc_ue_release_context get_rrc_ue_inactive_release_context() override
+  {
+    logger.info("Received a new request to get RRC UE inactive release context");
+    return rrc_ue_release_context{};
+  }
+
   rrc_ue_transfer_context get_transfer_context() override
   {
     logger.info("Received a new request to get RRC UE trasnfer context");

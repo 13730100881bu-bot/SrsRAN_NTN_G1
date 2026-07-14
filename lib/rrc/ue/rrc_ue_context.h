@@ -59,6 +59,10 @@ public:
   std::optional<asn1::rrc_nr::ue_cap_rat_container_list_l> capabilities_list;
   std::optional<rrc_ue_transfer_context> transfer_context; // Context of old UE when created through mobility.
   bool                                   reestablishment_ongoing = false;
+  /// I-RNTI allocated when the UE was last suspended into RRC_INACTIVE (TS 38.331
+  /// Sec 5.3.13). Populated by get_rrc_ue_inactive_release_context(); unset until
+  /// then. Kept here so the UE object can clean up its inactive entry on destruction.
+  std::optional<uint64_t>                assigned_full_i_rnti;
   srslog::basic_logger&                  logger;
 };
 

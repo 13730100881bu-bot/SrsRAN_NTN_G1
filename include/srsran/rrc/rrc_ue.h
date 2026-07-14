@@ -273,6 +273,19 @@ public:
   get_rrc_ue_release_context(bool                                requires_rrc_msg,
                              std::optional<std::chrono::seconds> release_wait_time = std::nullopt) = 0;
 
+  /// \brief Build an RRCRelease(suspendConfig) and move the UE to RRC_INACTIVE.
+  ///
+  /// MVP implementation of TS 38.331 Sec 5.3.13. Allocates an I-RNTI, snapshots
+  /// the AS context (security, UP, SRBs, capabilities) into a process-wide
+  /// inactive context repository and packs the RRCRelease PDU. The caller is
+  /// responsible for transmitting the returned PDU and removing the active UE
+  /// from the CU-CP UE manager once the suspend is acknowledged.
+  ///
+  /// \returns A release context with rrc_release_pdu populated when SRB1 was
+  ///          set up. If SRB1 is missing the returned context has an empty PDU
+  ///          and the UE is left in its current state (suspend aborted).
+  virtual rrc_ue_release_context get_rrc_ue_inactive_release_context() = 0;
+
   /// \brief Retrieve RRC context of a UE to perform mobility (handover, reestablishment).
   /// \return Transfer context including UP context, security, SRBs, HO preparation, etc.
   virtual rrc_ue_transfer_context get_transfer_context() = 0;

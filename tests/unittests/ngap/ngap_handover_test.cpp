@@ -22,6 +22,8 @@
 
 #include "ngap_test_helpers.h"
 #include "tests/unittests/ngap/ngap_test_messages.h"
+#include "srsran/asn1/ngap/common.h"
+#include "srsran/asn1/ngap/ngap_pdu_contents.h"
 #include "srsran/ngap/ngap_handover.h"
 #include "srsran/ran/cu_types.h"
 #include "srsran/ran/rb_id.h"
@@ -50,4 +52,25 @@ TEST_F(ngap_test, when_ue_missing_then_handover_preparation_procedure_fails)
 
   // Make sure no NGAP pdu was sent
   ASSERT_TRUE(n2_gw.last_ngap_msgs.empty());
+}
+
+// =====================================================================================================
+// Target-side NGAP HandoverResourceAllocation tests for the new implementation.
+// =====================================================================================================
+
+TEST_F(ngap_test, when_handover_request_received_then_handover_failure_is_sent_when_no_ue_can_be_allocated)
+{
+  ASSERT_TRUE(run_ng_setup());
+  n2_gw.last_ngap_msgs.clear();
+
+  // The default dummy_ngap_cu_cp_notifier::request_new_ue_index_allocation returns invalid, so the
+  // NGAP layer must reply with HandoverFailure immediately.
+  ngap_message ho_request = generate_valid_handover_request(uint_to_amf_ue_id(0x1000));
+  ngap->handle_message(ho_request);
+
+  ASSERT_FALSE(n2_gw.last_ngap_msgs.empty());
+  const auto& sent = n2_gw.last_ngap_msgs.back();
+  ASSERT_EQ(sent.pdu.type().value, asn1::ngap::ngap_pdu_c::types_opts::unsuccessful_outcome);
+  EXPECT_EQ(sent.pdu.unsuccessful_outcome().value.type().value,
+            asn1::ngap::ngap_elem_procs_o::unsuccessful_outcome_c::types_opts::ho_fail);
 }

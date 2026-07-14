@@ -23,6 +23,7 @@
 #pragma once
 
 #include "procedures/rrc_ue_event_manager.h"
+#include "rrc_inactive_context_repository.h"
 #include "rrc_ue_context.h"
 #include "rrc_ue_logger.h"
 #include "srsran/asn1/rrc_nr/ul_dcch_msg.h"
@@ -81,6 +82,15 @@ public:
   rrc_ue_release_context
                               get_rrc_ue_release_context(bool                                requires_rrc_message,
                                                          std::optional<std::chrono::seconds> release_wait_time = std::nullopt) override;
+
+  /// \brief Build an RRCRelease carrying SuspendConfig and move the UE to RRC_INACTIVE.
+  ///
+  /// MVP implementation of TS 38.331 Sec 5.3.13 (RRC connection suspension):
+  /// allocates a Full/Short I-RNTI, stores a minimal context in the process-wide
+  /// rrc_inactive_context_repository and packs an RRCRelease with suspend_cfg.
+  /// The caller is responsible for actually transmitting the returned PDU and
+  /// for removing the active UE from the CU-CP UE manager afterwards.
+  rrc_ue_release_context get_rrc_ue_inactive_release_context() override;
   rrc_ue_transfer_context     get_transfer_context() override;
   std::optional<rrc_meas_cfg> generate_meas_config(const std::optional<rrc_meas_cfg>& current_meas_config) override;
   byte_buffer                 get_packed_meas_config() override;
@@ -106,6 +116,22 @@ private:
   void handle_pdu(const srb_id_t srb_id, byte_buffer rrc_pdu);
   void handle_rrc_setup_request(const asn1::rrc_nr::rrc_setup_request_s& msg);
   void handle_rrc_reest_request(const asn1::rrc_nr::rrc_reest_request_s& msg);
+  /// RRCResumeRequest handling per TS 38.331 Sec 5.3.13. Performs ResumeMAC-I verification and
+  /// horizontal K_gNB key derivation when the I-RNTI matches a stored RRC_INACTIVE context. On
+  /// any verification failure the flow falls back to the RRCSetup path so the UE is not stranded.
+  void handle_rrc_resume_request(const asn1::rrc_nr::rrc_resume_request_s& msg);
+
+  /// Verify the 16-bit ResumeMAC-I contained in the RRCResumeRequest against the K_RRCint stored
+  /// in the inactive context. Returns true when the MAC matches.
+  bool verify_resume_mac_i(const asn1::rrc_nr::rrc_resume_request_ies_s& ies,
+                           const rrc_inactive_ue_context&                stored);
+
+  /// Hand the AS context snapshot to the fresh RRC UE and release the current object so the
+  /// caller can drive a clean RRCSetup flow. Used as the recovery path when Resume cannot
+  /// complete end-to-end (MVP limitation, unknown I-RNTI, MAC mismatch, etc.).
+  void fallback_resume_to_rrc_setup(std::optional<rrc_inactive_ue_context> stored,
+                                    const std::string&                     reason);
+
   void handle_ul_info_transfer(const asn1::rrc_nr::ul_info_transfer_ies_s& ul_info_transfer);
   void handle_rrc_transaction_complete(const asn1::rrc_nr::ul_dcch_msg_s& msg, uint8_t transaction_id_);
   void handle_security_mode_complete(const asn1::rrc_nr::security_mode_complete_s& msg);
