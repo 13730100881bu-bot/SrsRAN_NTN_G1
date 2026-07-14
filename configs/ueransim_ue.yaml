@@ -1,0 +1,57 @@
+supi: 'imsi-001010000000001'
+mcc: '001'
+mnc: '01'
+routingIndicator: '0000'
+
+# Permanent subscription key (K)
+key: '00112233445566778899AABBCCDDEEFF'
+# Operator code — OPc variant
+op: '63BFA50EE6523365FF14C1F45F88737D'
+opType: 'OPC'
+
+amf: '8000'
+imei: '356938035643803'
+imeiSv: '4370816125816151'
+
+gnbSearchList:
+  - 127.0.0.1
+
+uacAic:
+  mps: false
+  mcs: false
+
+uacAcc:
+  normalClass: 0
+  class11: false
+  class12: false
+  class13: false
+  class14: false
+  class15: false
+
+sessions:
+  - type: 'IPv4'
+    apn: 'internet'
+    slice:
+      sst: 1
+
+configured-nssai:
+  - sst: 1
+
+default-nssai:
+  - sst: 1
+    sd: 1
+
+integrity:
+  IA1: true
+  IA2: true
+  IA3: true
+
+ciphering:
+  EA0: true
+  EA1: true
+  EA2: true
+  EA3: true
+
+integrityMaxRate:
+  uplink: 'full'
+  downlink: 'full'

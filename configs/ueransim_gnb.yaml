@@ -1,0 +1,19 @@
+mcc: '001'
+mnc: '01'
+
+nci: '0x000000010'  # NR Cell Identity (36-bit)
+idLength: 32        # NR gNB ID length in bits
+tac: 7
+
+linkIp: 127.0.0.1  # gNB's local IP for internal communication
+ngapIp: 127.0.0.1  # gNB's local IP for N2 interface (to AMF)
+gtpIp: 127.0.0.1   # gNB's local IP for N3 interface (to UPF)
+
+amfConfigs:
+  - address: 127.0.0.1
+    port: 38412
+
+slices:
+  - sst: 1
+
+ignoreStreamIds: true

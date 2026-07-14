@@ -1,0 +1,3 @@
+cell_cfg:
+  prach:
+    prach_root_sequence_index: 0

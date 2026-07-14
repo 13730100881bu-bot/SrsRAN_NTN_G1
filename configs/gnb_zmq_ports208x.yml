@@ -1,0 +1,2 @@
+ru_sdr:
+  device_args: tx_port=tcp://127.0.0.1:2080,rx_port=tcp://127.0.0.1:2081,base_srate=11.52e6

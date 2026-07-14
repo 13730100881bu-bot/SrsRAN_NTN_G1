@@ -1,0 +1,5 @@
+# Enable two SSB positions in the burst for ZMQ multi-beam simulation.
+# Bit 63 maps to SSB index 0, bit 61 maps to SSB index 2.
+cell_cfg:
+  ssb:
+    ssb_bitmap: "0xA000000000000000"

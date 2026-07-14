@@ -1,0 +1,5 @@
+cell_cfg:
+  prach:
+    prach_config_index: 1
+    prach_root_sequence_index: 1
+    zero_correlation_zone: 0

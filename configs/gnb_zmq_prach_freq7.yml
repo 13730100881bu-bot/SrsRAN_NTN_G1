@@ -1,0 +1,3 @@
+cell_cfg:
+  prach:
+    prach_frequency_start: 7

@@ -1,0 +1,18 @@
+log:
+  filename: /tmp/gnb_ra.log
+  all_level: info
+  mac_level: debug
+  rrc_level: debug
+  du_level: debug
+  f1ap_level: info
+  ngap_level: info
+  phy_level: info
+  radio_level: info
+  broadcast_enabled: true
+  hex_max_size: 128
+
+pcap:
+  mac_enable: true
+  mac_filename: /tmp/gnb_mac_ra.pcap
+  ngap_enable: true
+  ngap_filename: /tmp/gnb_ngap_ra.pcap
