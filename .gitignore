@@ -1,0 +1,91 @@
+# Build outputs.
+/build/
+/build_*/
+/cmake-build-*/
+/out/
+
+# Runtime logs and generated traces.
+/run_logs/
+*.log
+*.trace
+*.pcap
+*.pcapng
+
+# Downloaded comparison baselines and local assistant/tool state.
+/.analysis_baselines/
+/.claude/
+/.codex/
+
+# Local validation workspaces and generated harness/runtime evidence.
+/outputs/
+/ai_harness/results/
+/run_artifacts/srsran_runtime_capture/split/log_exports/
+/run_artifacts/srsran_runtime_capture/cucp_ue_flow_summary_latest.md
+/run_artifacts/srsran_runtime_capture/build_srsue_tmp.sh
+
+# Test UE credentials stay local even when they use synthetic values.
+/run_artifacts/srsran_runtime_capture/ue_20_official.conf
+
+# Separately managed or third-party Web workspaces.
+/web_replicas/ntn_beam_planner/
+/web_replicas/ouc_yjscg1/
+
+# Local editor and OS metadata.
+/.vscode/
+.idea/
+.vs/
+.DS_Store
+Thumbs.db
+
+# Generated reports / binary presentation outputs.
+docs/*.pptx
+~$*.pptx
+
+# Source package archives and binary package artifacts kept outside git.
+*.tar
+*.tar.gz
+*.tar.xz
+*.tgz
+*.zip
+*.7z
+*.rar
+*.deb
+*.rpm
+*.dsc
+
+# C/C++ build artifacts.
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dll
+*.dylib
+*.exe
+*.pdb
+*.ilk
+*.lib
+
+# CMake and test byproducts.
+CMakeCache.txt
+CMakeFiles/
+CTestTestfile.cmake
+Testing/
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+
+# Python helper byproducts.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Temporary files.
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Ad-hoc search output accidentally left in the project root.
+/set_cell*
