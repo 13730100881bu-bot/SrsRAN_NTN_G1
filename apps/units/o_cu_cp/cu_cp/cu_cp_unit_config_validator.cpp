@@ -22,9 +22,11 @@
 
 #include "cu_cp_unit_config_validator.h"
 #include "srsran/adt/span.h"
+#include "srsran/cu_cp/cell_meas_manager_config.h"
 #include "srsran/pdcp/pdcp_t_reordering.h"
 #include "srsran/ran/nr_cgi.h"
 #include "srsran/rlc/rlc_config.h"
+#include <cmath>
 #include <map>
 #include <set>
 #include <sstream>
@@ -33,6 +35,85 @@ using namespace srsran;
 
 static bool validate_mobility_appconfig(gnb_id_t gnb_id, const cu_cp_unit_mobility_config& config)
 {
+  const auto& ntn_cfg = config.ntn_location_mobility;
+  if (ntn_cfg.enabled) {
+    if (ntn_cfg.beam_table_json_file.empty()) {
+      fmt::print("Invalid CU-CP configuration. NTN location mobility requires beam_table_json_file\n");
+      return false;
+    }
+    if (ntn_cfg.required_consecutive_location_reports == 0) {
+      fmt::print("Invalid CU-CP configuration. NTN location mobility requires at least one consecutive report\n");
+      return false;
+    }
+    if (!std::isfinite(ntn_cfg.served_beam_min_elevation_deg) || ntn_cfg.served_beam_min_elevation_deg < -90.0 ||
+        ntn_cfg.served_beam_min_elevation_deg > 90.0) {
+      fmt::print("Invalid CU-CP configuration. NTN served_beam_min_elevation_deg must be within [-90, 90]\n");
+      return false;
+    }
+    if (ntn_cfg.max_nof_served_beams == 0) {
+      fmt::print("Invalid CU-CP configuration. NTN max_nof_served_beams must be greater than zero\n");
+      return false;
+    }
+    if (ntn_cfg.served_beam_hopping_dwell_updates == 0) {
+      fmt::print("Invalid CU-CP configuration. NTN served_beam_hopping_dwell_updates must be greater than zero\n");
+      return false;
+    }
+    if (ntn_cfg.satellite_state_source != "manual" && ntn_cfg.satellite_state_source != "circular_orbit" &&
+        ntn_cfg.satellite_state_source != "tle") {
+      fmt::print("Invalid CU-CP configuration. NTN satellite_state_source '{}' is invalid. Valid values are: manual, "
+                 "circular_orbit, tle\n",
+                 ntn_cfg.satellite_state_source);
+      return false;
+    }
+    if (ntn_cfg.satellite_state_source != "manual") {
+      if (ntn_cfg.satellite_state_update_period_ms == 0) {
+        fmt::print("Invalid CU-CP configuration. NTN satellite_state_update_period_ms must be greater than zero\n");
+        return false;
+      }
+      if (ntn_cfg.satellite_state_source == "circular_orbit") {
+        if (!std::isfinite(ntn_cfg.circular_orbit_altitude_m) || ntn_cfg.circular_orbit_altitude_m <= 0.0 ||
+            !std::isfinite(ntn_cfg.circular_orbit_inclination_deg) ||
+            !std::isfinite(ntn_cfg.circular_orbit_raan_deg) ||
+            !std::isfinite(ntn_cfg.circular_orbit_argument_of_latitude_deg)) {
+          fmt::print("Invalid CU-CP configuration. NTN circular orbit configuration is invalid\n");
+          return false;
+        }
+      }
+      if (ntn_cfg.satellite_state_source == "tle" && (ntn_cfg.tle_line1.empty() || ntn_cfg.tle_line2.empty())) {
+        fmt::print("Invalid CU-CP configuration. NTN TLE source requires tle_line1 and tle_line2\n");
+        return false;
+      }
+    }
+    if (ntn_cfg.boundary_hysteresis_m < 0.0) {
+      fmt::print("Invalid CU-CP configuration. NTN boundary_hysteresis_m must not be negative\n");
+      return false;
+    }
+    if (ntn_cfg.max_horizontal_accuracy_m.has_value() && ntn_cfg.max_horizontal_accuracy_m.value() < 0.0) {
+      fmt::print("Invalid CU-CP configuration. NTN max_horizontal_accuracy_m must not be negative\n");
+      return false;
+    }
+
+    auto beam_table = srs_cu_cp::load_ntn_beam_table_json_file(ntn_cfg.beam_table_json_file);
+    if (!beam_table.has_value()) {
+      fmt::print("Invalid CU-CP configuration. NTN beam table file '{}' is invalid. Cause: {}\n",
+                 ntn_cfg.beam_table_json_file,
+                 beam_table.error());
+      return false;
+    }
+    std::set<uint64_t> configured_cell_ncis;
+    for (const auto& cell : config.cells) {
+      configured_cell_ncis.insert(cell.nr_cell_id);
+    }
+    for (const auto& beam : beam_table.value().beams) {
+      if (configured_cell_ncis.count(beam.nci.value()) == 0) {
+        fmt::print("Invalid CU-CP configuration. NTN beam '{}' nci={:#x} has no mobility cell config\n",
+                   beam.beam_id,
+                   beam.nci);
+        return false;
+      }
+    }
+  }
+
   std::map<unsigned, std::string> report_cfg_ids_to_report_type;
   for (const auto& report_cfg : config.report_configs) {
     // Check that report config ids are unique.
@@ -501,6 +582,17 @@ static bool validate_amf_appconfig(const cu_cp_unit_amf_config&                 
 /// Validates the given CU-CP configuration. Returns true on success, otherwise false.
 static bool validate_cu_cp_appconfig(const gnb_id_t gnb_id, const cu_cp_unit_config& config)
 {
+  auto is_valid_watermark = [](const cu_cp_unit_admission_watermark_config& watermark) {
+    return watermark.max_ue_usage > 0 && watermark.max_ue_usage <= 100 && watermark.max_drb_usage > 0 &&
+           watermark.max_drb_usage <= 100;
+  };
+
+  if (!is_valid_watermark(config.initial_access_admission) ||
+      !is_valid_watermark(config.reestablishment_admission) || !is_valid_watermark(config.handover_admission)) {
+    fmt::print("Invalid CU-CP admission configuration. Watermarks must be in the range [1, 100]\n");
+    return false;
+  }
+
   // validate AMF config
   if (!validate_amf_appconfig(config.amf_config, config.extra_amfs)) {
     return false;

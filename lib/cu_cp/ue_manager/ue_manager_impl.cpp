@@ -232,6 +232,25 @@ cu_cp_ue* ue_manager::find_ue(ue_index_t ue_index)
   return nullptr;
 }
 
+size_t ue_manager::get_nof_drbs() const
+{
+  size_t nof_drbs = 0;
+  for (const auto& ue : ues) {
+    nof_drbs += ue.second.get_up_resource_manager().get_nof_drbs();
+  }
+  return nof_drbs;
+}
+
+std::vector<cu_cp_ue*> ue_manager::get_ues()
+{
+  std::vector<cu_cp_ue*> result;
+  result.reserve(ues.size());
+  for (auto& ue : ues) {
+    result.push_back(&ue.second);
+  }
+  return result;
+}
+
 ue_task_scheduler* ue_manager::find_ue_task_scheduler(ue_index_t ue_index)
 {
   if (ues.find(ue_index) != ues.end() && ues.at(ue_index).du_ue_created()) {

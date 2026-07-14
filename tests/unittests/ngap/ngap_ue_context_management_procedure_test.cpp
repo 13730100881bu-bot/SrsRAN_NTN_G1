@@ -114,7 +114,33 @@ protected:
     return n2_gw.last_ngap_msgs.back().pdu.init_msg().value.type() ==
            asn1::ngap::ngap_elem_procs_o::init_msg_c::types_opts::rrc_inactive_transition_report;
   }
+
+  bool was_location_report_sent() const
+  {
+    return n2_gw.last_ngap_msgs.back().pdu.init_msg().value.type() ==
+           asn1::ngap::ngap_elem_procs_o::init_msg_c::types_opts::location_report;
+  }
+
+  bool was_location_reporting_failure_sent() const
+  {
+    return n2_gw.last_ngap_msgs.back().pdu.init_msg().value.type() ==
+           asn1::ngap::ngap_elem_procs_o::init_msg_c::types_opts::location_report_fail_ind;
+  }
 };
+
+static ngap_message generate_location_reporting_control_message(amf_ue_id_t amf_ue_id, ran_ue_id_t ran_ue_id)
+{
+  ngap_message msg = {};
+  msg.pdu.set_init_msg();
+  msg.pdu.init_msg().load_info_obj(ASN1_NGAP_ID_LOCATION_REPORT_CTRL);
+
+  auto& ctrl           = msg.pdu.init_msg().value.location_report_ctrl();
+  ctrl->amf_ue_ngap_id = amf_ue_id_to_uint(amf_ue_id);
+  ctrl->ran_ue_ngap_id = ran_ue_id_to_uint(ran_ue_id);
+  ctrl->location_report_request_type.event_type.value = asn1::ngap::event_type_opts::direct;
+  ctrl->location_report_request_type.report_area.value = asn1::ngap::report_area_opts::cell;
+  return msg;
+}
 
 /// Test Initial Context Setup Request
 TEST_F(ngap_ue_context_management_procedure_test, when_valid_initial_context_setup_request_received_then_response_send)
@@ -534,4 +560,114 @@ TEST_F(ngap_ue_context_management_procedure_test,
   // Procedure should have succeeded.
   ASSERT_TRUE(t.get());
   ASSERT_TRUE(was_rrc_inactive_transition_report_sent());
+}
+
+TEST_F(ngap_ue_context_management_procedure_test, when_location_report_is_requested_then_report_is_sent)
+{
+  ue_index_t ue_index = this->start_procedure();
+
+  ngap_location_report report;
+  report.ue_index                          = ue_index;
+  report.user_location_info.nr_cgi.plmn_id = plmn_identity::test_value();
+  report.user_location_info.nr_cgi.nci     = nr_cell_identity::create(gnb_id_t{411, 22}, 0).value();
+  report.user_location_info.tai.plmn_id    = plmn_identity::test_value();
+  report.user_location_info.tai.tac        = 7;
+  report.user_location_info.time_stamp     = 1234;
+  report.request_type.event_type           = ngap_location_reporting_event_type::direct;
+
+  ASSERT_TRUE(ngap->get_ngap_control_message_handler().handle_location_report_required(report));
+  ASSERT_TRUE(was_location_report_sent());
+
+  const auto& asn1_report = n2_gw.last_ngap_msgs.back().pdu.init_msg().value.location_report();
+  ASSERT_EQ(asn1_report->ran_ue_ngap_id, ran_ue_id_to_uint(test_ues.at(ue_index).ran_ue_id.value()));
+  ASSERT_EQ(asn1_report->amf_ue_ngap_id, amf_ue_id_to_uint(test_ues.at(ue_index).amf_ue_id.value()));
+  ASSERT_EQ(asn1_report->user_location_info.type().value,
+            asn1::ngap::user_location_info_c::types_opts::user_location_info_nr);
+  ASSERT_EQ(asn1_report->location_report_request_type.event_type.value, asn1::ngap::event_type_opts::direct);
+  ASSERT_EQ(asn1_report->location_report_request_type.report_area.value, asn1::ngap::report_area_opts::cell);
+}
+
+TEST_F(ngap_ue_context_management_procedure_test, when_ntn_derived_tac_is_available_then_location_report_has_ntn_tai)
+{
+  ue_index_t ue_index = this->start_procedure();
+
+  ngap_location_report report;
+  report.ue_index                              = ue_index;
+  report.user_location_info.nr_cgi.plmn_id     = plmn_identity::test_value();
+  report.user_location_info.nr_cgi.nci         = nr_cell_identity::create(gnb_id_t{411, 22}, 0).value();
+  report.user_location_info.tai.plmn_id        = plmn_identity::test_value();
+  report.user_location_info.tai.tac            = 7;
+  report.user_location_info.ntn_derived_tac    = 9;
+  report.request_type.event_type               = ngap_location_reporting_event_type::direct;
+
+  ASSERT_TRUE(ngap->get_ngap_control_message_handler().handle_location_report_required(report));
+  ASSERT_TRUE(was_location_report_sent());
+
+  const auto& asn1_report = n2_gw.last_ngap_msgs.back().pdu.init_msg().value.location_report();
+  const auto& nr_info     = asn1_report->user_location_info.user_location_info_nr();
+  ASSERT_TRUE(nr_info.ie_exts_present);
+  ASSERT_TRUE(nr_info.ie_exts.nr_ntn_tai_info_present);
+  ASSERT_EQ(nr_info.ie_exts.nr_ntn_tai_info.tac_list_in_nr_ntn.size(), 1);
+  ASSERT_EQ(nr_info.ie_exts.nr_ntn_tai_info.tac_list_in_nr_ntn[0].to_number(), 7);
+  ASSERT_TRUE(nr_info.ie_exts.nr_ntn_tai_info.ue_location_derived_tac_in_nr_ntn_present);
+  ASSERT_EQ(nr_info.ie_exts.nr_ntn_tai_info.ue_location_derived_tac_in_nr_ntn.to_number(), 9);
+}
+
+TEST_F(ngap_ue_context_management_procedure_test, when_location_reporting_control_is_received_then_cu_cp_is_notified)
+{
+  ue_index_t ue_index = this->start_procedure();
+  const auto& ue      = test_ues.at(ue_index);
+
+  ngap->handle_message(generate_location_reporting_control_message(ue.amf_ue_id.value(), ue.ran_ue_id.value()));
+
+  ASSERT_EQ(cu_cp_notifier.last_location_reporting_control.ue_index, ue_index);
+  ASSERT_EQ(cu_cp_notifier.last_location_reporting_control.request_type.event_type,
+            ngap_location_reporting_event_type::direct);
+}
+
+TEST_F(ngap_ue_context_management_procedure_test, when_location_reporting_control_has_unknown_ue_then_failure_is_sent)
+{
+  ngap->handle_message(generate_location_reporting_control_message(uint_to_amf_ue_id(11), uint_to_ran_ue_id(10)));
+
+  ASSERT_TRUE(was_location_reporting_failure_sent());
+  ASSERT_EQ(n2_gw.last_ngap_msgs.back().pdu.init_msg().value.location_report_fail_ind()->cause.radio_network(),
+            asn1::ngap::cause_radio_network_e::options::unknown_local_ue_ngap_id);
+}
+
+TEST_F(ngap_ue_context_management_procedure_test,
+       when_location_reporting_control_is_rejected_by_cu_cp_then_failure_is_sent)
+{
+  ue_index_t ue_index = this->start_procedure();
+  const auto& ue      = test_ues.at(ue_index);
+  cu_cp_notifier.location_reporting_control_response =
+      ngap_location_reporting_control_response{false, ngap_cause_radio_network_t::unspecified};
+
+  ngap->handle_message(generate_location_reporting_control_message(ue.amf_ue_id.value(), ue.ran_ue_id.value()));
+
+  ASSERT_TRUE(was_location_reporting_failure_sent());
+  ASSERT_EQ(n2_gw.last_ngap_msgs.back().pdu.init_msg().value.location_report_fail_ind()->cause.radio_network(),
+            asn1::ngap::cause_radio_network_e::options::unspecified);
+}
+
+TEST_F(ngap_ue_context_management_procedure_test,
+       when_location_reporting_control_has_duplicate_ref_ids_then_failure_is_sent)
+{
+  ue_index_t ue_index = this->start_procedure();
+  const auto& ue      = test_ues.at(ue_index);
+
+  ngap_message msg = generate_location_reporting_control_message(ue.amf_ue_id.value(), ue.ran_ue_id.value());
+  auto& request_type = msg.pdu.init_msg().value.location_report_ctrl()->location_report_request_type;
+  request_type.event_type.value = asn1::ngap::event_type_opts::ue_presence_in_area_of_interest;
+  asn1::ngap::area_of_interest_item_s first_item;
+  first_item.location_report_ref_id = 3;
+  request_type.area_of_interest_list.push_back(first_item);
+  asn1::ngap::area_of_interest_item_s second_item;
+  second_item.location_report_ref_id = 3;
+  request_type.area_of_interest_list.push_back(second_item);
+
+  ngap->handle_message(msg);
+
+  ASSERT_TRUE(was_location_reporting_failure_sent());
+  ASSERT_EQ(n2_gw.last_ngap_msgs.back().pdu.init_msg().value.location_report_fail_ind()->cause.radio_network(),
+            asn1::ngap::cause_radio_network_e::options::multiple_location_report_ref_id_instances);
 }

@@ -34,6 +34,7 @@
 #include <cstdint>
 #include <list>
 #include <variant>
+#include <vector>
 
 namespace srsran {
 namespace srs_cu_cp {
@@ -153,6 +154,11 @@ public:
     logger.info("source_ue={} target_ue={}: Received handover ue context push", source_ue_index, target_ue_index);
   }
 
+  void handle_ntn_handover_result(const ntn_handover_result& result) override
+  {
+    ntn_handover_results.push_back(result);
+  }
+
   void initialize_handover_ue_release_timer(ue_index_t                              ue_index,
                                             std::chrono::milliseconds               handover_ue_release_timeout,
                                             const cu_cp_ue_context_release_request& ue_context_release_request) override
@@ -161,6 +167,7 @@ public:
   }
 
   unsigned last_transaction_id = 99999;
+  std::vector<ntn_handover_result> ntn_handover_results;
 
 private:
   srslog::basic_logger& logger = srslog::fetch_basic_logger("TEST");
@@ -426,7 +433,15 @@ public:
     logger.info("Received a RRC Reconfiguration Complete for Inter-CU Handover");
   }
 
+  bool handle_location_report_required(const ngap_location_report& report) override
+  {
+    last_location_report = report;
+    return true;
+  }
+
   void set_ue_context_release_request_outcome(bool outcome_) { release_request_outcome = outcome_; }
+
+  std::optional<ngap_location_report> last_location_report;
 
 private:
   bool                  release_request_outcome = true;

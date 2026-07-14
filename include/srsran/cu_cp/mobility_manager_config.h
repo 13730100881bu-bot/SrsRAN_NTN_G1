@@ -47,6 +47,9 @@ public:
   on_intra_cu_handover_required(const cu_cp_intra_cu_handover_request& request,
                                 du_index_t                             source_du_index,
                                 du_index_t                             target_du_index) = 0;
+
+  /// \brief Notify the CU-CP about the outcome of an NTN location-triggered handover.
+  virtual void on_ntn_handover_result(const ntn_handover_result& result) {}
 };
 
 } // namespace srs_cu_cp

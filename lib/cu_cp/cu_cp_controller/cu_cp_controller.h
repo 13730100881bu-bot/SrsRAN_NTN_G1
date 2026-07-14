@@ -30,6 +30,7 @@
 #include "node_connection_notifier.h"
 #include "srsran/cu_cp/common_task_scheduler.h"
 #include "srsran/cu_cp/cu_cp_configuration.h"
+#include <atomic>
 
 namespace srsran {
 namespace srs_cu_cp {
@@ -54,6 +55,7 @@ public:
                    ngap_repository&                ngaps_,
                    cu_up_processor_repository&     cu_ups_,
                    du_processor_repository&        dus_,
+                   ue_manager&                     ues_,
                    task_executor&                  ctrl_exec);
 
   void stop();
@@ -64,6 +66,15 @@ public:
 
   /// \brief Determines whether the CU-CP should accept new UE connections.
   bool request_ue_setup() const override;
+  bool request_ue_setup(cu_cp_admission_request_type request_type,
+                        unsigned                    additional_ues  = 0,
+                        unsigned                    additional_drbs = 0) const override;
+
+  /// \brief Administratively enable or disable UE admission.
+  void set_ue_admission_enabled(bool enabled) override;
+
+  /// \brief Returns true if UE admission is administratively enabled.
+  bool is_ue_admission_enabled() const override;
 
   /// \brief Determines whether the CU-CP should accept a new UE connection based on its PLMN.
   bool is_supported_plmn(const plmn_identity& plmn) const;
@@ -72,9 +83,14 @@ public:
   cu_cp_e1_handler&  get_e1_handler() { return cu_up_mng; }
 
 private:
+  bool is_below_admission_watermarks(cu_cp_admission_request_type request_type,
+                                     unsigned                    additional_ues,
+                                     unsigned                    additional_drbs) const;
+
   const cu_cp_configuration& cfg;
   task_executor&             ctrl_exec;
   srslog::basic_logger&      logger;
+  ue_manager&                ue_mng;
 
   amf_connection_manager   amf_mng;
   du_connection_manager    du_mng;
@@ -82,6 +98,8 @@ private:
 
   std::mutex mutex;
   bool       running = true;
+
+  std::atomic<bool> ue_admission_enabled{true};
 };
 
 } // namespace srs_cu_cp

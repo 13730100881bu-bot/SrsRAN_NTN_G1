@@ -40,6 +40,7 @@
 #include "srsran/ran/subcarrier_spacing.h"
 #include "srsran/ran/tac.h"
 #include "srsran/ran/up_transport_layer_info.h"
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -165,6 +166,7 @@ struct cu_cp_user_location_info_nr {
   nr_cell_global_id_t     nr_cgi;
   cu_cp_tai               tai;
   std::optional<uint64_t> time_stamp;
+  std::optional<tac_t>    ntn_derived_tac;
 };
 
 /// <AMF Identifier> = <AMF Region ID><AMF Set ID><AMF Pointer>
@@ -520,6 +522,43 @@ struct cu_cp_ue_context_release_command {
   std::optional<std::chrono::seconds> release_wait_time    = std::nullopt;
 };
 
+struct cu_cp_ue_context_release_batch_command {
+  std::vector<cu_cp_ue_context_release_command> ues;
+};
+
+struct cu_cp_ue_context_release_batch_response {
+  unsigned                nof_requested_ues = 0;
+  std::vector<ue_index_t> released_ues;
+  std::vector<ue_index_t> ues_not_found;
+  std::vector<ue_index_t> duplicate_ues;
+  std::vector<ue_index_t> failed_to_schedule_ues;
+
+  bool success() const { return ues_not_found.empty() && duplicate_ues.empty() && failed_to_schedule_ues.empty(); }
+};
+
+struct cu_cp_admission_control_status {
+  bool     ue_admission_enabled  = true;
+  bool     ue_setup_allowed      = false;
+  bool     reestablishment_allowed = false;
+  bool     handover_allowed        = false;
+  bool     amf_connected         = false;
+  bool     cu_up_connected       = false;
+  unsigned nof_ues               = 0;
+  unsigned max_nof_ues           = 0;
+  unsigned nof_drbs              = 0;
+  unsigned max_nof_drbs          = 0;
+  unsigned initial_access_max_ue_usage_percent   = 100;
+  unsigned initial_access_max_drb_usage_percent  = 100;
+  unsigned reestablishment_max_ue_usage_percent  = 100;
+  unsigned reestablishment_max_drb_usage_percent = 100;
+  unsigned handover_max_ue_usage_percent         = 100;
+  unsigned handover_max_drb_usage_percent        = 100;
+  unsigned nof_dus               = 0;
+  unsigned max_nof_dus           = 0;
+  unsigned nof_cu_ups            = 0;
+  unsigned max_nof_cu_ups        = 0;
+};
+
 struct cu_cp_ue_context_release_request {
   ue_index_t                    ue_index = ue_index_t::invalid;
   std::vector<pdu_session_id_t> pdu_session_res_list_cxt_rel_req;
@@ -614,11 +653,39 @@ struct cu_cp_inactivity_notification {
   std::vector<pdu_session_id_t> inactive_pdu_sessions;
 };
 
+struct ntn_handover_context {
+  uint64_t                  handover_attempt_id = 0;
+  std::string               target_beam_id;
+  nr_cell_identity          serving_nci = nr_cell_identity::min();
+  nr_cell_identity          target_nci  = nr_cell_identity::min();
+  unsigned                  consecutive_location_reports = 0;
+  std::chrono::milliseconds candidate_age{0};
+};
+
+enum class ntn_handover_failure_cause {
+  none,
+  source_preparation_failed,
+  target_ue_removed,
+  target_reconfiguration_timeout,
+  target_security_context_missing,
+  target_bearer_context_modification_failed
+};
+
+struct ntn_handover_result {
+  ue_index_t                 source_ue_index = ue_index_t::invalid;
+  ue_index_t                 target_ue_index = ue_index_t::invalid;
+  ntn_handover_context       context;
+  bool                       success = false;
+  ntn_handover_failure_cause failure_cause = ntn_handover_failure_cause::none;
+  bool                       source_reconfiguration_can_resume = false;
+};
+
 struct cu_cp_intra_cu_handover_request {
   ue_index_t          source_ue_index = ue_index_t::invalid;
   du_index_t          target_du_index = du_index_t::invalid;
   nr_cell_global_id_t cgi;
   pci_t               target_pci = INVALID_PCI;
+  std::optional<ntn_handover_context> ntn_context;
 };
 
 struct cu_cp_intra_cu_handover_response {

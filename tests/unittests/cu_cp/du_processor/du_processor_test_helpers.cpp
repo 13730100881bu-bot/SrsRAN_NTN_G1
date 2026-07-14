@@ -43,7 +43,18 @@ private:
 };
 
 struct dummy_cu_cp_ue_admission_controller : public cu_cp_ue_admission_controller {
-  bool request_ue_setup() const override { return true; }
+  bool request_ue_setup() const override { return ue_admission_enabled; }
+  bool request_ue_setup(cu_cp_admission_request_type request_type,
+                        unsigned                    additional_ues,
+                        unsigned                    additional_drbs) const override
+  {
+    return ue_admission_enabled;
+  }
+  void set_ue_admission_enabled(bool enabled) override { ue_admission_enabled = enabled; }
+  bool is_ue_admission_enabled() const override { return ue_admission_enabled; }
+
+private:
+  bool ue_admission_enabled = true;
 };
 
 struct dummy_cu_cp_measurement_handler : public cu_cp_measurement_handler {
@@ -55,6 +66,8 @@ struct dummy_cu_cp_measurement_handler : public cu_cp_measurement_handler {
     return std::nullopt;
   }
   void handle_measurement_report(const ue_index_t ue_index, const rrc_meas_results& meas_results) override {}
+
+  void handle_ue_location_report(const ntn_ue_location_report& location_report) override {}
 };
 
 struct dummy_cu_cp_ue_removal_handler : public cu_cp_ue_removal_handler {

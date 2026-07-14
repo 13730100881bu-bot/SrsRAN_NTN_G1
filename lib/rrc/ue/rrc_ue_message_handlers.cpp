@@ -344,6 +344,12 @@ void rrc_ue_impl::handle_pdu(const srb_id_t srb_id, byte_buffer rrc_pdu)
     case ul_dcch_msg_type_c::c1_c_::types_opts::meas_report:
       handle_measurement_report(ul_dcch_msg.msg.c1().meas_report());
       break;
+    case ul_dcch_msg_type_c::c1_c_::types_opts::location_meas_ind:
+      handle_location_measurement_indication(ul_dcch_msg.msg.c1().location_meas_ind());
+      break;
+    case ul_dcch_msg_type_c::c1_c_::types_opts::ue_assist_info:
+      handle_ue_assistance_information(ul_dcch_msg.msg.c1().ue_assist_info());
+      break;
     default:
       logger.log_error("Unsupported DCCH UL message type");
       break;
@@ -406,11 +412,55 @@ void rrc_ue_impl::handle_ul_info_transfer(const ul_info_transfer_ies_s& ul_info_
 
 void rrc_ue_impl::handle_measurement_report(const asn1::rrc_nr::meas_report_s& msg)
 {
+  const auto& asn1_meas_results = msg.crit_exts.meas_report().meas_results;
+  if (asn1_meas_results.location_info_r16.is_present()) {
+    logger.log_debug("MeasurementReport contains LocationInfo-r16; decoded coordinate extraction is not supported");
+  }
+  if (asn1_meas_results.coarse_location_info_r17.size() > 0) {
+    logger.log_debug("MeasurementReport contains coarseLocationInfo-r17 ({} bytes); decoded coordinate extraction is "
+                     "not supported",
+                     asn1_meas_results.coarse_location_info_r17.size());
+  }
+
   // Convert asn1 to common type.
-  rrc_meas_results meas_results =
-      asn1_to_measurement_results(msg.crit_exts.meas_report().meas_results, srslog::fetch_basic_logger("RRC"));
+  rrc_meas_results meas_results = asn1_to_measurement_results(asn1_meas_results, srslog::fetch_basic_logger("RRC"));
   // Send measurement results to cell measurement manager.
   measurement_notifier.on_measurement_report(meas_results);
+}
+
+void rrc_ue_impl::handle_location_measurement_indication(const asn1::rrc_nr::location_meas_ind_s& msg)
+{
+  if (msg.crit_exts.type().value !=
+      asn1::rrc_nr::location_meas_ind_s::crit_exts_c_::types_opts::location_meas_ind) {
+    logger.log_debug("Ignoring LocationMeasurementIndication with unsupported criticalExtensions");
+    return;
+  }
+
+  const auto& ies = msg.crit_exts.location_meas_ind();
+  if (!ies.meas_ind.is_setup()) {
+    logger.log_debug("Ignoring LocationMeasurementIndication release");
+    return;
+  }
+
+  logger.log_debug("LocationMeasurementIndication received; measurement payload does not expose decoded UE "
+                   "geographical coordinates");
+}
+
+void rrc_ue_impl::handle_ue_assistance_information(const asn1::rrc_nr::ue_assist_info_s& msg)
+{
+  if (msg.crit_exts.type().value != asn1::rrc_nr::ue_assist_info_s::crit_exts_c_::types_opts::ue_assist_info) {
+    logger.log_debug("Ignoring UEAssistanceInformation with unsupported criticalExtensions");
+    return;
+  }
+
+  const auto& ies = msg.crit_exts.ue_assist_info();
+  if (ies.late_non_crit_ext.size() > 0) {
+    logger.log_debug("UEAssistanceInformation contains lateNonCriticalExtension ({} bytes); decoded UE location is not "
+                     "available",
+                     ies.late_non_crit_ext.size());
+  } else {
+    logger.log_debug("UEAssistanceInformation received without decodable UE location fields");
+  }
 }
 
 void rrc_ue_impl::handle_dl_nas_transport_message(byte_buffer nas_pdu)

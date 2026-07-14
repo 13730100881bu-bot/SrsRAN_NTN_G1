@@ -90,6 +90,9 @@ cu_cp_test_environment::cu_cp_test_environment(cu_cp_test_env_params params_) :
   cu_cp_cfg.admission.max_nof_cu_ups      = params.max_nof_cu_ups;
   cu_cp_cfg.admission.max_nof_ues         = params.max_nof_ues;
   cu_cp_cfg.admission.max_nof_drbs_per_ue = params.max_nof_drbs_per_ue;
+  cu_cp_cfg.admission.initial_access_watermark  = params.initial_access_watermark;
+  cu_cp_cfg.admission.reestablishment_watermark = params.reestablishment_watermark;
+  cu_cp_cfg.admission.handover_watermark        = params.handover_watermark;
   cu_cp_cfg.bearers.drb_config            = config_helpers::make_default_cu_cp_qos_config_list();
   // > NGAP config
   for (const auto& [amf_index, amf_config] : amf_configs) {
@@ -209,6 +212,19 @@ cu_cp_test_environment::cu_cp_test_environment(cu_cp_test_env_params params_) :
 
         meas_mng_cfg.report_config_ids.emplace(uint_to_report_cfg_id(2), rrc_report_cfg_nr{event_trigger_cfg});
       }
+    }
+    if (params.ntn_location_mobility.has_value()) {
+      for (const auto& beam : params.ntn_location_mobility->beams) {
+        if (meas_mng_cfg.cells.find(beam.nci) != meas_mng_cfg.cells.end()) {
+          continue;
+        }
+        cell_meas_config beam_cell_cfg;
+        beam_cell_cfg.periodic_report_cfg_id             = uint_to_report_cfg_id(1);
+        beam_cell_cfg.serving_cell_cfg.gnb_id_bit_length = cu_cp_cfg.node.gnb_id.bit_length;
+        beam_cell_cfg.serving_cell_cfg.nci               = beam.nci;
+        meas_mng_cfg.cells.emplace(beam.nci, beam_cell_cfg);
+      }
+      meas_mng_cfg.ntn_location_mobility = params.ntn_location_mobility.value();
     }
     cu_cp_cfg.mobility.meas_manager_config = meas_mng_cfg;
   }
@@ -370,6 +386,8 @@ bool cu_cp_test_environment::drop_du_connection(unsigned du_idx)
     return false;
   }
   dus.erase(it);
+  // Wait for the CU-CP to process the DU disconnection triggered by the mock DU teardown.
+  cu_cp_workers->wait_pending_tasks();
   return true;
 }
 

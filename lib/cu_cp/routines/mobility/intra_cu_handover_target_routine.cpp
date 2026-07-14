@@ -50,17 +50,48 @@ intra_cu_handover_target_routine::intra_cu_handover_target_routine(
   bearer_context_modification_request = request.bearer_context_modification_request;
 }
 
+void intra_cu_handover_target_routine::report_ntn_handover_result(bool                       success,
+                                                                   ntn_handover_failure_cause failure_cause)
+{
+  if (!request.ntn_context.has_value() || ntn_result_reported) {
+    return;
+  }
+
+  ntn_handover_result result;
+  result.source_ue_index = request.source_ue_index;
+  result.target_ue_index = request.target_ue_index;
+  result.context         = request.ntn_context.value();
+  result.success         = success;
+  result.failure_cause   = failure_cause;
+
+  cu_cp_handler.handle_ntn_handover_result(result);
+  ntn_result_reported = true;
+}
+
 void intra_cu_handover_target_routine::operator()(coro_context<async_task<void>>& ctx)
 {
   CORO_BEGIN(ctx);
 
   if (ue_mng.find_du_ue(request.target_ue_index) == nullptr) {
     logger.warning("Target UE={} got removed", request.target_ue_index);
+    report_ntn_handover_result(false, ntn_handover_failure_cause::target_ue_removed);
     CORO_EARLY_RETURN();
   }
   target_ue = ue_mng.find_du_ue(request.target_ue_index);
 
   logger.debug("ue={}: \"{}\" started...", request.target_ue_index, name());
+  if (request.ntn_context.has_value()) {
+    logger.info("source_ue={} target_ue={}: NTN target handover awaiting completion attempt={} beam={} serving_nci={:#x} "
+                "target_nci={:#x} reports={} candidate_age={}ms",
+                request.source_ue_index,
+                request.target_ue_index,
+                request.ntn_context->handover_attempt_id,
+                request.ntn_context->target_beam_id,
+                request.ntn_context->serving_nci,
+                request.ntn_context->target_nci,
+                request.ntn_context->consecutive_location_reports,
+                request.ntn_context->candidate_age.count());
+  }
 
   // Notify RRC UE to await ReconfigurationComplete.
   CORO_AWAIT_VALUE(reconf_result,
@@ -68,6 +99,15 @@ void intra_cu_handover_target_routine::operator()(coro_context<async_task<void>>
                                                                                               request.timeout));
 
   if (!reconf_result) {
+    if (request.ntn_context.has_value()) {
+      logger.warning("source_ue={} target_ue={}: NTN target handover failed attempt={} beam={} target_nci={:#x}",
+                     request.source_ue_index,
+                     request.target_ue_index,
+                     request.ntn_context->handover_attempt_id,
+                     request.ntn_context->target_beam_id,
+                     request.ntn_context->target_nci);
+    }
+    report_ntn_handover_result(false, ntn_handover_failure_cause::target_reconfiguration_timeout);
     logger.warning("ue={}: \"{}\" failed", request.target_ue_index, name());
     CORO_EARLY_RETURN();
   }
@@ -85,11 +125,13 @@ void intra_cu_handover_target_routine::operator()(coro_context<async_task<void>>
     if (!target_ue->get_security_manager().is_security_context_initialized()) {
       logger.warning(
           "ue={}: \"{}\" failed. Cause: Security context not initialized", target_ue->get_ue_index(), name());
+      report_ntn_handover_result(false, ntn_handover_failure_cause::target_security_context_missing);
       CORO_EARLY_RETURN();
     }
 
     if (!add_security_context_to_bearer_context_modification(target_ue->get_security_manager().get_up_as_config())) {
       logger.warning("ue={}: \"{}\" failed to create UE context at target DU", request.target_ue_index, name());
+      report_ntn_handover_result(false, ntn_handover_failure_cause::target_bearer_context_modification_failed);
       CORO_AWAIT(ue_removal_handler.handle_ue_removal_request(request.target_ue_index));
       // Note: From this point the UE is removed and only the stored context can be accessed.
       CORO_EARLY_RETURN();
@@ -106,6 +148,7 @@ void intra_cu_handover_target_routine::operator()(coro_context<async_task<void>>
     // Handle Bearer Context Modification Response.
     if (!bearer_context_modification_response.success) {
       logger.warning("ue={}: \"{}\" failed to modify bearer context at target CU-UP", request.target_ue_index, name());
+      report_ntn_handover_result(false, ntn_handover_failure_cause::target_bearer_context_modification_failed);
       {
         // Remove target UE context if Bearer Context Modification failed.
         {
@@ -130,6 +173,8 @@ void intra_cu_handover_target_routine::operator()(coro_context<async_task<void>>
         target_du_f1ap_ue_ctxt_mng.handle_ue_context_modification_request(target_ue_context_modification_request));
   }
 
+  report_ntn_handover_result(true, ntn_handover_failure_cause::none);
+
   // Remove source UE context.
   if (ue_mng.find_du_ue(request.source_ue_index) == nullptr) {
     logger.warning("Source UE={} already got removed", request.source_ue_index);
@@ -144,6 +189,14 @@ void intra_cu_handover_target_routine::operator()(coro_context<async_task<void>>
   }
 
   logger.debug("ue={}: \"{}\" finished successfully", request.target_ue_index, name());
+  if (request.ntn_context.has_value()) {
+    logger.info("source_ue={} target_ue={}: NTN target handover succeeded attempt={} beam={} target_nci={:#x}",
+                request.source_ue_index,
+                request.target_ue_index,
+                request.ntn_context->handover_attempt_id,
+                request.ntn_context->target_beam_id,
+                request.ntn_context->target_nci);
+  }
 
   CORO_RETURN();
 }

@@ -36,6 +36,7 @@ handover_reconfiguration_routine::handover_reconfiguration_routine(
     cu_cp_ue&                                       source_ue_,
     f1ap_ue_context_manager&                        source_f1ap_ue_ctxt_mng_,
     cu_cp_ue_context_manipulation_handler&          cu_cp_handler_,
+    const std::optional<ntn_handover_context>&      ntn_context_,
     srslog::basic_logger&                           logger_) :
   request(request_),
   target_bearer_context_modification_request(target_bearer_context_modification_request_),
@@ -43,6 +44,7 @@ handover_reconfiguration_routine::handover_reconfiguration_routine(
   source_ue(source_ue_),
   source_f1ap_ue_ctxt_mng(source_f1ap_ue_ctxt_mng_),
   cu_cp_handler(cu_cp_handler_),
+  ntn_context(ntn_context_),
   logger(logger_)
 {
   srsran_assert(
@@ -75,6 +77,18 @@ void handover_reconfiguration_routine::operator()(coro_context<async_task<bool>>
   CORO_BEGIN(ctx);
 
   logger.debug("source_ue={} target_ue={}: \"{}\" started...", source_ue.get_ue_index(), target_ue_index, name());
+  if (ntn_context.has_value()) {
+    logger.info("source_ue={} target_ue={}: NTN source reconfiguration attempt={} beam={} serving_nci={:#x} target_nci={:#x} "
+                "reports={} candidate_age={}ms",
+                source_ue.get_ue_index(),
+                target_ue_index,
+                ntn_context->handover_attempt_id,
+                ntn_context->target_beam_id,
+                ntn_context->serving_nci,
+                ntn_context->target_nci,
+                ntn_context->consecutive_location_reports,
+                ntn_context->candidate_age.count());
+  }
 
   // Get RRC handover reconfiguration context.
   ho_reconf_ctxt = source_ue.get_rrc_ue()->get_rrc_ue_handover_reconfiguration_context(request);
@@ -86,7 +100,8 @@ void handover_reconfiguration_routine::operator()(coro_context<async_task<bool>>
                                                       source_ue.get_ue_index(),
                                                       (uint8_t)ho_reconf_ctxt.transaction_id,
                                                       target_ue_release_timeout,
-                                                      target_bearer_context_modification_request});
+                                                      target_bearer_context_modification_request,
+                                                      ntn_context});
 
   // Call F1AP procedure to send RRC reconfiguration to source UE via UE context modification request.
   CORO_AWAIT_VALUE(ue_context_mod_response,

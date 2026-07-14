@@ -123,6 +123,12 @@ o_cu_cp_unit srsran::build_o_cu_cp(const o_cu_cp_unit_config& unit_cfg, o_cu_cp_
   // Add the commands;
   ocucp.commands.cmdline.commands.push_back(
       std::make_unique<handover_app_command>(ocucp.unit->get_cu_cp().get_command_handler()));
+  ocucp.commands.cmdline.commands.push_back(
+      std::make_unique<ntn_satellite_state_app_command>(ocucp.unit->get_cu_cp().get_command_handler()));
+  ocucp.commands.cmdline.commands.push_back(
+      std::make_unique<ntn_satellite_geo_state_app_command>(ocucp.unit->get_cu_cp().get_command_handler()));
+  ocucp.commands.cmdline.commands.push_back(
+      std::make_unique<ntn_beams_app_command>(ocucp.unit->get_cu_cp().get_command_handler()));
 
   return ocucp;
 }

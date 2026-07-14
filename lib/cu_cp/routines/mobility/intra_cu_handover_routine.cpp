@@ -94,6 +94,17 @@ void intra_cu_handover_routine::operator()(coro_context<async_task<cu_cp_intra_c
   }
 
   logger.debug("ue={}: \"{}\" started...", request.source_ue_index, name());
+  if (request.ntn_context.has_value()) {
+    logger.info("ue={}: NTN source handover attempt={} beam={} serving_nci={:#x} target_nci={:#x} reports={} "
+                "candidate_age={}ms",
+                request.source_ue_index,
+                request.ntn_context->handover_attempt_id,
+                request.ntn_context->target_beam_id,
+                request.ntn_context->serving_nci,
+                request.ntn_context->target_nci,
+                request.ntn_context->consecutive_location_reports,
+                request.ntn_context->candidate_age.count());
+  }
 
   {
     // Allocate UE index at target DU.
@@ -180,6 +191,7 @@ void intra_cu_handover_routine::operator()(coro_context<async_task<cu_cp_intra_c
                                                                     *source_ue,
                                                                     source_du_f1ap_ue_ctxt_mng,
                                                                     cu_cp_handler,
+                                                                    request.ntn_context,
                                                                     logger));
     if (!rrc_reconfig_sent) {
       logger.warning(

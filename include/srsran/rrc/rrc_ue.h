@@ -28,6 +28,7 @@
 #include "srsran/asn1/rrc_nr/ul_dcch_msg_ies.h"
 #include "srsran/cu_cp/cu_cp_types.h"
 #include "srsran/cu_cp/cu_cp_ue_messages.h"
+#include "srsran/cu_cp/ntn_location.h"
 #include "srsran/ran/plmn_identity.h"
 #include "srsran/ran/rnti.h"
 #include "srsran/rrc/rrc_cell_context.h"
@@ -460,6 +461,9 @@ public:
 
   /// \brief Submit measurement report for given UE to cell manager.
   virtual void on_measurement_report(const rrc_meas_results& meas_results) = 0;
+
+  /// \brief Submit a decoded NTN UE location report for location-based mobility.
+  virtual void on_ue_location_report(const ntn_ue_location_report& location_report) {}
 };
 
 class rrc_ue_context_handler

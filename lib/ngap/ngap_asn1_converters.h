@@ -254,6 +254,20 @@ cu_cp_user_location_info_to_asn1(const cu_cp_user_location_info_nr& cu_cp_user_l
     asn1_user_location_info.time_stamp_present = true;
     asn1_user_location_info.time_stamp.from_number(cu_cp_user_location_info.time_stamp.value());
   }
+  if (cu_cp_user_location_info.ntn_derived_tac.has_value()) {
+    asn1_user_location_info.ie_exts_present                 = true;
+    asn1_user_location_info.ie_exts.nr_ntn_tai_info_present = true;
+
+    auto& ntn_tai_info      = asn1_user_location_info.ie_exts.nr_ntn_tai_info;
+    ntn_tai_info.serving_plmn = cu_cp_user_location_info.tai.plmn_id.to_bytes();
+
+    asn1::fixed_octstring<3, true> tac;
+    tac.from_number(cu_cp_user_location_info.tai.tac);
+    ntn_tai_info.tac_list_in_nr_ntn.push_back(tac);
+
+    ntn_tai_info.ue_location_derived_tac_in_nr_ntn_present = true;
+    ntn_tai_info.ue_location_derived_tac_in_nr_ntn.from_number(cu_cp_user_location_info.ntn_derived_tac.value());
+  }
 
   return asn1_user_location_info;
 }

@@ -26,7 +26,7 @@
 #include "srsran/rrc/meas_types.h"
 #include "srsran/support/compiler.h"
 #include "srsran/support/srsran_assert.h"
-#include <utility>
+#include <algorithm>
 
 using namespace srsran;
 using namespace srs_cu_cp;
@@ -34,9 +34,14 @@ using namespace srs_cu_cp;
 cell_meas_manager::cell_meas_manager(const cell_meas_manager_cfg&         cfg_,
                                      cell_meas_mobility_manager_notifier& mobility_mng_notifier_,
                                      ue_manager&                          ue_mng_) :
-  cfg(cfg_), mobility_mng_notifier(mobility_mng_notifier_), ue_mng(ue_mng_), logger(srslog::fetch_basic_logger("CU-CP"))
+  cfg(cfg_),
+  mobility_mng_notifier(mobility_mng_notifier_),
+  ue_mng(ue_mng_),
+  logger(srslog::fetch_basic_logger("CU-CP")),
+  ntn_location_mobility(cfg, mobility_mng_notifier, ue_mng, logger)
 {
   srsran_assert(is_valid_configuration(cfg, ssb_freq_to_meas_object), "Invalid cell measurement configuration");
+  ntn_location_mobility.rebuild_beam_lookup();
   generate_measurement_objects_for_serving_cells();
   log_cells(logger, cfg);
 }
@@ -100,7 +105,8 @@ cell_meas_manager::get_measurement_config(ue_index_t                         ue_
 
     if (cell_config.serving_cell_cfg.ssb_arfcn.value() == ssb_freq && cell_config.periodic_report_cfg_id.has_value()) {
       logger.debug("ue={}: Adding periodic report config for nci={:#x}", ue_index, serving_nci);
-      generate_report_config(cfg, serving_nci, cell_config.periodic_report_cfg_id.value(), new_cfg, ue_meas_context);
+      generate_report_config(
+          cfg, serving_nci, serving_nci, cell_config.periodic_report_cfg_id.value(), new_cfg, ue_meas_context);
     }
 
     for (const auto& ncell : cell_config.ncells) {
@@ -108,7 +114,7 @@ cell_meas_manager::get_measurement_config(ue_index_t                         ue_
           cfg.cells.at(ncell.nci).serving_cell_cfg.ssb_arfcn.value() == ssb_freq) {
         logger.debug("ue={}: Adding neighbor cell nci={:#x} to measurement config", ue_index, ncell.nci);
         for (const auto& report_cfg_id : ncell.report_cfg_ids) {
-          generate_report_config(cfg, ncell.nci, report_cfg_id, new_cfg, ue_meas_context);
+          generate_report_config(cfg, ncell.nci, serving_nci, report_cfg_id, new_cfg, ue_meas_context);
         }
       }
     }
@@ -148,6 +154,11 @@ std::optional<cell_meas_config> cell_meas_manager::get_cell_config(nr_cell_ident
   return cell_cfg;
 }
 
+bool cell_meas_manager::update_ntn_served_beams(const std::vector<std::string>& beam_ids)
+{
+  return ntn_location_mobility.update_served_beams(beam_ids);
+}
+
 bool cell_meas_manager::update_cell_config(nr_cell_identity nci, const serving_cell_meas_config& serv_cell_cfg)
 {
   // Store old config to revert if new config is invalid.
@@ -170,6 +181,7 @@ bool cell_meas_manager::update_cell_config(nr_cell_identity nci, const serving_c
   if (!is_valid_configuration(cfg, ssb_freq_to_meas_object)) {
     logger.warning("Invalid cell measurement configuration");
     cfg = tmp_cfg;
+    ntn_location_mobility.rebuild_beam_lookup();
     return false;
   }
 
@@ -239,6 +251,46 @@ static std::optional<pci_t> find_strongest_neighbor(ue_index_t              ue_i
   return strongest_neighbor;
 }
 
+static bool report_configured_neighbor_better_than_spcell(cell_meas_mobility_manager_notifier& mobility_mng_notifier,
+                                                          const cell_meas_manager_cfg&          cfg,
+                                                          ue_index_t                            ue_index,
+                                                          nr_cell_identity                      serving_nci,
+                                                          pci_t                                 neighbor_pci,
+                                                          srslog::basic_logger&                 logger)
+{
+  const auto serving_cell_it = cfg.cells.find(serving_nci);
+  if (serving_cell_it == cfg.cells.end()) {
+    logger.debug("ue={}: Ignoring neighbor pci={}. Cause: serving nci={:#x} is not configured",
+                 ue_index,
+                 neighbor_pci,
+                 serving_nci);
+    return false;
+  }
+
+  for (const auto& ncell : serving_cell_it->second.ncells) {
+    const auto ncell_cfg_it = cfg.cells.find(ncell.nci);
+    if (ncell_cfg_it == cfg.cells.end()) {
+      continue;
+    }
+
+    const cell_meas_config& ncell_cfg = ncell_cfg_it->second;
+    if (ncell_cfg.serving_cell_cfg.pci.has_value() && ncell_cfg.serving_cell_cfg.pci.value() == neighbor_pci) {
+      mobility_mng_notifier.on_neighbor_better_than_spcell(
+          ue_index,
+          ncell_cfg.serving_cell_cfg.nci.gnb_id(ncell_cfg.serving_cell_cfg.gnb_id_bit_length),
+          ncell_cfg.serving_cell_cfg.nci,
+          neighbor_pci);
+      return true;
+    }
+  }
+
+  logger.debug("ue={}: Ignoring reported neighbor pci={}. Cause: not present in neighbor list for serving nci={:#x}",
+               ue_index,
+               neighbor_pci,
+               serving_nci);
+  return false;
+}
+
 void cell_meas_manager::report_measurement(ue_index_t ue_index, const rrc_meas_results& meas_results)
 {
   logger.debug("ue={}: Received measurement result with meas_id={}", ue_index, fmt::underlying(meas_results.meas_id));
@@ -255,6 +307,12 @@ void cell_meas_manager::report_measurement(ue_index_t ue_index, const rrc_meas_r
 
   // Store measurement results.
   store_measurement_results(ue_index, meas_results);
+
+  if (cfg.ntn_location_mobility.enabled) {
+    logger.debug("ue={}: NTN location mobility is enabled; radio-strength measurement report does not trigger mobility",
+                 ue_index);
+    return;
+  }
 
   auto& meas_ctxt = ue_meas_context.meas_id_to_meas_context.at(meas_results.meas_id);
 
@@ -276,18 +334,9 @@ void cell_meas_manager::report_measurement(ue_index_t ue_index, const rrc_meas_r
     std::optional<pci_t> strongest_neighbor =
         find_strongest_neighbor(ue_index, meas_results, logger, periodic_ho_rsrp_offset);
     if (strongest_neighbor.has_value()) {
-      for (const auto& ncell : cfg.cells.at(meas_ctxt.nci).ncells) {
-        const cell_meas_config& ncell_cfg = cfg.cells.at(ncell.nci);
-        if (ncell_cfg.serving_cell_cfg.pci.has_value() &&
-            ncell_cfg.serving_cell_cfg.pci.value() == strongest_neighbor.value()) {
-          // Report cell.
-          mobility_mng_notifier.on_neighbor_better_than_spcell(
-              ue_index,
-              ncell_cfg.serving_cell_cfg.nci.gnb_id(ncell_cfg.serving_cell_cfg.gnb_id_bit_length),
-              ncell_cfg.serving_cell_cfg.nci,
-              strongest_neighbor.value());
-          return;
-        }
+      if (report_configured_neighbor_better_than_spcell(
+              mobility_mng_notifier, cfg, ue_index, meas_ctxt.nci, strongest_neighbor.value(), logger)) {
+        return;
       }
     }
   } else {
@@ -298,12 +347,14 @@ void cell_meas_manager::report_measurement(ue_index_t ue_index, const rrc_meas_r
       if (serv_cell.meas_result_best_neigh_cell.has_value()) {
         // Report this cell.
         if (serv_cell.meas_result_best_neigh_cell.value().pci.has_value()) {
-          mobility_mng_notifier.on_neighbor_better_than_spcell(
-              ue_index,
-              meas_ctxt.nci.gnb_id(meas_ctxt.gnb_id_bit_length),
-              meas_ctxt.nci,
-              serv_cell.meas_result_best_neigh_cell.value().pci.value());
-          return;
+          if (report_configured_neighbor_better_than_spcell(mobility_mng_notifier,
+                                                            cfg,
+                                                            ue_index,
+                                                            meas_ctxt.nci,
+                                                            serv_cell.meas_result_best_neigh_cell.value().pci.value(),
+                                                            logger)) {
+            return;
+          }
         }
       }
     }
@@ -311,12 +362,31 @@ void cell_meas_manager::report_measurement(ue_index_t ue_index, const rrc_meas_r
     // Find strongest neighbor cell.
     std::optional<pci_t> strongest_neighbor = find_strongest_neighbor(ue_index, meas_results, logger);
     if (strongest_neighbor.has_value()) {
-      // Report cell.
-      mobility_mng_notifier.on_neighbor_better_than_spcell(
-          ue_index, meas_ctxt.nci.gnb_id(meas_ctxt.gnb_id_bit_length), meas_ctxt.nci, strongest_neighbor.value());
-      return;
+      if (report_configured_neighbor_better_than_spcell(
+              mobility_mng_notifier, cfg, ue_index, meas_ctxt.nci, strongest_neighbor.value(), logger)) {
+        return;
+      }
     }
   }
+}
+
+ntn_location_report_result cell_meas_manager::report_ue_location(const ntn_ue_location_report& report)
+{
+  return ntn_location_mobility.report_ue_location(report);
+}
+
+std::optional<ntn_ue_location_report> cell_meas_manager::get_last_ue_location_report(ue_index_t ue_index) const
+{
+  cu_cp_ue* ue = ue_mng.find_ue(ue_index);
+  if (ue == nullptr) {
+    return std::nullopt;
+  }
+  return ue->get_meas_context().last_ntn_location_report;
+}
+
+void cell_meas_manager::handle_ntn_handover_result(const ntn_handover_result& result)
+{
+  ntn_location_mobility.handle_handover_result(result);
 }
 
 void cell_meas_manager::generate_measurement_objects_for_serving_cells()

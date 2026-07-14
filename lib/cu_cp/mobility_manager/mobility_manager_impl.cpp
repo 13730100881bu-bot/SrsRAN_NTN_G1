@@ -23,6 +23,7 @@
 #include "mobility_manager_impl.h"
 #include "../du_processor/du_processor_repository.h"
 #include "srsran/ran/nr_cgi.h"
+#include <algorithm>
 
 using namespace srsran;
 using namespace srs_cu_cp;
@@ -63,39 +64,156 @@ void mobility_manager::handle_neighbor_better_than_spcell(ue_index_t       ue_in
   handle_handover(ue_index, neighbor_gnb_id, neighbor_nci, neighbor_pci);
 }
 
-void mobility_manager::handle_handover(ue_index_t       ue_index,
+void mobility_manager::handle_ntn_served_beams_updated(const std::vector<std::string>& beam_ids)
+{
+  current_served_ntn_beam_ids = beam_ids;
+  logger.debug("Updated NTN mobility served beam set with {} beams", current_served_ntn_beam_ids.size());
+}
+
+void mobility_manager::handle_ntn_beam_placement_plan_updated(const ntn_beam_placement_plan& plan)
+{
+  current_ntn_beam_assignments_by_id.clear();
+  for (const auto& assignment : plan.assignments) {
+    if (!assignment.beam_id.empty()) {
+      current_ntn_beam_assignments_by_id[assignment.beam_id] = assignment;
+    }
+  }
+  logger.debug("Updated NTN mobility beam placement plan with {} assignments",
+               current_ntn_beam_assignments_by_id.size());
+}
+
+bool mobility_manager::handle_ntn_location_handover_required(const ntn_location_handover_trigger& trigger)
+{
+  if (trigger.ue_index == ue_index_t::invalid) {
+    logger.warning("Ignoring NTN location handover trigger with invalid UE index");
+    return false;
+  }
+  if (trigger.target_beam_id.empty()) {
+    logger.warning("ue={}: Ignoring NTN location handover trigger with empty target beam id", trigger.ue_index);
+    return false;
+  }
+  if (trigger.target_pci == INVALID_PCI) {
+    logger.warning("ue={}: Ignoring NTN location handover trigger for beam id={}. Cause: invalid target PCI",
+                   trigger.ue_index,
+                   trigger.target_beam_id);
+    return false;
+  }
+  if (std::find(current_served_ntn_beam_ids.begin(), current_served_ntn_beam_ids.end(), trigger.target_beam_id) ==
+      current_served_ntn_beam_ids.end()) {
+    logger.warning("ue={}: Ignoring NTN location handover trigger attempt={} beam={}. Cause: target beam is not in "
+                   "the current served beam set",
+                   trigger.ue_index,
+                   trigger.handover_attempt_id,
+                   trigger.target_beam_id);
+    return false;
+  }
+  if (std::find(trigger.served_beam_ids_snapshot.begin(),
+                trigger.served_beam_ids_snapshot.end(),
+                trigger.target_beam_id) == trigger.served_beam_ids_snapshot.end()) {
+    logger.warning("ue={}: Ignoring NTN location handover trigger attempt={} beam={}. Cause: target beam is not in "
+                   "the served beam snapshot",
+                   trigger.ue_index,
+                   trigger.handover_attempt_id,
+                   trigger.target_beam_id);
+    return false;
+  }
+
+  std::optional<du_index_t> planned_target_du_index;
+  const auto assignment_it = current_ntn_beam_assignments_by_id.find(trigger.target_beam_id);
+  if (assignment_it != current_ntn_beam_assignments_by_id.end()) {
+    const ntn_beam_du_assignment& assignment = assignment_it->second;
+    if (assignment.state != ntn_beam_assignment_state::active ||
+        assignment.du_index == du_index_t::invalid) {
+      logger.warning("ue={}: Ignoring NTN location handover trigger attempt={} beam={}. Cause: target beam is not "
+                     "active in the current beam placement plan",
+                     trigger.ue_index,
+                     trigger.handover_attempt_id,
+                     trigger.target_beam_id);
+      return false;
+    }
+    if (assignment.nci != trigger.target_nci) {
+      logger.warning("ue={}: Ignoring NTN location handover trigger attempt={} beam={}. Cause: placement plan nci={:#x} "
+                     "does not match trigger target_nci={:#x}",
+                     trigger.ue_index,
+                     trigger.handover_attempt_id,
+                     trigger.target_beam_id,
+                     assignment.nci,
+                     trigger.target_nci);
+      return false;
+    }
+    planned_target_du_index = assignment.du_index;
+  }
+
+  const auto candidate_age =
+      std::chrono::duration_cast<std::chrono::milliseconds>(trigger.last_report_time - trigger.candidate_since);
+  ntn_handover_context ntn_context;
+  ntn_context.handover_attempt_id         = trigger.handover_attempt_id;
+  ntn_context.target_beam_id                = trigger.target_beam_id;
+  ntn_context.serving_nci                   = trigger.serving_nci;
+  ntn_context.target_nci                    = trigger.target_nci;
+  ntn_context.consecutive_location_reports  = trigger.consecutive_location_reports;
+  ntn_context.candidate_age                 = std::max(candidate_age, std::chrono::milliseconds{0});
+
+  logger.info("ue={}: NTN location handover trigger attempt={} beam={} target_nci={:#x} pci={} reports={} age={}ms "
+              "served_beams={} snapshot_beams={}",
+              trigger.ue_index,
+              trigger.handover_attempt_id,
+              trigger.target_beam_id,
+              trigger.target_nci,
+              trigger.target_pci,
+              trigger.consecutive_location_reports,
+              ntn_context.candidate_age.count(),
+              current_served_ntn_beam_ids.size(),
+              trigger.served_beam_ids_snapshot.size());
+
+  return handle_handover(trigger.ue_index,
+                         trigger.target_gnb_id,
+                         trigger.target_nci,
+                         trigger.target_pci,
+                         ntn_context,
+                         planned_target_du_index);
+}
+
+bool mobility_manager::handle_handover(ue_index_t       ue_index,
                                        gnb_id_t         neighbor_gnb_id,
                                        nr_cell_identity neighbor_nci,
-                                       pci_t            neighbor_pci)
+                                       pci_t            neighbor_pci,
+                                       const std::optional<ntn_handover_context>& ntn_context,
+                                       const std::optional<du_index_t>&           planned_target_du_index)
 {
   // Find the UE context.
   cu_cp_ue* u = ue_mng.find_du_ue(ue_index);
   if (u == nullptr) {
     logger.error("ue={}: Couldn't find UE", ue_index);
-    return;
+    return false;
   }
   cu_cp_ue_context& ue_ctxt = u->get_ue_context();
   if (ue_ctxt.reconfiguration_disabled) {
     logger.debug("ue={}: MeasurementReport ignored. Cause: UE cannot be reconfigured", ue_index);
-    return;
+    return false;
   }
   if (neighbor_pci == INVALID_PCI) {
     logger.error("ue={}: Ignoring Handover Request. Cause: Invalid target PCI {} received", ue_index, neighbor_pci);
-    return;
+    return false;
   }
 
   // Handover is going ahead.
 
-  // Disable new reconfigurations from now on (except for the Handover Command).
-  ue_ctxt.reconfiguration_disabled = true;
-
   // Try to find target DU. If it is not found, it means that the target cell is not managed by this CU-CP and
   // a NG Handover is required.
-  du_index_t target_du = du_db.find_du(neighbor_pci);
+  du_index_t target_du = du_index_t::invalid;
+  if (planned_target_du_index.has_value()) {
+    target_du = planned_target_du_index.value();
+    if (du_db.find_du_processor(target_du) == nullptr) {
+      logger.warning("ue={}: Rejecting handover. Cause: planned target_du={} is not connected", ue_index, target_du);
+      return false;
+    }
+  } else {
+    target_du = du_db.find_du(neighbor_pci);
+  }
   if (target_du == du_index_t::invalid) {
     logger.debug("ue={}: Requesting inter CU handover. No local DU/cell with pci={} found", ue_index, neighbor_pci);
-    handle_inter_cu_handover(ue_index, neighbor_gnb_id, neighbor_nci);
-    return;
+    return handle_inter_cu_handover(ue_index, neighbor_gnb_id, neighbor_nci);
   }
 
   du_index_t source_du = ue_mng.find_du_ue(ue_index)->get_du_index();
@@ -108,13 +226,14 @@ void mobility_manager::handle_handover(ue_index_t       ue_index,
                 source_du,
                 target_du);
   }
-  handle_intra_cu_handover(ue_index, neighbor_pci, source_du, target_du);
+  return handle_intra_cu_handover(ue_index, neighbor_pci, source_du, target_du, ntn_context);
 }
 
-void mobility_manager::handle_intra_cu_handover(ue_index_t source_ue_index,
+bool mobility_manager::handle_intra_cu_handover(ue_index_t source_ue_index,
                                                 pci_t      neighbor_pci,
                                                 du_index_t source_du_index,
-                                                du_index_t target_du_index)
+                                                du_index_t target_du_index,
+                                                const std::optional<ntn_handover_context>& ntn_context)
 {
   // Lookup CGI at target DU.
   std::optional<nr_cell_global_id_t> cgi =
@@ -122,7 +241,7 @@ void mobility_manager::handle_intra_cu_handover(ue_index_t source_ue_index,
   if (!cgi.has_value()) {
     logger.warning(
         "ue={}: Couldn't retrieve CGI for pci={} at du_index={}", source_ue_index, neighbor_pci, target_du_index);
-    return;
+    return false;
   }
 
   cu_cp_intra_cu_handover_request request = {};
@@ -130,31 +249,51 @@ void mobility_manager::handle_intra_cu_handover(ue_index_t source_ue_index,
   request.target_pci                      = neighbor_pci;
   request.cgi                             = cgi.value();
   request.target_du_index                 = target_du_index;
+  request.ntn_context                     = ntn_context;
 
   cu_cp_ue* u = ue_mng.find_du_ue(source_ue_index);
   if (u == nullptr) {
     logger.error("ue={}: Couldn't find UE", source_ue_index);
-    return;
+    return false;
   }
 
+  // Disable new reconfigurations from now on (except for the Handover Command).
+  u->get_ue_context().reconfiguration_disabled = true;
+
   // Trigger Intra CU handover routine on the DU processor of the source DU.
-  auto ho_trigger = [this, request, response = cu_cp_intra_cu_handover_response{}, &source_du_index, &target_du_index](
+  auto ho_trigger = [this, request, response = cu_cp_intra_cu_handover_response{}, source_du_index, target_du_index](
                         coro_context<async_task<void>>& ctx) mutable {
     CORO_BEGIN(ctx);
     CORO_AWAIT_VALUE(response, cu_cp_notifier.on_intra_cu_handover_required(request, source_du_index, target_du_index));
+    if (!response.success) {
+      if (!request.ntn_context.has_value()) {
+        if (cu_cp_ue* source_ue = ue_mng.find_du_ue(request.source_ue_index); source_ue != nullptr) {
+          source_ue->get_ue_context().reconfiguration_disabled = false;
+        }
+      } else {
+        ntn_handover_result result;
+        result.source_ue_index                   = request.source_ue_index;
+        result.context                           = request.ntn_context.value();
+        result.success                           = false;
+        result.failure_cause                     = ntn_handover_failure_cause::source_preparation_failed;
+        result.source_reconfiguration_can_resume = true;
+        cu_cp_notifier.on_ntn_handover_result(result);
+      }
+    }
     CORO_RETURN();
   };
   u->get_task_sched().schedule_async_task(launch_async(std::move(ho_trigger)));
+  return true;
 }
 
-void mobility_manager::handle_inter_cu_handover(ue_index_t       source_ue_index,
+bool mobility_manager::handle_inter_cu_handover(ue_index_t       source_ue_index,
                                                 gnb_id_t         target_gnb_id,
                                                 nr_cell_identity target_nci)
 {
   cu_cp_ue* u = ue_mng.find_du_ue(source_ue_index);
   if (u == nullptr) {
     logger.error("ue={}: Couldn't find UE", source_ue_index);
-    return;
+    return false;
   }
 
   ngap_handover_preparation_request request = {};
@@ -180,8 +319,11 @@ void mobility_manager::handle_inter_cu_handover(ue_index_t       source_ue_index
   auto* ngap = ngap_db.find_ngap(ue_ctxt.plmn);
   if (ngap == nullptr) {
     logger.error("ue={}: Couldn't find NGAP", source_ue_index);
-    return;
+    return false;
   }
+
+  // Disable new reconfigurations from now on (except for the Handover Command).
+  ue_ctxt.reconfiguration_disabled = true;
 
   // Send handover preparation request to the NGAP handler.
   auto ho_trigger = [ngap, request, response = ngap_handover_preparation_response{}](
@@ -191,4 +333,5 @@ void mobility_manager::handle_inter_cu_handover(ue_index_t       source_ue_index
     CORO_RETURN();
   };
   u->get_task_sched().schedule_async_task(launch_async(std::move(ho_trigger)));
+  return true;
 }

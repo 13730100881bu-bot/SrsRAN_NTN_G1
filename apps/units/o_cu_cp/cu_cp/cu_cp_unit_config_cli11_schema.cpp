@@ -311,6 +311,11 @@ static void configure_cli11_mobility_args(CLI::App& app, cu_cp_unit_mobility_con
              config.trigger_handover_from_measurements,
              "Whether to start HO if neighbor cells become stronger")
       ->capture_default_str();
+  add_option(app,
+             "--neighbor_cell_info_json_file",
+             config.neighbor_cell_info_json_file,
+             "Path to the static neighbor-cell information JSON file")
+      ->capture_default_str();
 
   // Cell map parameters.
   app.add_option_function<std::vector<std::string>>(
@@ -345,6 +350,143 @@ static void configure_cli11_mobility_args(CLI::App& app, cu_cp_unit_mobility_con
         }
       },
       "Sets report configurations");
+
+  CLI::App* ntn_location_subcmd =
+      app.add_subcommand("ntn_location_mobility", "NTN location-based mobility configuration");
+  add_option(*ntn_location_subcmd,
+             "--enabled",
+             config.ntn_location_mobility.enabled,
+             "Enable NTN location-based mobility")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--beam_table_json_file",
+             config.ntn_location_mobility.beam_table_json_file,
+             "Path to the static NTN beam table JSON file")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--served_beam_min_elevation_deg",
+             config.ntn_location_mobility.served_beam_min_elevation_deg,
+             "Minimum satellite elevation angle for runtime NTN served beam selection")
+      ->capture_default_str()
+      ->check(CLI::Range(-90.0, 90.0));
+  add_option(*ntn_location_subcmd,
+             "--max_nof_served_beams",
+             config.ntn_location_mobility.max_nof_served_beams,
+             "Maximum number of NTN beams simultaneously served by the hopping schedule")
+      ->capture_default_str()
+      ->check(CLI::Range(1U, 1024U));
+  add_option(*ntn_location_subcmd,
+             "--served_beam_hopping_enabled",
+             config.ntn_location_mobility.served_beam_hopping_enabled,
+             "Rotate the active CU-CP NTN beam-set window across visible beams")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--served_beam_hopping_dwell_updates",
+             config.ntn_location_mobility.served_beam_hopping_dwell_updates,
+             "Number of satellite-state update periods one CU-CP NTN hopping window should hold")
+      ->capture_default_str()
+      ->check(CLI::Range(1U, 1024U));
+  add_option(*ntn_location_subcmd,
+             "--satellite_state_source",
+             config.ntn_location_mobility.satellite_state_source,
+             "Satellite state source used for runtime served beam updates")
+      ->capture_default_str()
+      ->check(CLI::IsMember({"manual", "circular_orbit", "tle"}));
+  add_option(*ntn_location_subcmd,
+             "--satellite_state_update_period_ms",
+             config.ntn_location_mobility.satellite_state_update_period_ms,
+             "Period of orbit-driven satellite state updates")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--circular_orbit_altitude_m",
+             config.ntn_location_mobility.circular_orbit_altitude_m,
+             "Circular orbit altitude in meters")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--circular_orbit_inclination_deg",
+             config.ntn_location_mobility.circular_orbit_inclination_deg,
+             "Circular orbit inclination in degrees")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--circular_orbit_raan_deg",
+             config.ntn_location_mobility.circular_orbit_raan_deg,
+             "Circular orbit RAAN in degrees")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--circular_orbit_argument_of_latitude_deg",
+             config.ntn_location_mobility.circular_orbit_argument_of_latitude_deg,
+             "Circular orbit argument of latitude at epoch in degrees")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--circular_orbit_epoch_unix_s",
+             config.ntn_location_mobility.circular_orbit_epoch_unix_s,
+             "Circular orbit epoch as Unix seconds");
+  add_option(*ntn_location_subcmd,
+             "--tle_satellite_name",
+             config.ntn_location_mobility.tle_satellite_name,
+             "TLE satellite name")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd, "--tle_line1", config.ntn_location_mobility.tle_line1, "TLE line 1")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd, "--tle_line2", config.ntn_location_mobility.tle_line2, "TLE line 2")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--measurement_report_period_ms",
+             config.ntn_location_mobility.measurement_report_period_ms,
+             "Period of UE location samples derived from periodic MeasurementReport messages")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--time_to_trigger_ms",
+             config.ntn_location_mobility.time_to_trigger_ms,
+             "Minimum stable NTN candidate time before handover")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--max_report_gap_ms",
+             config.ntn_location_mobility.max_report_gap_ms,
+             "Maximum allowed gap between consecutive NTN location samples")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--location_max_age_ms",
+             config.ntn_location_mobility.location_max_age_ms,
+             "Maximum accepted age of an NTN UE location sample")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--handover_retry_timeout_ms",
+             config.ntn_location_mobility.handover_retry_timeout_ms,
+             "Retry timeout after an accepted NTN location-triggered handover")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--required_consecutive_location_reports",
+             config.ntn_location_mobility.required_consecutive_location_reports,
+             "Required consecutive NTN location samples for the same candidate beam")
+      ->capture_default_str()
+      ->check(CLI::Range(1U, 1024U));
+  add_option(*ntn_location_subcmd,
+             "--boundary_hysteresis_m",
+             config.ntn_location_mobility.boundary_hysteresis_m,
+             "Additional serving-beam margin in meters used to reduce boundary ping-pong")
+      ->capture_default_str()
+      ->check(CLI::Range(0.0, 10000000.0));
+  add_option(*ntn_location_subcmd,
+             "--max_horizontal_accuracy_m",
+             config.ntn_location_mobility.max_horizontal_accuracy_m,
+             "Maximum accepted UE horizontal position error in meters")
+      ->check(CLI::Range(0.0, 10000000.0));
+  add_option(*ntn_location_subcmd,
+             "--core_network_reporting_local_forwarding_enabled",
+             config.ntn_location_mobility.core_network_reporting_local_forwarding_enabled,
+             "Locally forward accepted NTN UE location reports to NGAP LocationReport")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--core_network_reporting_amf_control_enabled",
+             config.ntn_location_mobility.core_network_reporting_amf_control_enabled,
+             "Accept AMF LocationReportingControl requests for NTN location reporting")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--core_network_reporting_min_report_interval_ms",
+             config.ntn_location_mobility.core_network_reporting_min_report_interval_ms,
+             "Minimum interval between two NTN core-network LocationReports for the same UE")
+      ->capture_default_str();
 }
 
 static void configure_cli11_rrc_args(CLI::App& app, cu_cp_unit_rrc_config& config)
@@ -427,6 +569,48 @@ static void configure_cli11_cu_cp_args(CLI::App& app, cu_cp_unit_config& cu_cp_p
   add_option(app, "--max_nof_drbs_per_ue", cu_cp_params.max_nof_drbs_per_ue, "Maximum number of DRBs per UE")
       ->capture_default_str()
       ->check(CLI::Range(1, 29));
+
+  add_option(app,
+             "--initial_access_max_ue_usage",
+             cu_cp_params.initial_access_admission.max_ue_usage,
+             "Maximum UE usage percentage for initial access admission")
+      ->capture_default_str()
+      ->check(CLI::Range(1, 100));
+
+  add_option(app,
+             "--initial_access_max_drb_usage",
+             cu_cp_params.initial_access_admission.max_drb_usage,
+             "Maximum DRB usage percentage for initial access admission")
+      ->capture_default_str()
+      ->check(CLI::Range(1, 100));
+
+  add_option(app,
+             "--reestablishment_max_ue_usage",
+             cu_cp_params.reestablishment_admission.max_ue_usage,
+             "Maximum UE usage percentage for RRC reestablishment admission")
+      ->capture_default_str()
+      ->check(CLI::Range(1, 100));
+
+  add_option(app,
+             "--reestablishment_max_drb_usage",
+             cu_cp_params.reestablishment_admission.max_drb_usage,
+             "Maximum DRB usage percentage for RRC reestablishment admission")
+      ->capture_default_str()
+      ->check(CLI::Range(1, 100));
+
+  add_option(app,
+             "--handover_max_ue_usage",
+             cu_cp_params.handover_admission.max_ue_usage,
+             "Maximum UE usage percentage for handover target admission")
+      ->capture_default_str()
+      ->check(CLI::Range(1, 100));
+
+  add_option(app,
+             "--handover_max_drb_usage",
+             cu_cp_params.handover_admission.max_drb_usage,
+             "Maximum DRB usage percentage for handover target admission")
+      ->capture_default_str()
+      ->check(CLI::Range(1, 100));
 
   add_option(app, "--inactivity_timer", cu_cp_params.inactivity_timer, "UE/PDU Session/DRB inactivity timer in seconds")
       ->capture_default_str()

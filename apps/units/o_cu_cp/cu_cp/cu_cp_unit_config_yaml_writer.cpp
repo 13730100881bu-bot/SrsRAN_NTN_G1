@@ -197,17 +197,60 @@ static YAML::Node build_cu_cp_mobility_report_section(const cu_cp_unit_report_co
   return node;
 }
 
+static YAML::Node build_cu_cp_ntn_location_mobility_section(const cu_cp_unit_ntn_location_mobility_config& config)
+{
+  YAML::Node node;
+
+  node["enabled"]                                = config.enabled;
+  node["beam_table_json_file"]                   = config.beam_table_json_file;
+  node["served_beam_min_elevation_deg"]          = config.served_beam_min_elevation_deg;
+  node["max_nof_served_beams"]                   = config.max_nof_served_beams;
+  node["served_beam_hopping_enabled"]            = config.served_beam_hopping_enabled;
+  node["served_beam_hopping_dwell_updates"]      = config.served_beam_hopping_dwell_updates;
+  node["satellite_state_source"]                 = config.satellite_state_source;
+  node["satellite_state_update_period_ms"]       = config.satellite_state_update_period_ms;
+  node["circular_orbit_altitude_m"]              = config.circular_orbit_altitude_m;
+  node["circular_orbit_inclination_deg"]         = config.circular_orbit_inclination_deg;
+  node["circular_orbit_raan_deg"]                = config.circular_orbit_raan_deg;
+  node["circular_orbit_argument_of_latitude_deg"] = config.circular_orbit_argument_of_latitude_deg;
+  if (config.circular_orbit_epoch_unix_s.has_value()) {
+    node["circular_orbit_epoch_unix_s"] = config.circular_orbit_epoch_unix_s.value();
+  }
+  node["tle_satellite_name"]                     = config.tle_satellite_name;
+  node["tle_line1"]                              = config.tle_line1;
+  node["tle_line2"]                              = config.tle_line2;
+  node["measurement_report_period_ms"]           = config.measurement_report_period_ms;
+  node["time_to_trigger_ms"]                     = config.time_to_trigger_ms;
+  node["max_report_gap_ms"]                      = config.max_report_gap_ms;
+  node["location_max_age_ms"]                    = config.location_max_age_ms;
+  node["handover_retry_timeout_ms"]              = config.handover_retry_timeout_ms;
+  node["required_consecutive_location_reports"]  = config.required_consecutive_location_reports;
+  node["boundary_hysteresis_m"]                  = config.boundary_hysteresis_m;
+  if (config.max_horizontal_accuracy_m.has_value()) {
+    node["max_horizontal_accuracy_m"] = config.max_horizontal_accuracy_m.value();
+  }
+  node["core_network_reporting_local_forwarding_enabled"] =
+      config.core_network_reporting_local_forwarding_enabled;
+  node["core_network_reporting_amf_control_enabled"] = config.core_network_reporting_amf_control_enabled;
+  node["core_network_reporting_min_report_interval_ms"] =
+      config.core_network_reporting_min_report_interval_ms;
+
+  return node;
+}
+
 static YAML::Node build_cu_cp_mobility_section(const cu_cp_unit_mobility_config& config)
 {
   YAML::Node node;
 
   node["trigger_handover_from_measurements"] = config.trigger_handover_from_measurements;
+  node["neighbor_cell_info_json_file"]        = config.neighbor_cell_info_json_file;
   for (const auto& cell : config.cells) {
     node["cells"] = build_cu_cp_mobility_cells_section(cell);
   }
   for (const auto& report : config.report_configs) {
     node["report_configs"] = build_cu_cp_mobility_report_section(report);
   }
+  node["ntn_location_mobility"] = build_cu_cp_ntn_location_mobility_section(config.ntn_location_mobility);
 
   return node;
 }
@@ -260,6 +303,12 @@ static YAML::Node build_cu_cp_section(const cu_cp_unit_config& config)
   node["max_nof_cu_ups"]              = config.max_nof_cu_ups;
   node["max_nof_ues"]                 = config.max_nof_ues;
   node["max_nof_drbs_per_ue"]         = static_cast<unsigned>(config.max_nof_drbs_per_ue);
+  node["initial_access_max_ue_usage"]   = config.initial_access_admission.max_ue_usage;
+  node["initial_access_max_drb_usage"]  = config.initial_access_admission.max_drb_usage;
+  node["reestablishment_max_ue_usage"]  = config.reestablishment_admission.max_ue_usage;
+  node["reestablishment_max_drb_usage"] = config.reestablishment_admission.max_drb_usage;
+  node["handover_max_ue_usage"]         = config.handover_admission.max_ue_usage;
+  node["handover_max_drb_usage"]        = config.handover_admission.max_drb_usage;
   node["inactivity_timer"]            = config.inactivity_timer;
   node["request_pdu_session_timeout"] = config.request_pdu_session_timeout;
 

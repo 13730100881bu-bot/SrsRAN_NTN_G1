@@ -40,10 +40,113 @@
 #include "srsran/ngap/ngap_setup.h"
 #include "srsran/ngap/ngap_types.h"
 #include "srsran/ran/cause/ngap_cause.h"
+#include <algorithm>
 
 using namespace srsran;
 using namespace asn1::ngap;
 using namespace srs_cu_cp;
+
+static bool fill_location_reporting_event_type(ngap_location_reporting_event_type& event_type,
+                                               const event_type_e&                 asn1_event_type)
+{
+  switch (asn1_event_type.value) {
+    case event_type_opts::direct:
+      event_type = ngap_location_reporting_event_type::direct;
+      return true;
+    case event_type_opts::change_of_serve_cell:
+      event_type = ngap_location_reporting_event_type::change_of_serving_cell;
+      return true;
+    case event_type_opts::ue_presence_in_area_of_interest:
+      event_type = ngap_location_reporting_event_type::ue_presence_in_area_of_interest;
+      return true;
+    case event_type_opts::stop_change_of_serve_cell:
+      event_type = ngap_location_reporting_event_type::stop_change_of_serving_cell;
+      return true;
+    case event_type_opts::stop_ue_presence_in_area_of_interest:
+      event_type = ngap_location_reporting_event_type::stop_ue_presence_in_area_of_interest;
+      return true;
+    case event_type_opts::cancel_location_report_for_the_ue:
+      event_type = ngap_location_reporting_event_type::cancel_location_report_for_the_ue;
+      return true;
+    default:
+      return false;
+  }
+}
+
+static event_type_e make_asn1_location_reporting_event_type(ngap_location_reporting_event_type event_type)
+{
+  event_type_e asn1_event_type;
+  switch (event_type) {
+    case ngap_location_reporting_event_type::direct:
+      asn1_event_type.value = event_type_opts::direct;
+      break;
+    case ngap_location_reporting_event_type::change_of_serving_cell:
+      asn1_event_type.value = event_type_opts::change_of_serve_cell;
+      break;
+    case ngap_location_reporting_event_type::ue_presence_in_area_of_interest:
+      asn1_event_type.value = event_type_opts::ue_presence_in_area_of_interest;
+      break;
+    case ngap_location_reporting_event_type::stop_change_of_serving_cell:
+      asn1_event_type.value = event_type_opts::stop_change_of_serve_cell;
+      break;
+    case ngap_location_reporting_event_type::stop_ue_presence_in_area_of_interest:
+      asn1_event_type.value = event_type_opts::stop_ue_presence_in_area_of_interest;
+      break;
+    case ngap_location_reporting_event_type::cancel_location_report_for_the_ue:
+      asn1_event_type.value = event_type_opts::cancel_location_report_for_the_ue;
+      break;
+  }
+  return asn1_event_type;
+}
+
+static bool has_duplicate_location_report_ref_ids(const std::vector<uint8_t>& ref_ids)
+{
+  for (unsigned i = 0; i != ref_ids.size(); ++i) {
+    for (unsigned j = i + 1; j != ref_ids.size(); ++j) {
+      if (ref_ids[i] == ref_ids[j]) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+static bool fill_location_reporting_request_type(ngap_location_reporting_request_type& request_type,
+                                                 const location_report_request_type_s& asn1_request_type)
+{
+  if (asn1_request_type.report_area.value != report_area_opts::cell) {
+    return false;
+  }
+  if (!fill_location_reporting_event_type(request_type.event_type, asn1_request_type.event_type)) {
+    return false;
+  }
+
+  request_type.area_of_interest_ref_ids.clear();
+  for (const area_of_interest_item_s& item : asn1_request_type.area_of_interest_list) {
+    request_type.area_of_interest_ref_ids.push_back(item.location_report_ref_id);
+  }
+
+  if (asn1_request_type.location_report_ref_id_to_be_cancelled_present) {
+    request_type.location_report_ref_id_to_be_cancelled =
+        asn1_request_type.location_report_ref_id_to_be_cancelled;
+  }
+
+  return true;
+}
+
+static location_report_request_type_s
+make_asn1_location_reporting_request_type(const ngap_location_reporting_request_type& request_type)
+{
+  location_report_request_type_s asn1_request_type;
+  asn1_request_type.event_type = make_asn1_location_reporting_event_type(request_type.event_type);
+  asn1_request_type.report_area.value = report_area_opts::cell;
+  if (request_type.location_report_ref_id_to_be_cancelled.has_value()) {
+    asn1_request_type.location_report_ref_id_to_be_cancelled_present = true;
+    asn1_request_type.location_report_ref_id_to_be_cancelled =
+        request_type.location_report_ref_id_to_be_cancelled.value();
+  }
+  return asn1_request_type;
+}
 
 ngap_impl::ngap_impl(const ngap_configuration& ngap_cfg_,
                      ngap_cu_cp_notifier&      cu_cp_notifier_,
@@ -348,6 +451,9 @@ void ngap_impl::handle_initiating_message(const init_msg_s& msg)
       break;
     case ngap_elem_procs_o::init_msg_c::types_opts::dl_non_ue_associated_nrppa_transport:
       handle_dl_non_ue_associated_nrppa_transport(msg.value.dl_non_ue_associated_nrppa_transport());
+      break;
+    case ngap_elem_procs_o::init_msg_c::types_opts::location_report_ctrl:
+      handle_location_reporting_control(msg.value.location_report_ctrl());
       break;
     case ngap_elem_procs_o::init_msg_c::types_opts::error_ind:
       handle_error_indication(msg.value.error_ind());
@@ -923,6 +1029,79 @@ void ngap_impl::handle_dl_non_ue_associated_nrppa_transport(
 
 #endif // SRSRAN_HAS_ENTERPRISE
 
+void ngap_impl::send_location_reporting_failure(uint64_t amf_ue_ngap_id, uint64_t ran_ue_ngap_id, ngap_cause_t cause)
+{
+  ngap_message ngap_msg = {};
+  ngap_msg.pdu.set_init_msg();
+  ngap_msg.pdu.init_msg().load_info_obj(ASN1_NGAP_ID_LOCATION_REPORT_FAIL_IND);
+
+  location_report_fail_ind_s& fail_ind = ngap_msg.pdu.init_msg().value.location_report_fail_ind();
+  fail_ind->amf_ue_ngap_id             = amf_ue_ngap_id;
+  fail_ind->ran_ue_ngap_id             = ran_ue_ngap_id;
+  fail_ind->cause                      = cause_to_asn1(cause);
+
+  if (!tx_pdu_notifier.on_new_message(ngap_msg)) {
+    logger.warning("AMF notifier is not set. Cannot send LocationReportingFailureIndication");
+  }
+}
+
+void ngap_impl::handle_location_reporting_control(const asn1::ngap::location_report_ctrl_s& msg)
+{
+  const ran_ue_id_t ran_ue_id = uint_to_ran_ue_id(msg->ran_ue_ngap_id);
+  const amf_ue_id_t amf_ue_id = uint_to_amf_ue_id(msg->amf_ue_ngap_id);
+
+  if (!ue_ctxt_list.contains(ran_ue_id)) {
+    logger.warning("ran_ue={} amf_ue={}: Rejecting LocationReportingControl. UE context does not exist",
+                   msg->ran_ue_ngap_id,
+                   msg->amf_ue_ngap_id);
+    send_location_reporting_failure(
+        msg->amf_ue_ngap_id, msg->ran_ue_ngap_id, ngap_cause_radio_network_t::unknown_local_ue_ngap_id);
+    return;
+  }
+
+  if (!validate_consistent_ue_id_pair(ran_ue_id, amf_ue_id)) {
+    handle_inconsistent_ue_id_pair(ran_ue_id, amf_ue_id);
+    return;
+  }
+
+  ngap_ue_context& ue_ctxt = ue_ctxt_list[ran_ue_id];
+  if (ue_ctxt.ue_ids.amf_ue_id == amf_ue_id_t::invalid) {
+    ue_ctxt_list.update_amf_ue_id(ran_ue_id, amf_ue_id);
+  }
+
+  if (ue_ctxt.release_requested || ue_ctxt.release_scheduled) {
+    ue_ctxt.logger.log_debug("Rejecting LocationReportingControl. Cause: UE release is already pending");
+    send_location_reporting_failure(msg->amf_ue_ngap_id, msg->ran_ue_ngap_id, ngap_cause_radio_network_t::unspecified);
+    return;
+  }
+
+  ngap_location_reporting_request_type request_type;
+  if (!fill_location_reporting_request_type(request_type, msg->location_report_request_type)) {
+    ue_ctxt.logger.log_debug("Rejecting LocationReportingControl. Cause: unsupported request type");
+    send_location_reporting_failure(msg->amf_ue_ngap_id, msg->ran_ue_ngap_id, ngap_cause_radio_network_t::unspecified);
+    return;
+  }
+
+  if (has_duplicate_location_report_ref_ids(request_type.area_of_interest_ref_ids)) {
+    ue_ctxt.logger.log_debug("Rejecting LocationReportingControl. Cause: duplicate location report reference IDs");
+    send_location_reporting_failure(msg->amf_ue_ngap_id,
+                                    msg->ran_ue_ngap_id,
+                                    ngap_cause_radio_network_t::multiple_location_report_ref_id_instances);
+    return;
+  }
+
+  ngap_location_reporting_control control;
+  control.ue_index     = ue_ctxt.ue_ids.ue_index;
+  control.request_type = std::move(request_type);
+
+  const ngap_location_reporting_control_response response =
+      cu_cp_notifier.on_location_reporting_control(control);
+  if (!response.accepted) {
+    ue_ctxt.logger.log_debug("Rejecting LocationReportingControl. Cause={}", response.cause);
+    send_location_reporting_failure(msg->amf_ue_ngap_id, msg->ran_ue_ngap_id, response.cause);
+  }
+}
+
 void ngap_impl::handle_error_indication(const asn1::ngap::error_ind_s& msg)
 {
   amf_ue_id_t amf_ue_id = amf_ue_id_t::invalid;
@@ -1280,6 +1459,52 @@ ngap_impl::handle_rrc_inactive_transition_report_required(const ngap_rrc_inactiv
 
     CORO_RETURN(true);
   });
+}
+
+bool ngap_impl::handle_location_report_required(const ngap_location_report& report)
+{
+  if (!ue_ctxt_list.contains(report.ue_index)) {
+    logger.warning("ue={}: Dropping LocationReport. UE context does not exist", report.ue_index);
+    return false;
+  }
+
+  ngap_ue_context& ue_ctxt = ue_ctxt_list[report.ue_index];
+  if (ue_ctxt.ue_ids.amf_ue_id == amf_ue_id_t::invalid) {
+    ue_ctxt.logger.log_debug("Dropping LocationReport. UE does not have an AMF UE ID");
+    return false;
+  }
+  if (ue_ctxt.release_requested || ue_ctxt.release_scheduled) {
+    ue_ctxt.logger.log_debug("Dropping LocationReport. Cause: UE release is already pending");
+    return false;
+  }
+
+  ngap_message ngap_msg = {};
+  ngap_msg.pdu.set_init_msg();
+  ngap_msg.pdu.init_msg().load_info_obj(ASN1_NGAP_ID_LOCATION_REPORT);
+
+  location_report_s& asn1_location_report = ngap_msg.pdu.init_msg().value.location_report();
+  asn1_location_report->ran_ue_ngap_id    = ran_ue_id_to_uint(ue_ctxt.ue_ids.ran_ue_id);
+  asn1_location_report->amf_ue_ngap_id    = amf_ue_id_to_uint(ue_ctxt.ue_ids.amf_ue_id);
+  asn1_location_report->user_location_info.set_user_location_info_nr() =
+      cu_cp_user_location_info_to_asn1(report.user_location_info);
+  asn1_location_report->location_report_request_type =
+      make_asn1_location_reporting_request_type(report.request_type);
+
+  if (!report.ue_presence_in_area_of_interest_list.empty()) {
+    asn1_location_report->ue_presence_in_area_of_interest_list_present = true;
+    for (const auto& presence : report.ue_presence_in_area_of_interest_list) {
+      ue_presence_in_area_of_interest_item_s asn1_presence;
+      asn1_presence.location_report_ref_id = presence.location_report_ref_id;
+      asn1_presence.ue_presence.value     = ue_presence_opts::unknown;
+      asn1_location_report->ue_presence_in_area_of_interest_list.push_back(asn1_presence);
+    }
+  }
+
+  if (!tx_pdu_notifier.on_new_message(ngap_msg)) {
+    ue_ctxt.logger.log_warning("AMF notifier is not set. Cannot send LocationReport");
+    return false;
+  }
+  return true;
 }
 
 ngap_info ngap_impl::handle_ngap_metrics_report_request() const

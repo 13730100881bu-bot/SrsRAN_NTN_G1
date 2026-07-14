@@ -398,11 +398,20 @@ public:
     logger.error("DL non UE associated NRPPa transport failed. Cause: NRPPa transport PDUs not supported.");
   }
 
+  ngap_location_reporting_control_response
+  on_location_reporting_control(const ngap_location_reporting_control& request) override
+  {
+    last_location_reporting_control = request;
+    return location_reporting_control_response;
+  }
+
   ue_index_t                                 last_ue = ue_index_t::invalid;
   ngap_init_context_setup_request            last_init_ctxt_setup_request;
   cu_cp_pdu_session_resource_setup_request   last_request;
   cu_cp_pdu_session_resource_modify_request  last_modify_request;
   cu_cp_pdu_session_resource_release_command last_release_command;
+  ngap_location_reporting_control            last_location_reporting_control;
+  ngap_location_reporting_control_response   location_reporting_control_response;
   std::optional<ue_index_t>                  last_created_ue_index;
   cu_cp_paging_message                       last_paging_msg;
 

@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include "../ntn_mobility/ntn_beam_placement_planner.h"
 #include "../ngap_repository.h"
 #include "../ue_manager/ue_manager_impl.h"
 #include "metrics/mobility_manager_metrics_aggregator.h"
@@ -29,6 +30,11 @@
 #include "srsran/cu_cp/cu_cp_f1c_handler.h"
 #include "srsran/cu_cp/cu_cp_types.h"
 #include "srsran/cu_cp/mobility_manager_config.h"
+#include "srsran/cu_cp/ntn_location.h"
+#include <map>
+#include <optional>
+#include <string>
+#include <vector>
 
 namespace srsran {
 namespace srs_cu_cp {
@@ -46,6 +52,15 @@ public:
                                                   gnb_id_t         neighbor_gnb_id,
                                                   nr_cell_identity neighbor_nci,
                                                   pci_t            neighbor_pci) = 0;
+
+  /// \brief Handle NTN location-based handover trigger.
+  virtual bool handle_ntn_location_handover_required(const ntn_location_handover_trigger& trigger) = 0;
+
+  /// \brief Update the current set of NTN beams that can be served by the CU-CP.
+  virtual void handle_ntn_served_beams_updated(const std::vector<std::string>& beam_ids) {}
+
+  /// \brief Update the CU-CP NTN beam-to-DU placement plan.
+  virtual void handle_ntn_beam_placement_plan_updated(const ntn_beam_placement_plan& plan) {}
 };
 
 /// Interface used to capture the mobility management metrics to the CU-CP.
@@ -77,6 +92,10 @@ public:
                                           nr_cell_identity neighbor_nci,
                                           pci_t            neighbor_pci) override;
 
+  bool handle_ntn_location_handover_required(const ntn_location_handover_trigger& trigger) override;
+  void handle_ntn_served_beams_updated(const std::vector<std::string>& beam_ids) override;
+  void handle_ntn_beam_placement_plan_updated(const ntn_beam_placement_plan& plan) override;
+
   mobility_manager_metrics_aggregator& get_metrics_handler() { return metrics_handler; }
 
   mobility_management_metrics handle_mobility_metrics_report_request() const override
@@ -85,13 +104,18 @@ public:
   }
 
 private:
-  void
-  handle_handover(ue_index_t ue_index, gnb_id_t neighbor_gnb_id, nr_cell_identity neighbor_nci, pci_t neighbor_pci);
-  void handle_inter_cu_handover(ue_index_t source_ue_index, gnb_id_t target_gnb_id, nr_cell_identity target_nci);
-  void handle_intra_cu_handover(ue_index_t source_ue_index,
+  bool handle_handover(ue_index_t                               ue_index,
+                       gnb_id_t                                 neighbor_gnb_id,
+                       nr_cell_identity                         neighbor_nci,
+                       pci_t                                    neighbor_pci,
+                       const std::optional<ntn_handover_context>& ntn_context = std::nullopt,
+                       const std::optional<du_index_t>&           planned_target_du_index = std::nullopt);
+  bool handle_inter_cu_handover(ue_index_t source_ue_index, gnb_id_t target_gnb_id, nr_cell_identity target_nci);
+  bool handle_intra_cu_handover(ue_index_t source_ue_index,
                                 pci_t      neighbor_pci,
                                 du_index_t source_du_index,
-                                du_index_t target_du_index);
+                                du_index_t target_du_index,
+                                const std::optional<ntn_handover_context>& ntn_context);
 
   mobility_manager_cfg             cfg;
   mobility_manager_cu_cp_notifier& cu_cp_notifier;
@@ -100,6 +124,9 @@ private:
   ue_manager&                      ue_mng;
 
   mobility_manager_metrics_aggregator metrics_handler;
+
+  std::vector<std::string> current_served_ntn_beam_ids;
+  std::map<std::string, ntn_beam_du_assignment> current_ntn_beam_assignments_by_id;
 
   srslog::basic_logger& logger;
 };

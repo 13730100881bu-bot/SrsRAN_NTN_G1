@@ -22,12 +22,118 @@
 
 #include "lib/f1ap/asn1_helpers.h"
 #include "srsran/asn1/f1ap/f1ap.h"
+#include "srsran/f1ap/ntn_ul_slot_resource_request.h"
 #include "srsran/ran/nr_cgi.h"
 #include "srsran/ran/up_transport_layer_info.h"
 #include "srsran/support/test_utils.h"
 #include <gtest/gtest.h>
 
 using namespace srsran;
+
+static byte_buffer make_ntn_ul_slot_request_container(std::initializer_list<uint8_t> bytes)
+{
+  return byte_buffer::create(bytes).value();
+}
+
+TEST(f1ap_ntn_ul_slot_resource_request_test, when_offsets_and_periods_are_encoded_then_v2_payload_round_trips)
+{
+  f1ap_ntn_ul_slot_resource_request request;
+  request.sr_slot_offset  = 3U;
+  request.srs_slot_offset = 5U;
+  request.sr_slot_period  = 10U;
+  request.srs_slot_period = 20U;
+
+  const byte_buffer payload = encode_f1ap_ntn_ul_slot_resource_request(request);
+
+  ASSERT_EQ(payload.length(), 25U);
+  ASSERT_EQ(payload[0], 'S');
+  ASSERT_EQ(payload[7], '2');
+  ASSERT_EQ(payload[8], 0x0f);
+
+  const std::optional<f1ap_ntn_ul_slot_resource_request> decoded_request =
+      decode_f1ap_ntn_ul_slot_resource_request(payload);
+  ASSERT_TRUE(decoded_request.has_value());
+  ASSERT_EQ(decoded_request->sr_slot_offset, 3U);
+  ASSERT_EQ(decoded_request->srs_slot_offset, 5U);
+  ASSERT_EQ(decoded_request->sr_slot_period, 10U);
+  ASSERT_EQ(decoded_request->srs_slot_period, 20U);
+}
+
+TEST(f1ap_ntn_ul_slot_resource_request_test, when_legacy_v1_payload_is_decoded_then_offsets_are_preserved)
+{
+  const byte_buffer payload = make_ntn_ul_slot_request_container(
+      {'S', 'R', 'S', 'N', 'T', 'N', '0', '1', 0x03, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x0b});
+
+  const std::optional<f1ap_ntn_ul_slot_resource_request> decoded_request =
+      decode_f1ap_ntn_ul_slot_resource_request(payload);
+
+  ASSERT_TRUE(decoded_request.has_value());
+  ASSERT_EQ(decoded_request->sr_slot_offset, 7U);
+  ASSERT_EQ(decoded_request->srs_slot_offset, 11U);
+  ASSERT_FALSE(decoded_request->sr_slot_period.has_value());
+  ASSERT_FALSE(decoded_request->srs_slot_period.has_value());
+}
+
+TEST(f1ap_ntn_ul_slot_resource_request_test, when_v2_period_flag_has_no_matching_offset_then_payload_is_rejected)
+{
+  const byte_buffer payload = make_ntn_ul_slot_request_container({'S',
+                                                                 'R',
+                                                                 'S',
+                                                                 'N',
+                                                                 'T',
+                                                                 'N',
+                                                                 '0',
+                                                                 '2',
+                                                                 0x04,
+                                                                 0x00,
+                                                                 0x00,
+                                                                 0x00,
+                                                                 0x00,
+                                                                 0x00,
+                                                                 0x00,
+                                                                 0x00,
+                                                                 0x00,
+                                                                 0x00,
+                                                                 0x00,
+                                                                 0x00,
+                                                                 0x0a,
+                                                                 0x00,
+                                                                 0x00,
+                                                                 0x00,
+                                                                 0x00});
+
+  ASSERT_FALSE(decode_f1ap_ntn_ul_slot_resource_request(payload).has_value());
+}
+
+TEST(f1ap_ntn_ul_slot_resource_request_test, when_empty_v2_payload_is_decoded_then_it_clears_slot_request)
+{
+  f1ap_ntn_ul_slot_resource_request request;
+
+  const byte_buffer payload = encode_f1ap_ntn_ul_slot_resource_request(request);
+
+  ASSERT_EQ(payload.length(), 25U);
+  ASSERT_EQ(payload[8], 0x00);
+  const std::optional<f1ap_ntn_ul_slot_resource_request> decoded_request =
+      decode_f1ap_ntn_ul_slot_resource_request(payload);
+  ASSERT_TRUE(decoded_request.has_value());
+  ASSERT_TRUE(is_empty(*decoded_request));
+}
+
+TEST(f1ap_ntn_ul_slot_resource_request_test, when_zero_period_is_requested_then_encoder_omits_period_flag)
+{
+  f1ap_ntn_ul_slot_resource_request request;
+  request.sr_slot_offset = 3U;
+  request.sr_slot_period = 0U;
+
+  const byte_buffer payload = encode_f1ap_ntn_ul_slot_resource_request(request);
+
+  ASSERT_EQ(payload[8], 0x01);
+  const std::optional<f1ap_ntn_ul_slot_resource_request> decoded_request =
+      decode_f1ap_ntn_ul_slot_resource_request(payload);
+  ASSERT_TRUE(decoded_request.has_value());
+  ASSERT_EQ(decoded_request->sr_slot_offset, 3U);
+  ASSERT_FALSE(decoded_request->sr_slot_period.has_value());
+}
 
 /// Test PLMN decoding
 TEST(f1ap_asn1_helpers_test, test_ngi_converter_for_valid_plmn)

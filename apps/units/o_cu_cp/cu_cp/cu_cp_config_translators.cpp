@@ -23,7 +23,9 @@
 #include "cu_cp_config_translators.h"
 #include "apps/services/worker_manager/worker_manager_config.h"
 #include "cu_cp_unit_config.h"
+#include "srsran/cu_cp/cell_meas_manager_config.h"
 #include "srsran/cu_cp/cu_cp_configuration_helpers.h"
+#include "srsran/cu_cp/neighbor_cell_manager_config.h"
 #include "srsran/ran/plmn_identity.h"
 #include "srsran/rlc/rlc_config.h"
 #include <sstream>
@@ -330,6 +332,85 @@ generate_cu_cp_event_trigger_report_config(const cu_cp_unit_report_config& repor
   return event_trigger_cfg;
 }
 
+static srs_cu_cp::ntn_location_mobility_config
+generate_ntn_location_mobility_config(const cu_cp_unit_ntn_location_mobility_config& app_cfg)
+{
+  srs_cu_cp::ntn_location_mobility_config out_cfg;
+  out_cfg.enabled                               = app_cfg.enabled;
+  out_cfg.served_beam_min_elevation_deg         = app_cfg.served_beam_min_elevation_deg;
+  out_cfg.max_nof_served_beams                  = app_cfg.max_nof_served_beams;
+  out_cfg.served_beam_hopping_enabled           = app_cfg.served_beam_hopping_enabled;
+  out_cfg.served_beam_hopping_dwell_updates     = app_cfg.served_beam_hopping_dwell_updates;
+  out_cfg.measurement_report_period            = std::chrono::milliseconds{app_cfg.measurement_report_period_ms};
+  out_cfg.time_to_trigger                      = std::chrono::milliseconds{app_cfg.time_to_trigger_ms};
+  out_cfg.max_report_gap                       = std::chrono::milliseconds{app_cfg.max_report_gap_ms};
+  out_cfg.location_max_age                     = std::chrono::milliseconds{app_cfg.location_max_age_ms};
+  out_cfg.handover_retry_timeout               = std::chrono::milliseconds{app_cfg.handover_retry_timeout_ms};
+  out_cfg.required_consecutive_location_reports = app_cfg.required_consecutive_location_reports;
+  out_cfg.boundary_hysteresis_m                = app_cfg.boundary_hysteresis_m;
+  out_cfg.max_horizontal_accuracy_m            = app_cfg.max_horizontal_accuracy_m;
+  out_cfg.core_network_reporting.local_forwarding_enabled =
+      app_cfg.core_network_reporting_local_forwarding_enabled;
+  out_cfg.core_network_reporting.amf_control_enabled = app_cfg.core_network_reporting_amf_control_enabled;
+  out_cfg.core_network_reporting.min_report_interval =
+      std::chrono::milliseconds{app_cfg.core_network_reporting_min_report_interval_ms};
+  auto& sat_state_cfg                           = out_cfg.satellite_state_update;
+  if (app_cfg.satellite_state_source == "manual") {
+    sat_state_cfg.source = srs_cu_cp::ntn_satellite_state_source::manual;
+  } else if (app_cfg.satellite_state_source == "circular_orbit") {
+    sat_state_cfg.source = srs_cu_cp::ntn_satellite_state_source::circular_orbit;
+  } else if (app_cfg.satellite_state_source == "tle") {
+    sat_state_cfg.source = srs_cu_cp::ntn_satellite_state_source::tle;
+  } else {
+    report_error("Invalid NTN satellite_state_source '{}'.\n", app_cfg.satellite_state_source);
+  }
+  sat_state_cfg.update_period = std::chrono::milliseconds{app_cfg.satellite_state_update_period_ms};
+  sat_state_cfg.circular_altitude_m               = app_cfg.circular_orbit_altitude_m;
+  sat_state_cfg.circular_inclination_deg          = app_cfg.circular_orbit_inclination_deg;
+  sat_state_cfg.circular_raan_deg                 = app_cfg.circular_orbit_raan_deg;
+  sat_state_cfg.circular_argument_of_latitude_deg = app_cfg.circular_orbit_argument_of_latitude_deg;
+  if (app_cfg.circular_orbit_epoch_unix_s.has_value()) {
+    sat_state_cfg.circular_epoch = std::chrono::system_clock::time_point{
+        std::chrono::duration_cast<std::chrono::system_clock::duration>(
+            std::chrono::duration<double>{app_cfg.circular_orbit_epoch_unix_s.value()})};
+  }
+  sat_state_cfg.tle_satellite_name = app_cfg.tle_satellite_name;
+  sat_state_cfg.tle_line1          = app_cfg.tle_line1;
+  sat_state_cfg.tle_line2          = app_cfg.tle_line2;
+
+  if (!app_cfg.beam_table_json_file.empty()) {
+    auto beam_table = srs_cu_cp::load_ntn_beam_table_json_file(app_cfg.beam_table_json_file);
+    if (!beam_table.has_value()) {
+      report_error("Invalid NTN beam table file '{}'. Cause: {}\n", app_cfg.beam_table_json_file, beam_table.error());
+    }
+    out_cfg.beams = std::move(beam_table.value().beams);
+  }
+
+  return out_cfg;
+}
+
+static void apply_neighbor_cell_info_config(const cu_cp_unit_mobility_config& app_cfg,
+                                            srs_cu_cp::cell_meas_manager_cfg& meas_cfg)
+{
+  if (app_cfg.neighbor_cell_info_json_file.empty()) {
+    return;
+  }
+
+  auto neighbor_cfg = srs_cu_cp::load_neighbor_cell_info_json_file(app_cfg.neighbor_cell_info_json_file);
+  if (!neighbor_cfg.has_value()) {
+    report_error("Invalid neighbor cell info file '{}'. Cause: {}\n",
+                 app_cfg.neighbor_cell_info_json_file,
+                 neighbor_cfg.error());
+  }
+
+  srs_cu_cp::neighbor_cell_manager neighbor_mng(neighbor_cfg.value());
+  if (auto merge_error = neighbor_mng.merge_into(meas_cfg); merge_error.has_value()) {
+    report_error("Invalid neighbor cell info file '{}'. Cause: {}\n",
+                 app_cfg.neighbor_cell_info_json_file,
+                 merge_error.value());
+  }
+}
+
 srs_cu_cp::cu_cp_configuration srsran::generate_cu_cp_config(const cu_cp_unit_config& cu_cfg)
 {
   srs_cu_cp::cu_cp_configuration out_cfg = config_helpers::make_default_cu_cp_config();
@@ -337,6 +418,12 @@ srs_cu_cp::cu_cp_configuration srsran::generate_cu_cp_config(const cu_cp_unit_co
   out_cfg.admission.max_nof_cu_ups       = cu_cfg.max_nof_cu_ups;
   out_cfg.admission.max_nof_ues          = cu_cfg.max_nof_ues;
   out_cfg.admission.max_nof_drbs_per_ue  = cu_cfg.max_nof_drbs_per_ue;
+  out_cfg.admission.initial_access_watermark.max_ue_usage   = cu_cfg.initial_access_admission.max_ue_usage;
+  out_cfg.admission.initial_access_watermark.max_drb_usage  = cu_cfg.initial_access_admission.max_drb_usage;
+  out_cfg.admission.reestablishment_watermark.max_ue_usage  = cu_cfg.reestablishment_admission.max_ue_usage;
+  out_cfg.admission.reestablishment_watermark.max_drb_usage = cu_cfg.reestablishment_admission.max_drb_usage;
+  out_cfg.admission.handover_watermark.max_ue_usage         = cu_cfg.handover_admission.max_ue_usage;
+  out_cfg.admission.handover_watermark.max_drb_usage        = cu_cfg.handover_admission.max_drb_usage;
 
   out_cfg.node.gnb_id        = cu_cfg.gnb_id;
   out_cfg.node.ran_node_name = cu_cfg.ran_node_name;
@@ -417,6 +504,8 @@ srs_cu_cp::cu_cp_configuration srsran::generate_cu_cp_config(const cu_cp_unit_co
       cu_cfg.mobility_config.trigger_handover_from_measurements;
   out_cfg.mobility.mobility_manager_config.enable_ngap_metrics = cu_cfg.metrics.layers_cfg.enable_ngap;
   out_cfg.mobility.mobility_manager_config.enable_rrc_metrics  = cu_cfg.metrics.layers_cfg.enable_rrc;
+  out_cfg.mobility.meas_manager_config.ntn_location_mobility =
+      generate_ntn_location_mobility_config(cu_cfg.mobility_config.ntn_location_mobility);
 
   // F1AP-CU config.
   out_cfg.f1ap.proc_timeout     = std::chrono::milliseconds{cu_cfg.f1ap_config.procedure_timeout};
@@ -479,6 +568,8 @@ srs_cu_cp::cu_cp_configuration srsran::generate_cu_cp_config(const cu_cp_unit_co
     out_cfg.mobility.meas_manager_config
         .report_config_ids[srs_cu_cp::uint_to_report_cfg_id(report_cfg_item.report_cfg_id)] = report_cfg;
   }
+
+  apply_neighbor_cell_info_config(cu_cfg.mobility_config, out_cfg.mobility.meas_manager_config);
 
   if (!config_helpers::is_valid_configuration(out_cfg)) {
     report_error("Invalid CU-CP configuration.\n");

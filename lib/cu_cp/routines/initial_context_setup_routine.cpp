@@ -39,14 +39,16 @@ initial_context_setup_routine::initial_context_setup_routine(
     ue_security_manager&                         security_mng_,
     f1ap_ue_context_manager&                     f1ap_ue_ctxt_mng_,
     cu_cp_ngap_handler&                          pdu_session_setup_handler_,
-    srslog::basic_logger&                        logger_) :
+    srslog::basic_logger&                        logger_,
+    std::optional<f1ap_ntn_ul_slot_resource_request> ntn_ul_slot_request_) :
   request(request_),
   rrc_ue(rrc_ue_),
   ngap_ue_radio_cap_handler(ngap_ue_radio_cap_handler_),
   security_mng(security_mng_),
   f1ap_ue_ctxt_mng(f1ap_ue_ctxt_mng_),
   pdu_session_setup_handler(pdu_session_setup_handler_),
-  logger(logger_)
+  logger(logger_),
+  ntn_ul_slot_request(ntn_ul_slot_request_)
 {
 }
 
@@ -82,7 +84,8 @@ void initial_context_setup_routine::operator()(
     if (request.ue_aggr_max_bit_rate.has_value()) {
       ue_context_setup_request.gnb_du_ue_ambr_ul = request.ue_aggr_max_bit_rate.value().ue_aggr_max_bit_rate_ul;
     }
-    ue_context_setup_request.serving_cell_mo = rrc_ue.get_serving_cell_mo();
+    ue_context_setup_request.serving_cell_mo      = rrc_ue.get_serving_cell_mo();
+    ue_context_setup_request.ntn_ul_slot_request  = ntn_ul_slot_request;
 
     // Call F1AP procedure.
     CORO_AWAIT_VALUE(ue_context_setup_response,

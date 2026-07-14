@@ -27,6 +27,8 @@
 namespace srsran {
 namespace srs_cu_cp {
 
+enum class cu_cp_admission_request_type { initial_access, reestablishment, handover };
+
 class cu_cp_ue_admission_controller
 {
 public:
@@ -34,6 +36,17 @@ public:
 
   /// Determines whether the CU-CP is in a condition to accept new UEs.
   virtual bool request_ue_setup() const = 0;
+
+  /// Determines whether the CU-CP is in a condition to accept a UE request of the given class.
+  virtual bool request_ue_setup(cu_cp_admission_request_type request_type,
+                                unsigned                    additional_ues  = 0,
+                                unsigned                    additional_drbs = 0) const = 0;
+
+  /// Enable or disable the admission of new UEs.
+  virtual void set_ue_admission_enabled(bool enabled) = 0;
+
+  /// Returns true if UE admission is administratively enabled.
+  virtual bool is_ue_admission_enabled() const = 0;
 };
 
 } // namespace srs_cu_cp

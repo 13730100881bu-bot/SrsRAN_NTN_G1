@@ -34,6 +34,7 @@
 #include "srsran/ngap/ngap_message.h"
 #include "srsran/ran/gnb_cu_up_id.h"
 #include "srsran/ran/plmn_identity.h"
+#include "srsran/support/async/async_test_utils.h"
 #include <chrono>
 #include <gtest/gtest.h>
 
@@ -352,6 +353,65 @@ TEST_F(cu_cp_ue_context_release_test,
   // STATUS: UE should be removed at this stage.
   auto report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
   ASSERT_EQ(report.ues.size(), 0) << "UE should be removed";
+}
+
+TEST_F(cu_cp_ue_context_release_test, when_empty_batch_release_command_is_received_then_it_completes_successfully)
+{
+  cu_cp_ue_context_release_batch_command command = {};
+
+  async_task<cu_cp_ue_context_release_batch_response> task =
+      get_cu_cp().get_command_handler().get_ue_command_handler().release_ues(command);
+  lazy_task_launcher<cu_cp_ue_context_release_batch_response> launcher(task);
+
+  ASSERT_TRUE(launcher.result.has_value());
+  EXPECT_TRUE(launcher.result->success());
+  EXPECT_EQ(launcher.result->nof_requested_ues, 0);
+  EXPECT_TRUE(launcher.result->released_ues.empty());
+  EXPECT_TRUE(launcher.result->ues_not_found.empty());
+  EXPECT_TRUE(launcher.result->duplicate_ues.empty());
+  EXPECT_TRUE(launcher.result->failed_to_schedule_ues.empty());
+}
+
+TEST_F(cu_cp_ue_context_release_test, when_batch_release_command_has_mixed_ues_then_result_reports_each_outcome)
+{
+  ASSERT_TRUE(attach_ue());
+  ASSERT_TRUE(ue_ctx->cu_ue_id.has_value());
+
+  const ue_index_t ue_index = uint_to_ue_index(gnb_cu_ue_f1ap_id_to_uint(ue_ctx->cu_ue_id.value()));
+  const ue_index_t unknown_ue_index = uint_to_ue_index(42);
+
+  cu_cp_ue_context_release_batch_command command = {};
+  command.ues.push_back({ue_index, ngap_cause_radio_network_t::release_due_to_ngran_generated_reason});
+  command.ues.push_back({unknown_ue_index, ngap_cause_radio_network_t::release_due_to_ngran_generated_reason});
+  command.ues.push_back({ue_index, ngap_cause_radio_network_t::release_due_to_ngran_generated_reason});
+
+  async_task<cu_cp_ue_context_release_batch_response> task =
+      get_cu_cp().get_command_handler().get_ue_command_handler().release_ues(command);
+  lazy_task_launcher<cu_cp_ue_context_release_batch_response> launcher(task);
+
+  ASSERT_TRUE(this->wait_for_f1ap_tx_pdu(du_idx, f1ap_pdu, std::chrono::milliseconds{1000}));
+  ASSERT_TRUE(test_helpers::is_valid_ue_context_release_command(f1ap_pdu));
+
+  const auto& release_cmd = f1ap_pdu.pdu.init_msg().value.ue_context_release_cmd();
+  get_du(du_idx).push_ul_pdu(test_helpers::generate_ue_context_release_complete(
+      int_to_gnb_cu_ue_f1ap_id(release_cmd->gnb_cu_ue_f1ap_id),
+      int_to_gnb_du_ue_f1ap_id(release_cmd->gnb_du_ue_f1ap_id)));
+
+  ASSERT_TRUE(this->tick_until(std::chrono::milliseconds{1000}, [&]() { return launcher.result.has_value(); }));
+
+  const cu_cp_ue_context_release_batch_response& response = launcher.result.value();
+  EXPECT_FALSE(response.success());
+  EXPECT_EQ(response.nof_requested_ues, 3);
+  ASSERT_EQ(response.released_ues.size(), 1);
+  EXPECT_EQ(response.released_ues.front(), ue_index);
+  ASSERT_EQ(response.ues_not_found.size(), 1);
+  EXPECT_EQ(response.ues_not_found.front(), unknown_ue_index);
+  ASSERT_EQ(response.duplicate_ues.size(), 1);
+  EXPECT_EQ(response.duplicate_ues.front(), ue_index);
+  EXPECT_TRUE(response.failed_to_schedule_ues.empty());
+
+  auto report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
+  EXPECT_TRUE(report.ues.empty()) << "UE should be removed";
 }
 
 TEST_F(cu_cp_ue_context_release_test,

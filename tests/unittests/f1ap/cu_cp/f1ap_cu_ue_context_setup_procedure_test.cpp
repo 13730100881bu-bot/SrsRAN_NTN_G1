@@ -22,6 +22,8 @@
 
 #include "f1ap_cu_test_helpers.h"
 #include "tests/test_doubles/f1ap/f1ap_test_messages.h"
+#include "srsran/asn1/f1ap/f1ap_pdu_contents_ue.h"
+#include "srsran/f1ap/ntn_ul_slot_resource_request.h"
 #include "srsran/support/async/async_test_utils.h"
 #include "srsran/support/test_utils.h"
 #include <gtest/gtest.h>
@@ -31,6 +33,23 @@ using namespace srs_cu_cp;
 using namespace asn1::f1ap;
 
 const std::chrono::milliseconds procedure_timeout{100};
+
+namespace {
+
+byte_buffer make_ntn_ul_slot_resource_container(unsigned sr_slot_offset,
+                                                unsigned srs_slot_offset,
+                                                unsigned sr_period,
+                                                unsigned srs_period)
+{
+  f1ap_ntn_ul_slot_resource_request request;
+  request.sr_slot_offset  = sr_slot_offset;
+  request.srs_slot_offset = srs_slot_offset;
+  request.sr_slot_period  = sr_period;
+  request.srs_slot_period = srs_period;
+  return encode_f1ap_ntn_ul_slot_resource_request(request);
+}
+
+} // namespace
 
 class f1ap_cu_ue_context_setup_test : public f1ap_cu_test
 {
@@ -87,6 +106,23 @@ TEST_F(f1ap_cu_ue_context_setup_test, when_request_sent_then_procedure_waits_for
   // The UE CONTEXT SETUP was sent to DU and F1AP-CU is waiting for response.
   ASSERT_TRUE(was_ue_context_setup_request_sent());
   ASSERT_FALSE(t.ready());
+}
+
+TEST_F(f1ap_cu_ue_context_setup_test, when_ntn_ul_slot_request_is_present_then_it_is_sent_to_du)
+{
+  f1ap_ue_context_setup_request req = create_ue_context_setup_request({});
+  req.ntn_ul_slot_request.emplace();
+  req.ntn_ul_slot_request->sr_slot_offset  = 3U;
+  req.ntn_ul_slot_request->srs_slot_offset = 7U;
+  req.ntn_ul_slot_request->sr_slot_period  = 10U;
+  req.ntn_ul_slot_request->srs_slot_period = 20U;
+
+  this->start_procedure(req);
+
+  const ue_context_setup_request_s& sent_req =
+      this->f1ap_pdu_notifier.last_f1ap_msg.pdu.init_msg().value.ue_context_setup_request();
+  ASSERT_TRUE(sent_req->res_coordination_transfer_container_present);
+  ASSERT_EQ(sent_req->res_coordination_transfer_container, make_ntn_ul_slot_resource_container(3U, 7U, 10U, 20U));
 }
 
 TEST_F(f1ap_cu_ue_context_setup_test, when_response_received_then_procedure_successful)

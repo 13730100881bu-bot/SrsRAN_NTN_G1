@@ -34,6 +34,9 @@
 #include "cu_up_processor/cu_up_processor_repository.h"
 #include "du_processor/du_processor_repository.h"
 #include "ngap_repository.h"
+#include "ntn_mobility/ntn_beam_placement_planner.h"
+#include "ntn_mobility/ntn_satellite_state_updater.h"
+#include "ntn_mobility/ntn_served_beam_scheduler.h"
 #include "ue_manager/ue_manager_impl.h"
 #include "srsran/cu_cp/cu_configurator.h"
 #include "srsran/cu_cp/cu_cp_configuration.h"
@@ -41,10 +44,14 @@
 #include "srsran/e2/e2_cu.h"
 #include "srsran/e2/e2_cu_up_factory.h"
 #include "srsran/f1ap/cu_cp/f1ap_cu.h"
+#include "srsran/f1ap/ntn_ul_slot_resource_request.h"
 #include "srsran/nrppa/nrppa.h"
 #include "srsran/ran/plmn_identity.h"
 #include <dlfcn.h>
 #include <memory>
+#include <optional>
+#include <set>
+#include <unordered_map>
 
 namespace srsran {
 namespace srs_cu_cp {
@@ -64,7 +71,11 @@ private:
 class cu_cp_impl final : public cu_cp,
                          public cu_cp_impl_interface,
                          public cu_cp_ng_handler,
-                         public cu_cp_command_handler
+                         public cu_cp_command_handler,
+                         public cu_cp_ntn_command_handler,
+                         public cu_cp_ue_command_handler,
+                         public cu_cp_admission_command_handler,
+                         public ntn_served_beam_update_handler
 {
 public:
   explicit cu_cp_impl(const cu_cp_configuration& config_);
@@ -103,6 +114,7 @@ public:
   // cu_cp_ue_context_manipulation_handler.
   void handle_handover_reconfiguration_sent(const cu_cp_intra_cu_handover_target_request& request) override;
   void handle_handover_ue_context_push(ue_index_t source_ue_index, ue_index_t target_ue_index) override;
+  void handle_ntn_handover_result(const ntn_handover_result& result) override;
   void
   initialize_handover_ue_release_timer(ue_index_t                              ue_index,
                                        std::chrono::milliseconds               handover_ue_release_timeout,
@@ -130,6 +142,8 @@ public:
   void       handle_n2_handover_execution(ue_index_t ue_index) override;
   void       handle_dl_ue_associated_nrppa_transport_pdu(ue_index_t ue_index, const byte_buffer& nrppa_pdu) override;
   void handle_dl_non_ue_associated_nrppa_transport_pdu(amf_index_t amf_index, const byte_buffer& nrppa_pdu) override;
+  ngap_location_reporting_control_response
+  handle_location_reporting_control(const ngap_location_reporting_control& request) override;
   void handle_n2_disconnection(amf_index_t amf_index) override;
 
   // cu_cp_nrppa_handler.
@@ -145,6 +159,20 @@ public:
                                          nr_cell_identity                   nci,
                                          const std::optional<rrc_meas_cfg>& current_meas_config = std::nullopt) override;
   void handle_measurement_report(const ue_index_t ue_index, const rrc_meas_results& meas_results) override;
+  void handle_ue_location_report(const ntn_ue_location_report& location_report) override;
+
+  // cu_cp_ntn_command_handler.
+  bool                     handle_ntn_satellite_state_update(const ecef_coordinates_t& satellite) override;
+  std::vector<std::string> get_current_ntn_served_beam_ids() const override;
+  std::vector<cu_cp_ntn_beam_status> get_current_ntn_beam_status() const override;
+
+  // cu_cp_ue_command_handler.
+  async_task<cu_cp_ue_context_release_batch_response>
+  release_ues(const cu_cp_ue_context_release_batch_command& command) override;
+
+  // cu_cp_admission_command_handler.
+  void set_ue_admission_enabled(bool enabled) override;
+  cu_cp_admission_control_status get_admission_control_status() override;
 
   // cu_cp_measurement_config_handler.
   bool handle_cell_config_update_request(nr_cell_identity nci, const serving_cell_meas_config& serv_cell_cfg) override;
@@ -154,12 +182,16 @@ public:
   handle_intra_cu_handover_request(const cu_cp_intra_cu_handover_request& request,
                                    du_index_t&                            source_du_index,
                                    du_index_t&                            target_du_index) override;
+  void handle_mobility_ntn_handover_result(const ntn_handover_result& result) override;
 
   // cu_cp_ue_removal_handler.
   async_task<void> handle_ue_removal_request(ue_index_t ue_index) override;
   void             handle_pending_ue_task_cancellation(ue_index_t ue_index) override;
 
   cu_cp_mobility_command_handler& get_mobility_command_handler() override { return mobility_mng; }
+  cu_cp_ntn_command_handler&      get_ntn_command_handler() override { return *this; }
+  cu_cp_ue_command_handler&       get_ue_command_handler() override { return *this; }
+  cu_cp_admission_command_handler& get_admission_command_handler() override { return *this; }
   metrics_handler&                get_metrics_handler() override { return *metrics_hdlr; }
 
   // cu_cp_amf_reconnection_handler.
@@ -196,6 +228,26 @@ private:
   // cu_cp_task_scheduler_handler.
   bool schedule_ue_task(ue_index_t ue_index, async_task<void> task) override;
 
+  // ntn_served_beam_update_handler.
+  bool update_ntn_served_beams(const std::vector<std::string>& beam_ids) override;
+  bool update_ntn_served_beam_candidates(const std::vector<ntn_served_beam_candidate>& candidates) override;
+
+  std::optional<cu_cp_user_location_info_nr>
+  build_ntn_core_user_location_info(const ntn_ue_location_report& report);
+  void schedule_ntn_ul_slot_updates_for_online_ues();
+  void report_ntn_location_to_core_if_required(const ntn_ue_location_report& report);
+  bool send_ntn_location_report_to_core(const ngap_location_report& report);
+  bool should_throttle_ntn_core_location_report(ue_index_t ue_index);
+  bool is_ntn_serving_cell_core_reportable(nr_cell_identity nci) const;
+  void refresh_ntn_beam_placement_for_current_load();
+
+  struct ntn_core_location_reporting_ue_state {
+    std::vector<ngap_location_reporting_request_type> active_requests;
+    std::chrono::steady_clock::time_point             last_sent_time = {};
+    bool                                             has_last_sent_time = false;
+    std::optional<nr_cell_identity>                   last_reported_serving_nci;
+  };
+
   void on_statistics_report_timer_expired();
 
   cu_cp_configuration cfg;
@@ -209,6 +261,19 @@ private:
 
   // Cell measurement manager.
   cell_meas_manager cell_meas_mng;
+
+  std::optional<ntn_served_beam_scheduler> ntn_served_beam_sched;
+
+  ntn_beam_placement_planner ntn_beam_planner;
+  ntn_beam_placement_plan    current_ntn_beam_placement_plan;
+  std::vector<ntn_served_beam_candidate> current_ntn_served_beam_candidates;
+  std::vector<std::string>   current_ntn_active_served_beam_ids;
+  std::set<nr_cell_identity> current_ntn_core_reportable_ncis;
+
+  std::unique_ptr<ntn_satellite_state_updater> ntn_satellite_updater;
+
+  std::unordered_map<ue_index_t, ntn_core_location_reporting_ue_state> ntn_core_location_reporting_states;
+  std::unordered_map<ue_index_t, f1ap_ntn_ul_slot_resource_request>    ntn_ul_slot_requests_by_ue;
 
   cu_cp_common_task_scheduler common_task_sched;
 

@@ -46,6 +46,58 @@ public:
   cu_cp_connectivity_test() : cu_cp_test_environment(cu_cp_test_env_params{}) {}
 };
 
+class cu_cp_admission_watermark_test : public cu_cp_test_environment, public ::testing::Test
+{
+public:
+  cu_cp_admission_watermark_test() : cu_cp_test_environment(make_params()) {}
+
+private:
+  static cu_cp_test_env_params make_params()
+  {
+    cu_cp_test_env_params params{/* max_nof_cu_ups */ 8, /* max_nof_dus */ 8, /* max_nof_ues */ 2};
+    params.initial_access_watermark.max_ue_usage  = 50;
+    params.reestablishment_watermark.max_ue_usage = 100;
+    params.handover_watermark.max_ue_usage        = 100;
+    return params;
+  }
+};
+
+class cu_cp_admission_drb_watermark_test : public cu_cp_test_environment, public ::testing::Test
+{
+public:
+  cu_cp_admission_drb_watermark_test() : cu_cp_test_environment(make_params()) {}
+
+private:
+  static cu_cp_test_env_params make_params()
+  {
+    cu_cp_test_env_params params{/* max_nof_cu_ups */ 8,
+                                 /* max_nof_dus */ 8,
+                                 /* max_nof_ues */ 1,
+                                 /* max_nof_drbs_per_ue */ 2};
+    params.initial_access_watermark.max_drb_usage = 50;
+    return params;
+  }
+};
+
+class cu_cp_admission_reestablishment_watermark_test : public cu_cp_test_environment, public ::testing::Test
+{
+public:
+  cu_cp_admission_reestablishment_watermark_test() : cu_cp_test_environment(make_params()) {}
+
+private:
+  static cu_cp_test_env_params make_params()
+  {
+    cu_cp_test_env_params params{/* max_nof_cu_ups */ 8,
+                                 /* max_nof_dus */ 8,
+                                 /* max_nof_ues */ 2,
+                                 /* max_nof_drbs_per_ue */ 8};
+    params.initial_access_watermark.max_ue_usage  = 100;
+    params.reestablishment_watermark.max_ue_usage = 50;
+    params.handover_watermark.max_ue_usage        = 100;
+    return params;
+  }
+};
+
 //----------------------------------------------------------------------------------//
 // CU-CP to AMF connection handling                                                 //
 //----------------------------------------------------------------------------------//
@@ -608,6 +660,212 @@ TEST_F(cu_cp_connectivity_test, when_ng_f1_e1_are_setup_then_ues_can_attach)
             1);
   ASSERT_EQ(report.dus[0].rrc_metrics.successful_rrc_connection_establishments.get_count(establishment_cause_t::mo_sig),
             1);
+}
+
+TEST_F(cu_cp_connectivity_test, when_ue_admission_is_disabled_then_new_ues_are_rejected)
+{
+  // Run NG setup to completion.
+  run_ng_setup();
+
+  // Setup DU.
+  auto ret = connect_new_du();
+  ASSERT_TRUE(ret.has_value());
+  unsigned du_idx = ret.value();
+  ASSERT_TRUE(this->run_f1_setup(du_idx));
+
+  // Setup CU-UP.
+  ret = connect_new_cu_up();
+  ASSERT_TRUE(ret.has_value());
+  unsigned cu_up_idx = ret.value();
+  ASSERT_TRUE(this->run_e1_setup(cu_up_idx));
+
+  cu_cp_admission_command_handler& admission_handler =
+      get_cu_cp().get_command_handler().get_admission_command_handler();
+
+  cu_cp_admission_control_status status = admission_handler.get_admission_control_status();
+  ASSERT_TRUE(status.ue_admission_enabled);
+  ASSERT_TRUE(status.ue_setup_allowed);
+  ASSERT_TRUE(status.amf_connected);
+  ASSERT_TRUE(status.cu_up_connected);
+  ASSERT_EQ(status.nof_dus, 1);
+  ASSERT_EQ(status.nof_cu_ups, 1);
+  ASSERT_EQ(status.nof_ues, 0);
+  ASSERT_EQ(status.max_nof_dus, this->get_test_env_params().max_nof_dus);
+  ASSERT_EQ(status.max_nof_cu_ups, this->get_test_env_params().max_nof_cu_ups);
+  ASSERT_EQ(status.max_nof_ues, this->get_test_env_params().max_nof_ues);
+
+  admission_handler.set_ue_admission_enabled(false);
+  status = admission_handler.get_admission_control_status();
+  ASSERT_FALSE(status.ue_admission_enabled);
+  ASSERT_FALSE(status.ue_setup_allowed);
+
+  // Send Initial UL RRC Message.
+  gnb_du_ue_f1ap_id_t ue_f1ap_id = int_to_gnb_du_ue_f1ap_id(0);
+  rnti_t              crnti      = to_rnti(0x4601);
+  get_du(du_idx).push_ul_pdu(test_helpers::generate_init_ul_rrc_message_transfer(ue_f1ap_id, crnti));
+
+  // TEST: F1AP UE Context Release Command is sent to DU with RRC Reject.
+  f1ap_message f1ap_pdu;
+  ASSERT_TRUE(this->wait_for_f1ap_tx_pdu(du_idx, f1ap_pdu, std::chrono::milliseconds{1000}));
+  ASSERT_TRUE(test_helpers::is_valid_ue_context_release_command(f1ap_pdu));
+  const auto& ue_rel = f1ap_pdu.pdu.init_msg().value.ue_context_release_cmd();
+  ASSERT_EQ(int_to_gnb_du_ue_f1ap_id(ue_rel->gnb_du_ue_f1ap_id), ue_f1ap_id);
+  ASSERT_TRUE(ue_rel->srb_id_present);
+  ASSERT_EQ(int_to_srb_id(ue_rel->srb_id), srb_id_t::srb0);
+
+  asn1::rrc_nr::dl_ccch_msg_s ccch;
+  {
+    asn1::cbit_ref bref{ue_rel->rrc_container};
+    ASSERT_EQ(ccch.unpack(bref), asn1::SRSASN_SUCCESS);
+  }
+  ASSERT_EQ(ccch.msg.c1().type().value, asn1::rrc_nr::dl_ccch_msg_type_c::c1_c_::types_opts::rrc_reject);
+
+  // DU sends F1AP UE Context Release Complete.
+  get_du(du_idx).push_ul_pdu(test_helpers::generate_ue_context_release_complete(
+      int_to_gnb_cu_ue_f1ap_id(ue_rel->gnb_cu_ue_f1ap_id), ue_f1ap_id));
+
+  auto report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
+  ASSERT_TRUE(report.ues.empty());
+
+  // Verify no NGAP PDU was sent when a UE is rejected.
+  ngap_message ngap_pdu;
+  ASSERT_FALSE(this->get_amf().try_pop_rx_pdu(ngap_pdu));
+
+  admission_handler.set_ue_admission_enabled(true);
+  status = admission_handler.get_admission_control_status();
+  ASSERT_TRUE(status.ue_admission_enabled);
+  ASSERT_TRUE(status.ue_setup_allowed);
+}
+
+TEST_F(cu_cp_admission_watermark_test, when_initial_access_ue_watermark_is_reached_then_new_ues_are_rejected)
+{
+  run_ng_setup();
+
+  auto ret = connect_new_du();
+  ASSERT_TRUE(ret.has_value());
+  unsigned du_idx = ret.value();
+  ASSERT_TRUE(this->run_f1_setup(du_idx));
+
+  ret = connect_new_cu_up();
+  ASSERT_TRUE(ret.has_value());
+  ASSERT_TRUE(this->run_e1_setup(ret.value()));
+
+  // First UE reaches the configured 50% initial access UE watermark: 1 / max 2 UEs.
+  ASSERT_TRUE(connect_new_ue(du_idx, int_to_gnb_du_ue_f1ap_id(0), to_rnti(0x4601)));
+
+  cu_cp_admission_command_handler& admission_handler =
+      get_cu_cp().get_command_handler().get_admission_command_handler();
+  cu_cp_admission_control_status status = admission_handler.get_admission_control_status();
+  ASSERT_EQ(status.nof_ues, 1);
+  ASSERT_EQ(status.max_nof_ues, 2);
+  ASSERT_EQ(status.initial_access_max_ue_usage_percent, 50);
+  ASSERT_FALSE(status.ue_setup_allowed);
+  ASSERT_TRUE(status.reestablishment_allowed);
+  ASSERT_TRUE(status.handover_allowed);
+
+  // Second initial access would exceed the initial-access watermark and is rejected with RRC Reject.
+  gnb_du_ue_f1ap_id_t ue_f1ap_id = int_to_gnb_du_ue_f1ap_id(1);
+  get_du(du_idx).push_ul_pdu(test_helpers::generate_init_ul_rrc_message_transfer(ue_f1ap_id, to_rnti(0x4602)));
+
+  f1ap_message f1ap_pdu;
+  ASSERT_TRUE(this->wait_for_f1ap_tx_pdu(du_idx, f1ap_pdu, std::chrono::milliseconds{1000}));
+  ASSERT_TRUE(test_helpers::is_valid_ue_context_release_command(f1ap_pdu));
+  const auto& ue_rel = f1ap_pdu.pdu.init_msg().value.ue_context_release_cmd();
+  ASSERT_TRUE(ue_rel->srb_id_present);
+  ASSERT_EQ(int_to_srb_id(ue_rel->srb_id), srb_id_t::srb0);
+
+  asn1::rrc_nr::dl_ccch_msg_s ccch;
+  {
+    asn1::cbit_ref bref{ue_rel->rrc_container};
+    ASSERT_EQ(ccch.unpack(bref), asn1::SRSASN_SUCCESS);
+  }
+  ASSERT_EQ(ccch.msg.c1().type().value, asn1::rrc_nr::dl_ccch_msg_type_c::c1_c_::types_opts::rrc_reject);
+}
+
+TEST_F(cu_cp_admission_drb_watermark_test, when_drb_watermark_would_be_exceeded_then_pdu_session_setup_is_rejected)
+{
+  run_ng_setup();
+
+  auto ret = connect_new_du();
+  ASSERT_TRUE(ret.has_value());
+  unsigned du_idx = ret.value();
+  ASSERT_TRUE(this->run_f1_setup(du_idx));
+
+  ret = connect_new_cu_up();
+  ASSERT_TRUE(ret.has_value());
+  unsigned cu_up_idx = ret.value();
+  ASSERT_TRUE(this->run_e1_setup(cu_up_idx));
+
+  const gnb_du_ue_f1ap_id_t    du_ue_id     = int_to_gnb_du_ue_f1ap_id(0);
+  const rnti_t                 crnti        = to_rnti(0x4601);
+  const amf_ue_id_t            amf_ue_id    = amf_ue_id_t::min;
+  const gnb_cu_up_ue_e1ap_id_t cu_up_ue_id  = gnb_cu_up_ue_e1ap_id_t::min;
+  const pdu_session_id_t       second_psi   = uint_to_pdu_session_id(2);
+  const qos_flow_id_t          second_qfi   = uint_to_qos_flow_id(2);
+
+  ASSERT_TRUE(attach_ue(du_idx, cu_up_idx, du_ue_id, crnti, amf_ue_id, cu_up_ue_id));
+
+  cu_cp_admission_command_handler& admission_handler =
+      get_cu_cp().get_command_handler().get_admission_command_handler();
+  cu_cp_admission_control_status status = admission_handler.get_admission_control_status();
+  ASSERT_EQ(status.nof_drbs, 1);
+  ASSERT_EQ(status.max_nof_drbs, 2);
+  ASSERT_EQ(status.initial_access_max_drb_usage_percent, 50);
+
+  const ue_context* ue_ctx = find_ue_context(du_idx, du_ue_id);
+  ASSERT_NE(ue_ctx, nullptr);
+  ASSERT_TRUE(ue_ctx->amf_ue_id.has_value());
+  ASSERT_TRUE(ue_ctx->ran_ue_id.has_value());
+
+  ngap_message request = generate_valid_pdu_session_resource_setup_request_message(
+      ue_ctx->amf_ue_id.value(),
+      ue_ctx->ran_ue_id.value(),
+      {{second_psi, {pdu_session_type_t::ipv4, {{second_qfi, 9}}}}});
+  get_amf().push_tx_pdu(request);
+
+  ngap_message ngap_pdu;
+  ASSERT_TRUE(this->wait_for_ngap_tx_pdu(ngap_pdu, std::chrono::milliseconds{1000}));
+  ASSERT_TRUE(test_helpers::is_valid_pdu_session_resource_setup_response(ngap_pdu));
+  ASSERT_TRUE(test_helpers::is_expected_pdu_session_resource_setup_response(ngap_pdu, {}, {second_psi}));
+
+  e1ap_message e1ap_pdu;
+  ASSERT_FALSE(get_cu_up(cu_up_idx).try_pop_rx_pdu(e1ap_pdu));
+
+  status = admission_handler.get_admission_control_status();
+  ASSERT_EQ(status.nof_drbs, 1);
+}
+
+TEST_F(cu_cp_admission_reestablishment_watermark_test,
+       when_reestablishment_ue_watermark_is_reached_then_reestablishment_is_rejected)
+{
+  run_ng_setup();
+
+  auto ret = connect_new_du();
+  ASSERT_TRUE(ret.has_value());
+  unsigned du_idx = ret.value();
+  ASSERT_TRUE(this->run_f1_setup(du_idx));
+
+  ret = connect_new_cu_up();
+  ASSERT_TRUE(ret.has_value());
+  unsigned cu_up_idx = ret.value();
+  ASSERT_TRUE(this->run_e1_setup(cu_up_idx));
+
+  const gnb_du_ue_f1ap_id_t    old_du_ue_id = int_to_gnb_du_ue_f1ap_id(0);
+  const gnb_du_ue_f1ap_id_t    new_du_ue_id = int_to_gnb_du_ue_f1ap_id(1);
+  const rnti_t                 old_crnti    = to_rnti(0x4601);
+  const rnti_t                 new_crnti    = to_rnti(0x4602);
+  const pci_t                  old_pci      = 0;
+  const amf_ue_id_t            amf_ue_id    = amf_ue_id_t::min;
+  const gnb_cu_up_ue_e1ap_id_t cu_up_ue_id  = gnb_cu_up_ue_e1ap_id_t::min;
+
+  ASSERT_TRUE(attach_ue(du_idx, cu_up_idx, old_du_ue_id, old_crnti, amf_ue_id, cu_up_ue_id));
+
+  cu_cp_admission_control_status status =
+      get_cu_cp().get_command_handler().get_admission_command_handler().get_admission_control_status();
+  ASSERT_FALSE(status.reestablishment_allowed);
+  ASSERT_TRUE(status.handover_allowed);
+
+  ASSERT_FALSE(reestablish_ue(du_idx, cu_up_idx, new_du_ue_id, new_crnti, old_crnti, old_pci));
 }
 
 TEST_F(cu_cp_connectivity_test, when_e1_is_not_setup_then_new_ues_are_rejected)

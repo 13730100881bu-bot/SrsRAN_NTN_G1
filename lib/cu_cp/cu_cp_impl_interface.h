@@ -31,6 +31,7 @@
 #include "srsran/ran/plmn_identity.h"
 #include "srsran/rrc/rrc_du.h"
 #include "srsran/rrc/rrc_ue.h"
+#include <optional>
 #include <string>
 
 namespace srsran {
@@ -133,6 +134,10 @@ public:
   /// \param[in] amf_index The index of the AMF that received the NRPPa transport.
   /// \param[in] nrppa_pdu The NRPPa transport PDU.
   virtual void handle_dl_non_ue_associated_nrppa_transport_pdu(amf_index_t amf_index, const byte_buffer& nrppa_pdu) = 0;
+
+  /// \brief Handles an AMF Location Reporting Control request.
+  virtual ngap_location_reporting_control_response
+  handle_location_reporting_control(const ngap_location_reporting_control& request) = 0;
 
   /// \brief Handle N2 AMF connection drop.
   /// \param[in] amf_index The index of the dropped AMF.
@@ -264,6 +269,7 @@ struct cu_cp_intra_cu_handover_target_request {
   uint8_t                                  transaction_id;
   std::chrono::milliseconds                timeout;
   e1ap_bearer_context_modification_request bearer_context_modification_request;
+  std::optional<ntn_handover_context>      ntn_context;
 };
 
 /// Interface for entities (e.g. DU processor) that wish to manipulate the context of a UE.
@@ -285,6 +291,9 @@ public:
   /// \param[in] source_ue_index The index of the UE that is the source of the handover.
   /// \param[in] target_ue_index The index of the UE that is the target of the handover.
   virtual void handle_handover_ue_context_push(ue_index_t source_ue_index, ue_index_t target_ue_index) = 0;
+
+  /// \brief Handle the outcome of an NTN location-triggered handover.
+  virtual void handle_ntn_handover_result(const ntn_handover_result& result) {}
 
   /// \brief Initialize a handover UE release timer. When the timeout is reached, a release request is sent to the AMF.
   /// \param[in] ue_index The index of the UE.
@@ -323,6 +332,9 @@ public:
 
   /// \brief Handle a measurement report for given UE.
   virtual void handle_measurement_report(const ue_index_t ue_index, const rrc_meas_results& meas_results) = 0;
+
+  /// \brief Handle a decoded NTN UE location report for location-based mobility.
+  virtual void handle_ue_location_report(const ntn_ue_location_report& location_report) = 0;
 };
 
 /// Interface to handle measurement config update requests.
@@ -349,6 +361,9 @@ public:
   handle_intra_cu_handover_request(const cu_cp_intra_cu_handover_request& request,
                                    du_index_t&                            source_du_index,
                                    du_index_t&                            target_du_index) = 0;
+
+  /// \brief Handle the outcome of an NTN location-triggered handover reported by the mobility manager.
+  virtual void handle_mobility_ntn_handover_result(const ntn_handover_result& result) {}
 };
 
 /// Interface to handle ue removals.

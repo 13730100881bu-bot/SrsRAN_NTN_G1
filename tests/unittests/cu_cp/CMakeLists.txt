@@ -28,6 +28,8 @@ add_subdirectory(du_processor)
 add_subdirectory(ue_manager)
 add_subdirectory(up_resource_manager)
 add_subdirectory(mobility)
+add_subdirectory(neighbor_cell_manager)
+add_subdirectory(ntn_mobility)
 add_subdirectory(metrics_handler)
 
 add_library(cu_cp_test_helpers
@@ -68,6 +70,7 @@ add_executable(cu_cp_test
                cu_cp_inactivity_notification_test.cpp
                cu_cp_inter_du_handover_test.cpp
                cu_cp_intra_du_handover_test.cpp
+               cu_cp_ntn_mobility_test.cpp
                )
 set_target_properties(cu_cp_test PROPERTIES UNITY_BUILD ON)
 target_link_libraries(cu_cp_test

@@ -71,6 +71,13 @@ struct mobility_configuration {
 /// Configuration passed to CU-CP.
 struct cu_cp_configuration {
   struct admission_params {
+    struct load_watermark {
+      /// Maximum accepted UE usage in percent for this admission class.
+      unsigned max_ue_usage = 100;
+      /// Maximum accepted DRB usage in percent for this admission class.
+      unsigned max_drb_usage = 100;
+    };
+
     /// Maximum number of DU connections that the CU-CP may accept.
     unsigned max_nof_dus = 6;
     /// Maximum number of CU-UP connections that the CU-CP may accept.
@@ -79,6 +86,12 @@ struct cu_cp_configuration {
     unsigned max_nof_ues = 8192;
     /// Maximum number of DRBs per UE that the CU-CP will configure.
     uint8_t max_nof_drbs_per_ue = 8;
+    /// Load watermarks for initial accesses.
+    load_watermark initial_access_watermark = {};
+    /// Load watermarks for RRC reestablishments.
+    load_watermark reestablishment_watermark = {};
+    /// Load watermarks for handover target admissions.
+    load_watermark handover_watermark = {};
   };
 
   struct service_params {

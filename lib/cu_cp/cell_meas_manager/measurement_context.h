@@ -22,13 +22,18 @@
 
 #pragma once
 
+#include "srsran/cu_cp/ntn_location.h"
 #include "srsran/nrppa/nrppa.h"
 #include "srsran/ran/gnb_id.h"
 #include "srsran/ran/nr_cgi.h"
 #include "srsran/ran/pci.h"
 #include "srsran/rrc/meas_types.h"
 #include "srsran/srslog/srslog.h"
+#include <chrono>
+#include <cstdint>
 #include <map>
+#include <optional>
+#include <string>
 #include <unordered_map>
 
 namespace srsran {
@@ -40,6 +45,19 @@ struct meas_context_t {
   unsigned         gnb_id_bit_length;
   nr_cell_identity nci;
   pci_t            pci;
+};
+
+struct ntn_candidate_beam_state {
+  std::string                            target_beam_id;
+  nr_cell_identity                       target_nci = nr_cell_identity::min();
+  std::chrono::steady_clock::time_point candidate_since;
+  std::chrono::steady_clock::time_point last_report_time;
+  unsigned                             consecutive_location_reports = 0;
+  bool                                 handover_triggered   = false;
+  std::optional<std::chrono::steady_clock::time_point> handover_triggered_time;
+  uint64_t                                            accepted_handover_attempt_id = 0;
+  std::string                                          accepted_target_beam_id;
+  nr_cell_identity                                     accepted_target_nci = nr_cell_identity::min();
 };
 
 class cell_meas_manager_ue_context
@@ -103,6 +121,10 @@ public:
   std::map<meas_id_t, meas_context_t>              meas_id_to_meas_context;
   std::map<nr_cell_identity, meas_obj_id_t>        nci_to_meas_obj_id;
   std::optional<cell_measurement_positioning_info> meas_results;
+  std::optional<ntn_candidate_beam_state>          ntn_candidate_beam;
+  std::optional<ntn_ue_location_report>            last_ntn_location_report;
+  uint64_t                                         next_ntn_handover_attempt_id = 0;
+  uint64_t                                         last_handled_ntn_handover_result_attempt_id = 0;
 
   cell_meas_manager_ue_context()
   {

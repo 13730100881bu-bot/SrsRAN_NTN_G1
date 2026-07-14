@@ -21,6 +21,8 @@
 set(SOURCES
   cell_meas_manager_impl.cpp
   cell_meas_manager_helpers.cpp
+  ntn_beam_table_json.cpp
+  ntn_location_mobility_controller.cpp
 )
 
 add_library(srsran_cu_cp_cell_meas_manager STATIC ${SOURCES})

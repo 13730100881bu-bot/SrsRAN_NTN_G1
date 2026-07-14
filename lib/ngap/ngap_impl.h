@@ -85,6 +85,7 @@ public:
   async_task<void> handle_ul_non_ue_associated_nrppa_transport(const byte_buffer& nrppa_pdu) override;
   async_task<bool>
   handle_rrc_inactive_transition_report_required(const ngap_rrc_inactive_transition_report& report) override;
+  bool handle_location_report_required(const ngap_location_report& report) override;
 
   // ngap_metrics_handler.
   ngap_info handle_ngap_metrics_report_request() const override;
@@ -191,6 +192,12 @@ private:
 
   /// \brief Notifiy about the reception of a DL Non UE Associated NRPPA Transport message.
   void handle_dl_non_ue_associated_nrppa_transport(const asn1::ngap::dl_non_ue_associated_nrppa_transport_s& msg);
+
+  /// \brief Notify about the reception of a Location Reporting Control message.
+  void handle_location_reporting_control(const asn1::ngap::location_report_ctrl_s& msg);
+
+  /// \brief Send a Location Reporting Failure Indication to the AMF.
+  void send_location_reporting_failure(uint64_t amf_ue_ngap_id, uint64_t ran_ue_ngap_id, ngap_cause_t cause);
 
   /// \brief Notify about the reception of an Error Indication message.
   /// \param[in] msg The received Error Indication message.

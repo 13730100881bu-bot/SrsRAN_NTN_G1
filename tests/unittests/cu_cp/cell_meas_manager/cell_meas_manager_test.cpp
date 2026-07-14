@@ -21,10 +21,77 @@
  */
 
 #include "cell_meas_manager_test_helpers.h"
+#include "lib/cu_cp/ntn_mobility/ntn_served_beam_selector.h"
 #include "srsran/ran/plmn_identity.h"
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <string>
 
 using namespace srsran;
 using namespace srs_cu_cp;
+
+static nr_cell_identity get_ntn_test_nci(unsigned sector_id)
+{
+  return nr_cell_identity::create(gnb_id_t{0x19b, 32}, sector_id).value();
+}
+
+static ecef_coordinates_t make_ecef(double latitude_deg, double longitude_deg, double altitude_m)
+{
+  constexpr double wgs84_a_m = 6378137.0;
+  constexpr double wgs84_f   = 1.0 / 298.257223563;
+  constexpr double wgs84_e2  = 2.0 * wgs84_f - wgs84_f * wgs84_f;
+  constexpr double pi        = 3.14159265358979323846;
+
+  const double lat     = latitude_deg * pi / 180.0;
+  const double lon     = longitude_deg * pi / 180.0;
+  const double sin_lat = std::sin(lat);
+  const double cos_lat = std::cos(lat);
+  const double n       = wgs84_a_m / std::sqrt(1.0 - wgs84_e2 * sin_lat * sin_lat);
+
+  ecef_coordinates_t ecef{};
+  ecef.position_x = (n + altitude_m) * cos_lat * std::cos(lon);
+  ecef.position_y = (n + altitude_m) * cos_lat * std::sin(lon);
+  ecef.position_z = (n * (1.0 - wgs84_e2) + altitude_m) * sin_lat;
+  return ecef;
+}
+
+static ntn_ue_location_report make_ntn_location_report(ue_index_t                                  ue_index,
+                                                       nr_cell_identity                            serving_nci,
+                                                       double                                      longitude_deg,
+                                                       std::chrono::steady_clock::time_point       time,
+                                                       ntn_ue_location_report_source source =
+                                                           ntn_ue_location_report_source::measurement_report)
+{
+  ntn_ue_location_report report;
+  report.ue_index              = ue_index;
+  report.serving_nci           = serving_nci;
+  report.latitude_deg          = 0.0;
+  report.longitude_deg         = longitude_deg;
+  report.horizontal_accuracy_m = 25.0;
+  report.received_time         = time;
+  report.source                = source;
+  return report;
+}
+
+static ntn_handover_result make_ntn_handover_result(const ntn_location_handover_trigger& trigger,
+                                                    bool                                 success,
+                                                    ntn_handover_failure_cause failure_cause =
+                                                        ntn_handover_failure_cause::none)
+{
+  ntn_handover_result result;
+  result.source_ue_index                         = trigger.ue_index;
+  result.context.handover_attempt_id             = trigger.handover_attempt_id;
+  result.context.target_beam_id                  = trigger.target_beam_id;
+  result.context.serving_nci                     = trigger.serving_nci;
+  result.context.target_nci                      = trigger.target_nci;
+  result.context.consecutive_location_reports    = trigger.consecutive_location_reports;
+  result.context.candidate_age                   = std::chrono::duration_cast<std::chrono::milliseconds>(
+      trigger.last_report_time - trigger.candidate_since);
+  result.success       = success;
+  result.failure_cause = failure_cause;
+  return result;
+}
 
 TEST_F(cell_meas_manager_test, when_empty_cell_config_is_used_validation_fails)
 {
@@ -53,6 +120,115 @@ TEST_F(cell_meas_manager_test, when_empty_config_is_used_validation_succeeds)
 {
   cell_meas_manager_cfg cfg = {};
   ASSERT_TRUE(is_valid_configuration(cfg));
+}
+
+TEST_F(cell_meas_manager_test, when_ntn_beam_table_json_is_parsed_then_static_beams_are_available)
+{
+  const std::string json = R"json(
+{
+  "version": 1,
+  "region": "china",
+  "satellite_height_m": 500000,
+  "beams": [
+    {
+      "beam_id": "CN-BEAM-0001",
+      "nci": 6576,
+      "center_latitude_deg": 39.9,
+      "center_longitude_deg": 116.4,
+      "coverage_radius_m": 230000,
+      "enabled": true
+    },
+    {
+      "beam_id": "CN-BEAM-0002",
+      "nci": "0x19b1",
+      "center_latitude_deg": 31.2,
+      "center_longitude_deg": 121.5,
+      "coverage_radius_m": 230000,
+      "enabled": false
+    }
+  ]
+}
+)json";
+
+  auto table = parse_ntn_beam_table_json(json);
+  ASSERT_TRUE(table.has_value()) << table.error();
+  ASSERT_EQ(table->version, 1);
+  ASSERT_EQ(table->region, "china");
+  ASSERT_TRUE(table->satellite_height_m.has_value());
+  ASSERT_EQ(table->beams.size(), 2);
+  ASSERT_EQ(table->beams[0].beam_id, "CN-BEAM-0001");
+  ASSERT_EQ(table->beams[0].nci, nr_cell_identity::create(0x19b0).value());
+  ASSERT_DOUBLE_EQ(table->beams[0].coverage_radius_m, 230000.0);
+  ASSERT_EQ(table->beams[1].beam_id, "CN-BEAM-0002");
+  ASSERT_EQ(table->beams[1].nci, nr_cell_identity::create(0x19b1).value());
+  ASSERT_FALSE(table->beams[1].enabled);
+}
+
+TEST_F(cell_meas_manager_test, when_ntn_beam_table_has_invalid_geometry_then_parsing_fails)
+{
+  const std::string json = R"json(
+{
+  "beams": [
+    {
+      "beam_id": "CN-BEAM-0001",
+      "nci": "0x19b0",
+      "center_latitude_deg": 91.0,
+      "center_longitude_deg": 116.4,
+      "coverage_radius_m": 230000
+    }
+  ]
+}
+)json";
+
+  auto table = parse_ntn_beam_table_json(json);
+  ASSERT_FALSE(table.has_value());
+}
+
+TEST_F(cell_meas_manager_test, when_ntn_beam_table_has_duplicate_ids_or_ncis_then_parsing_fails)
+{
+  const std::string duplicate_id_json = R"json(
+{
+  "beams": [
+    {
+      "beam_id": "CN-BEAM-0001",
+      "nci": "0x19b0",
+      "center_latitude_deg": 39.9,
+      "center_longitude_deg": 116.4,
+      "coverage_radius_m": 230000
+    },
+    {
+      "beam_id": "CN-BEAM-0001",
+      "nci": "0x19b1",
+      "center_latitude_deg": 39.9,
+      "center_longitude_deg": 116.8,
+      "coverage_radius_m": 230000
+    }
+  ]
+}
+)json";
+  ASSERT_FALSE(parse_ntn_beam_table_json(duplicate_id_json).has_value());
+
+  const std::string duplicate_nci_json = R"json(
+{
+  "beams": [
+    {
+      "beam_id": "CN-BEAM-0001",
+      "nci": "0x19b0",
+      "center_latitude_deg": 39.9,
+      "center_longitude_deg": 116.4,
+      "coverage_radius_m": 230000
+    },
+    {
+      "beam_id": "CN-BEAM-0002",
+      "nci": "0x19b0",
+      "center_latitude_deg": 39.9,
+      "center_longitude_deg": 116.8,
+      "coverage_radius_m": 230000
+    }
+  ]
+}
+)json";
+  ASSERT_FALSE(parse_ntn_beam_table_json(duplicate_nci_json).has_value());
 }
 
 TEST_F(cell_meas_manager_test, when_empty_config_is_used_then_no_neighbor_cells_are_available)
@@ -289,4 +465,517 @@ TEST_F(cell_meas_manager_test, when_invalid_cell_config_update_received_then_con
 
   std::optional<rrc_meas_cfg> target_meas_cfg = manager->get_measurement_config(ue_index, target_nci, initial_meas_cfg);
   ASSERT_FALSE(target_meas_cfg.has_value());
+}
+
+TEST_F(cell_meas_manager_test, when_periodic_ntn_location_reports_are_stable_then_handover_is_requested)
+{
+  create_ntn_location_manager();
+
+  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
+  ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
+
+  const nr_cell_identity serving_nci = get_ntn_test_nci(0);
+  const nr_cell_identity target_nci  = get_ntn_test_nci(1);
+  const auto             base_time   = std::chrono::steady_clock::now();
+
+  manager->report_ue_location(make_ntn_location_report(ue_index, serving_nci, 1.0, base_time));
+  ASSERT_TRUE(mobility_manager.ntn_events.empty());
+
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(500)));
+  ASSERT_TRUE(mobility_manager.ntn_events.empty());
+
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(1000)));
+  ASSERT_EQ(mobility_manager.ntn_events.size(), 1);
+  ASSERT_EQ(mobility_manager.ntn_events.front().ue_index, ue_index);
+  ASSERT_EQ(mobility_manager.ntn_events.front().serving_nci, serving_nci);
+  ASSERT_EQ(mobility_manager.ntn_events.front().handover_attempt_id, 1);
+  ASSERT_EQ(mobility_manager.ntn_events.front().target_beam_id, "CN-BEAM-0002");
+  ASSERT_EQ(mobility_manager.ntn_events.front().target_nci, target_nci);
+  ASSERT_EQ(mobility_manager.ntn_events.front().target_pci, 2);
+  ASSERT_EQ(mobility_manager.ntn_events.front().consecutive_location_reports, 3);
+  ASSERT_EQ(mobility_manager.ntn_events.front().served_beam_ids_snapshot.size(), 3);
+  ASSERT_NE(std::find(mobility_manager.ntn_events.front().served_beam_ids_snapshot.begin(),
+                      mobility_manager.ntn_events.front().served_beam_ids_snapshot.end(),
+                      "CN-BEAM-0002"),
+            mobility_manager.ntn_events.front().served_beam_ids_snapshot.end());
+}
+
+TEST_F(cell_meas_manager_test, when_ntn_target_beam_is_not_currently_served_then_handover_is_not_requested)
+{
+  create_ntn_location_manager();
+  ASSERT_TRUE(manager->update_ntn_served_beams({"CN-BEAM-0001"}));
+
+  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
+  ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
+
+  const nr_cell_identity serving_nci = get_ntn_test_nci(0);
+  const auto             base_time   = std::chrono::steady_clock::now();
+
+  manager->report_ue_location(make_ntn_location_report(ue_index, serving_nci, 1.0, base_time));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(500)));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(1000)));
+
+  ASSERT_TRUE(mobility_manager.ntn_events.empty());
+}
+
+TEST_F(cell_meas_manager_test, when_multi_beam_target_is_active_and_neighbor_then_handover_is_requested)
+{
+  create_ntn_location_manager();
+
+  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
+  ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
+
+  const nr_cell_identity serving_nci = get_ntn_test_nci(1);
+  const nr_cell_identity target_nci  = get_ntn_test_nci(2);
+  const auto             base_time   = std::chrono::steady_clock::now();
+
+  manager->report_ue_location(make_ntn_location_report(ue_index, serving_nci, 2.0, base_time));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 2.0, base_time + std::chrono::milliseconds(500)));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 2.0, base_time + std::chrono::milliseconds(1000)));
+
+  ASSERT_EQ(mobility_manager.ntn_events.size(), 1);
+  ASSERT_EQ(mobility_manager.ntn_events.front().target_beam_id, "CN-BEAM-0003");
+  ASSERT_EQ(mobility_manager.ntn_events.front().target_nci, target_nci);
+  ASSERT_EQ(mobility_manager.ntn_events.front().served_beam_ids_snapshot,
+            std::vector<std::string>({"CN-BEAM-0001", "CN-BEAM-0002", "CN-BEAM-0003"}));
+}
+
+TEST_F(cell_meas_manager_test, when_ntn_served_beams_are_updated_then_mobility_manager_is_notified)
+{
+  create_ntn_location_manager();
+  ASSERT_EQ(mobility_manager.ntn_served_beam_updates.size(), 1);
+  ASSERT_EQ(mobility_manager.ntn_served_beam_updates.back(),
+            std::vector<std::string>({"CN-BEAM-0001", "CN-BEAM-0002", "CN-BEAM-0003"}));
+
+  ASSERT_TRUE(manager->update_ntn_served_beams({"CN-BEAM-0001"}));
+
+  ASSERT_EQ(mobility_manager.ntn_served_beam_updates.size(), 2);
+  ASSERT_EQ(mobility_manager.ntn_served_beam_updates.back(), std::vector<std::string>({"CN-BEAM-0001"}));
+}
+
+TEST_F(cell_meas_manager_test, when_ntn_served_beam_update_is_unchanged_then_mobility_manager_is_not_notified)
+{
+  create_ntn_location_manager();
+  ASSERT_EQ(mobility_manager.ntn_served_beam_updates.size(), 1);
+  ASSERT_EQ(mobility_manager.ntn_served_beam_updates.back(),
+            std::vector<std::string>({"CN-BEAM-0001", "CN-BEAM-0002", "CN-BEAM-0003"}));
+
+  ASSERT_TRUE(manager->update_ntn_served_beams({"CN-BEAM-0001", "CN-BEAM-0002", "CN-BEAM-0003"}));
+
+  ASSERT_EQ(mobility_manager.ntn_served_beam_updates.size(), 1);
+}
+
+TEST_F(cell_meas_manager_test, when_ntn_served_beam_update_only_reorders_then_pending_candidate_is_preserved)
+{
+  create_ntn_location_manager();
+
+  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
+  ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
+
+  const nr_cell_identity serving_nci = get_ntn_test_nci(0);
+  const auto             base_time   = std::chrono::steady_clock::now();
+
+  manager->report_ue_location(make_ntn_location_report(ue_index, serving_nci, 1.0, base_time));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(500)));
+  ASSERT_TRUE(mobility_manager.ntn_events.empty());
+
+  ASSERT_TRUE(manager->update_ntn_served_beams({"CN-BEAM-0003", "CN-BEAM-0002", "CN-BEAM-0001"}));
+  ASSERT_EQ(mobility_manager.ntn_served_beam_updates.size(), 1);
+
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(1000)));
+  ASSERT_EQ(mobility_manager.ntn_events.size(), 1);
+  ASSERT_EQ(mobility_manager.ntn_events.back().target_beam_id, "CN-BEAM-0002");
+}
+
+TEST_F(cell_meas_manager_test, when_ntn_served_beam_set_changes_but_candidate_target_remains_then_candidate_is_preserved)
+{
+  create_ntn_location_manager();
+
+  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
+  ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
+
+  const nr_cell_identity serving_nci = get_ntn_test_nci(0);
+  const auto             base_time   = std::chrono::steady_clock::now();
+
+  manager->report_ue_location(make_ntn_location_report(ue_index, serving_nci, 1.0, base_time));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(500)));
+  ASSERT_TRUE(mobility_manager.ntn_events.empty());
+
+  ASSERT_TRUE(manager->update_ntn_served_beams({"CN-BEAM-0002", "CN-BEAM-0003"}));
+
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(1000)));
+  ASSERT_EQ(mobility_manager.ntn_events.size(), 1);
+  ASSERT_EQ(mobility_manager.ntn_events.back().target_beam_id, "CN-BEAM-0002");
+}
+
+TEST_F(cell_meas_manager_test, when_ntn_served_beam_set_changes_then_pending_candidate_is_reset)
+{
+  create_ntn_location_manager();
+
+  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
+  ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
+
+  const nr_cell_identity serving_nci = get_ntn_test_nci(0);
+  const auto             base_time   = std::chrono::steady_clock::now();
+
+  manager->report_ue_location(make_ntn_location_report(ue_index, serving_nci, 1.0, base_time));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(500)));
+  ASSERT_TRUE(mobility_manager.ntn_events.empty());
+
+  ASSERT_TRUE(manager->update_ntn_served_beams({"CN-BEAM-0001"}));
+  ASSERT_TRUE(manager->update_ntn_served_beams({"CN-BEAM-0001", "CN-BEAM-0002", "CN-BEAM-0003"}));
+
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(1000)));
+  ASSERT_TRUE(mobility_manager.ntn_events.empty());
+
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(1500)));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(2000)));
+  ASSERT_EQ(mobility_manager.ntn_events.size(), 1);
+}
+
+TEST_F(cell_meas_manager_test, when_orbit_selected_served_beams_are_applied_then_mobility_manager_is_notified)
+{
+  create_ntn_location_manager();
+
+  const std::vector<ntn_beam_position> beams = {
+      {"CN-BEAM-0001", get_ntn_test_nci(0), 0.0, 0.0, 50000.0, true},
+      {"CN-BEAM-0002", get_ntn_test_nci(1), 0.0, 1.0, 50000.0, true}};
+
+  const std::vector<ntn_served_beam_candidate> candidates =
+      select_ntn_served_beam_candidates_by_elevation(beams, make_ecef(0.0, 1.0, 500000.0), 80.0, 1);
+  ASSERT_EQ(candidates.size(), 1);
+  ASSERT_EQ(candidates.front().beam_id, "CN-BEAM-0002");
+  ASSERT_NEAR(candidates.front().elevation_deg, 90.0, 1e-6);
+
+  ASSERT_TRUE(manager->update_ntn_served_beams({candidates.front().beam_id}));
+
+  ASSERT_EQ(mobility_manager.ntn_served_beam_updates.size(), 2);
+  ASSERT_EQ(mobility_manager.ntn_served_beam_updates.back(), std::vector<std::string>({"CN-BEAM-0002"}));
+}
+
+TEST_F(cell_meas_manager_test, when_ntn_handover_trigger_is_rejected_then_later_reports_can_retry)
+{
+  create_ntn_location_manager();
+  mobility_manager.accept_ntn_handover = false;
+
+  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
+  ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
+
+  const nr_cell_identity serving_nci = get_ntn_test_nci(0);
+  const auto             base_time   = std::chrono::steady_clock::now();
+
+  manager->report_ue_location(make_ntn_location_report(ue_index, serving_nci, 1.0, base_time));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(500)));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(1000)));
+  ASSERT_EQ(mobility_manager.ntn_events.size(), 1);
+
+  mobility_manager.accept_ntn_handover = true;
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(1500)));
+
+  ASSERT_EQ(mobility_manager.ntn_events.size(), 2);
+  ASSERT_EQ(mobility_manager.ntn_events.back().target_beam_id, "CN-BEAM-0002");
+}
+
+TEST_F(cell_meas_manager_test, when_ntn_handover_failure_is_reported_then_candidate_is_rebuilt_before_retry_timeout)
+{
+  create_ntn_location_manager();
+
+  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
+  ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
+
+  const nr_cell_identity serving_nci = get_ntn_test_nci(0);
+  const auto             base_time   = std::chrono::steady_clock::now();
+
+  manager->report_ue_location(make_ntn_location_report(ue_index, serving_nci, 1.0, base_time));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(500)));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(1000)));
+  ASSERT_EQ(mobility_manager.ntn_events.size(), 1);
+
+  manager->handle_ntn_handover_result(make_ntn_handover_result(
+      mobility_manager.ntn_events.back(), false, ntn_handover_failure_cause::source_preparation_failed));
+
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(1500)));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(2000)));
+  ASSERT_EQ(mobility_manager.ntn_events.size(), 1);
+
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(2500)));
+
+  ASSERT_EQ(mobility_manager.ntn_events.size(), 2);
+  ASSERT_EQ(mobility_manager.ntn_events.back().handover_attempt_id, 2);
+  ASSERT_EQ(mobility_manager.ntn_events.back().target_beam_id, "CN-BEAM-0002");
+}
+
+TEST_F(cell_meas_manager_test, when_ntn_handover_result_has_stale_attempt_id_then_it_is_ignored)
+{
+  create_ntn_location_manager();
+
+  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
+  ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
+
+  const nr_cell_identity serving_nci = get_ntn_test_nci(0);
+  const auto             base_time   = std::chrono::steady_clock::now();
+
+  manager->report_ue_location(make_ntn_location_report(ue_index, serving_nci, 1.0, base_time));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(500)));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(1000)));
+  ASSERT_EQ(mobility_manager.ntn_events.size(), 1);
+  ASSERT_EQ(mobility_manager.ntn_events.back().handover_attempt_id, 1);
+
+  ntn_handover_result stale_result = make_ntn_handover_result(
+      mobility_manager.ntn_events.back(), false, ntn_handover_failure_cause::source_preparation_failed);
+  stale_result.context.handover_attempt_id = 0;
+  manager->handle_ntn_handover_result(stale_result);
+
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(1500)));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(2000)));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(2500)));
+  ASSERT_EQ(mobility_manager.ntn_events.size(), 1);
+
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(3000)));
+
+  ASSERT_EQ(mobility_manager.ntn_events.size(), 2);
+  ASSERT_EQ(mobility_manager.ntn_events.back().handover_attempt_id, 2);
+}
+
+TEST_F(cell_meas_manager_test, when_ntn_handover_result_is_repeated_then_it_is_only_handled_once)
+{
+  create_ntn_location_manager();
+
+  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
+  ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
+
+  const nr_cell_identity serving_nci = get_ntn_test_nci(0);
+  const auto             base_time   = std::chrono::steady_clock::now();
+
+  manager->report_ue_location(make_ntn_location_report(ue_index, serving_nci, 1.0, base_time));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(500)));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(1000)));
+  ASSERT_EQ(mobility_manager.ntn_events.size(), 1);
+  ASSERT_EQ(mobility_manager.ntn_events.back().handover_attempt_id, 1);
+
+  ntn_handover_result repeated_result = make_ntn_handover_result(
+      mobility_manager.ntn_events.back(), false, ntn_handover_failure_cause::source_preparation_failed);
+  manager->handle_ntn_handover_result(repeated_result);
+  manager->handle_ntn_handover_result(repeated_result);
+
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(1500)));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(2000)));
+  ASSERT_EQ(mobility_manager.ntn_events.size(), 1);
+
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(2500)));
+
+  ASSERT_EQ(mobility_manager.ntn_events.size(), 2);
+  ASSERT_EQ(mobility_manager.ntn_events.back().handover_attempt_id, 2);
+}
+
+TEST_F(cell_meas_manager_test, when_ntn_handover_trigger_is_accepted_then_it_is_not_repeated_before_retry_timeout)
+{
+  create_ntn_location_manager();
+
+  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
+  ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
+
+  const nr_cell_identity serving_nci = get_ntn_test_nci(0);
+  const auto             base_time   = std::chrono::steady_clock::now();
+
+  manager->report_ue_location(make_ntn_location_report(ue_index, serving_nci, 1.0, base_time));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(500)));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(1000)));
+  ASSERT_EQ(mobility_manager.ntn_events.size(), 1);
+
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(1500)));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(2000)));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(2500)));
+
+  ASSERT_EQ(mobility_manager.ntn_events.size(), 1);
+}
+
+TEST_F(cell_meas_manager_test, when_ntn_handover_trigger_stays_pending_past_timeout_then_it_can_retry)
+{
+  create_ntn_location_manager();
+
+  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
+  ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
+
+  const nr_cell_identity serving_nci = get_ntn_test_nci(0);
+  const auto             base_time   = std::chrono::steady_clock::now();
+
+  manager->report_ue_location(make_ntn_location_report(ue_index, serving_nci, 1.0, base_time));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(500)));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(1000)));
+  ASSERT_EQ(mobility_manager.ntn_events.size(), 1);
+
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(1500)));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(2000)));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(2500)));
+  ASSERT_EQ(mobility_manager.ntn_events.size(), 1);
+
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(3000)));
+
+  ASSERT_EQ(mobility_manager.ntn_events.size(), 2);
+  ASSERT_EQ(mobility_manager.ntn_events.back().target_beam_id, "CN-BEAM-0002");
+}
+
+TEST_F(cell_meas_manager_test, when_ue_assistance_location_is_stable_for_ttt_then_handover_is_requested)
+{
+  create_ntn_location_manager();
+
+  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
+  ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
+
+  const nr_cell_identity serving_nci = get_ntn_test_nci(0);
+  const auto             base_time   = std::chrono::steady_clock::now();
+
+  manager->report_ue_location(make_ntn_location_report(
+      ue_index, serving_nci, 1.0, base_time, ntn_ue_location_report_source::ue_assistance_info));
+  manager->report_ue_location(make_ntn_location_report(ue_index,
+                                                       serving_nci,
+                                                       1.0,
+                                                       base_time + std::chrono::milliseconds(500),
+                                                       ntn_ue_location_report_source::ue_assistance_info));
+  ASSERT_TRUE(mobility_manager.ntn_events.empty());
+
+  manager->report_ue_location(make_ntn_location_report(ue_index,
+                                                       serving_nci,
+                                                       1.0,
+                                                       base_time + std::chrono::milliseconds(1000),
+                                                       ntn_ue_location_report_source::ue_assistance_info));
+  ASSERT_EQ(mobility_manager.ntn_events.size(), 1);
+  ASSERT_EQ(mobility_manager.ntn_events.front().target_nci, get_ntn_test_nci(1));
+}
+
+TEST_F(cell_meas_manager_test, when_ntn_location_reports_have_large_gap_then_candidate_beam_is_reset)
+{
+  create_ntn_location_manager();
+
+  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
+  ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
+
+  const nr_cell_identity serving_nci = get_ntn_test_nci(0);
+  const auto             base_time   = std::chrono::steady_clock::now();
+
+  manager->report_ue_location(make_ntn_location_report(ue_index, serving_nci, 1.0, base_time));
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(1000)));
+  ASSERT_TRUE(mobility_manager.ntn_events.empty());
+
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(1500)));
+  ASSERT_TRUE(mobility_manager.ntn_events.empty());
+
+  manager->report_ue_location(
+      make_ntn_location_report(ue_index, serving_nci, 1.0, base_time + std::chrono::milliseconds(2000)));
+  ASSERT_EQ(mobility_manager.ntn_events.size(), 1);
+}
+
+TEST_F(cell_meas_manager_test, when_ntn_location_report_is_too_inaccurate_then_it_is_ignored)
+{
+  create_ntn_location_manager();
+
+  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
+  ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
+
+  ntn_ue_location_report report =
+      make_ntn_location_report(ue_index, get_ntn_test_nci(0), 1.0, std::chrono::steady_clock::now());
+  report.horizontal_accuracy_m = 1000.0;
+
+  ASSERT_EQ(manager->report_ue_location(report), ntn_location_report_result::inaccurate);
+  ASSERT_TRUE(mobility_manager.ntn_events.empty());
+}
+
+TEST_F(cell_meas_manager_test, when_ntn_location_report_is_accepted_then_result_is_reported)
+{
+  create_ntn_location_manager();
+
+  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
+  ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
+
+  ntn_ue_location_report report =
+      make_ntn_location_report(ue_index, get_ntn_test_nci(0), 1.0, std::chrono::steady_clock::now());
+
+  ASSERT_EQ(manager->report_ue_location(report), ntn_location_report_result::accepted);
+  ASSERT_TRUE(manager->get_last_ue_location_report(ue_index).has_value());
+}
+
+TEST_F(cell_meas_manager_test, when_ntn_location_mobility_is_enabled_then_rsrp_measurement_does_not_trigger_handover)
+{
+  create_ntn_location_manager();
+
+  ue_index_t ue_index = ue_mng.add_ue(uint_to_du_index(0));
+  ASSERT_TRUE(ue_mng.set_plmn(ue_index, plmn_identity::test_value()));
+
+  const nr_cell_identity            serving_nci = get_ntn_test_nci(0);
+  std::optional<rrc_meas_cfg>       meas_cfg    = manager->get_measurement_config(ue_index, serving_nci);
+  ASSERT_TRUE(meas_cfg.has_value());
+  const auto periodic_meas_it = std::find_if(meas_cfg->meas_id_to_add_mod_list.begin(),
+                                             meas_cfg->meas_id_to_add_mod_list.end(),
+                                             [](const rrc_meas_id_to_add_mod& meas_id) {
+                                               return meas_id.report_cfg_id == uint_to_report_cfg_id(1);
+                                             });
+  ASSERT_NE(periodic_meas_it, meas_cfg->meas_id_to_add_mod_list.end());
+
+  rrc_meas_results meas_results;
+  meas_results.meas_id = periodic_meas_it->meas_id;
+
+  rrc_meas_quant_results serving_quant_results;
+  serving_quant_results.rsrp = 10;
+  rrc_meas_result_serv_mo serving_mo;
+  serving_mo.serv_cell_id = 0;
+  serving_mo.meas_result_serving_cell.cell_results.results_ssb_cell = serving_quant_results;
+  meas_results.meas_result_serving_mo_list.emplace(serving_mo.serv_cell_id, serving_mo);
+
+  rrc_meas_quant_results neighbor_quant_results;
+  neighbor_quant_results.rsrp = 90;
+  rrc_meas_result_nr neighbor_result;
+  neighbor_result.pci = 2;
+  neighbor_result.cell_results.results_ssb_cell = neighbor_quant_results;
+  meas_results.meas_result_neigh_cells.emplace().meas_result_list_nr.push_back(neighbor_result);
+
+  manager->report_measurement(ue_index, meas_results);
+  ASSERT_TRUE(mobility_manager.events.empty());
+  ASSERT_TRUE(mobility_manager.ntn_events.empty());
 }

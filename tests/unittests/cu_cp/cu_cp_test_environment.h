@@ -29,6 +29,7 @@
 #include "test_doubles/mock_du.h"
 #include "tests/test_doubles/f1ap/f1ap_test_messages.h"
 #include "srsran/cu_cp/cu_cp.h"
+#include "srsran/cu_cp/cell_meas_manager_config.h"
 #include "srsran/cu_cp/cu_cp_configuration.h"
 #include "srsran/cu_cp/cu_cp_types.h"
 #include "srsran/ran/plmn_identity.h"
@@ -72,8 +73,12 @@ struct cu_cp_test_env_params {
   unsigned                                  max_nof_dus;
   unsigned                                  max_nof_ues;
   unsigned                                  max_nof_drbs_per_ue;
+  cu_cp_configuration::admission_params::load_watermark initial_access_watermark;
+  cu_cp_configuration::admission_params::load_watermark reestablishment_watermark;
+  cu_cp_configuration::admission_params::load_watermark handover_watermark;
   std::map<unsigned, cu_cp_test_amf_config> amf_configs;
   bool                                      trigger_ho_from_measurements;
+  std::optional<ntn_location_mobility_config> ntn_location_mobility;
 };
 
 class cu_cp_test_environment

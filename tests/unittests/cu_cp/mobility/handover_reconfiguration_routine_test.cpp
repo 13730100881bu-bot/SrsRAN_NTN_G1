@@ -30,6 +30,7 @@
 #include "srsran/support/async/coroutine.h"
 #include <chrono>
 #include <gtest/gtest.h>
+#include <optional>
 
 using namespace srsran;
 using namespace srs_cu_cp;
@@ -304,6 +305,7 @@ protected:
                                                        *source_ue,
                                                        source_f1ap_ue_ctxt_mng,
                                                        cu_cp_handler,
+                                                       std::nullopt,
                                                        test_logger);
     t_launcher.emplace(t);
   }

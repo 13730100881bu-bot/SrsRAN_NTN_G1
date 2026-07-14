@@ -26,6 +26,7 @@
 #include "srsran/ngap/ngap_context.h"
 #include "srsran/ngap/ngap_handover.h"
 #include "srsran/ngap/ngap_init_context_setup.h"
+#include "srsran/ngap/ngap_location_reporting.h"
 #include "srsran/ngap/ngap_metrics.h"
 #include "srsran/ngap/ngap_rrc_inactive_transition.h"
 #include "srsran/ngap/ngap_setup.h"
@@ -235,6 +236,10 @@ public:
   /// \param[in] amf_index The index of the AMF that received the NRPPa transport.
   /// \param[in] nrppa_pdu The NRPPa transport PDU.
   virtual void on_dl_non_ue_associated_nrppa_transport_pdu(amf_index_t amf_index, const byte_buffer& nrppa_pdu) = 0;
+
+  /// \brief Notifies the CU-CP about a Location Reporting Control request.
+  virtual ngap_location_reporting_control_response
+  on_location_reporting_control(const ngap_location_reporting_control& request) = 0;
 };
 
 /// Handle NGAP NAS Message procedures as defined in TS 38.413 section 8.6.
@@ -302,6 +307,9 @@ public:
   /// \brief Initiates the transmission of a RRC inactive transition report.
   virtual async_task<bool>
   handle_rrc_inactive_transition_report_required(const ngap_rrc_inactive_transition_report& report) = 0;
+
+  /// \brief Initiates the transmission of a Location Report.
+  virtual bool handle_location_report_required(const ngap_location_report& report) = 0;
 };
 
 /// Interface to control the NGAP.

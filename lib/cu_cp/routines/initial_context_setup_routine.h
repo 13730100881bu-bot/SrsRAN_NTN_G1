@@ -23,6 +23,7 @@
 #pragma once
 
 #include "../ue_manager/ue_manager_impl.h"
+#include "srsran/f1ap/ntn_ul_slot_resource_request.h"
 #include "srsran/ngap/ngap_init_context_setup.h"
 #include "srsran/ngap/ngap_ue_radio_capability_management.h"
 
@@ -39,7 +40,8 @@ public:
                                 ue_security_manager&                         security_mng_,
                                 f1ap_ue_context_manager&                     f1ap_ue_ctxt_mng_,
                                 cu_cp_ngap_handler&                          pdu_session_setup_handler_,
-                                srslog::basic_logger&                        logger_);
+                                srslog::basic_logger&                        logger_,
+                                std::optional<f1ap_ntn_ul_slot_resource_request> ntn_ul_slot_request_ = std::nullopt);
 
   void operator()(
       coro_context<async_task<expected<ngap_init_context_setup_response, ngap_init_context_setup_failure>>>& ctx);
@@ -59,6 +61,7 @@ private:
   f1ap_ue_context_manager&                     f1ap_ue_ctxt_mng;          // to trigger UE context setup at F1AP
   cu_cp_ngap_handler&                          pdu_session_setup_handler; // to setup PDU sessions
   srslog::basic_logger&                        logger;
+  std::optional<f1ap_ntn_ul_slot_resource_request> ntn_ul_slot_request;
 
   // (sub-)routine requests
   rrc_ue_security_mode_command_context     rrc_smc_ctxt;

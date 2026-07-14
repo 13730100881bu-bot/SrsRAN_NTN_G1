@@ -52,6 +52,7 @@ private:
   up_config_update get_next_config_from_radio_bearer_cfg();
 
   bool add_security_context_to_bearer_context_modification(const srsran::security::sec_as_config& security_cfg);
+  void report_ntn_handover_result(bool success, ntn_handover_failure_cause failure_cause);
 
   const cu_cp_intra_cu_handover_target_request request;
 
@@ -78,6 +79,7 @@ private:
 
   // (Sub-)routine results.
   bool                                      reconf_result = false;
+  bool                                      ntn_result_reported = false;
   e1ap_bearer_context_modification_response bearer_context_modification_response;
 };
 

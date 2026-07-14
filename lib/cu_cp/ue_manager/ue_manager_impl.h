@@ -35,6 +35,7 @@
 #include <optional>
 #include <set>
 #include <unordered_map>
+#include <vector>
 
 namespace srsran {
 
@@ -79,6 +80,13 @@ public:
   /// \brief Get the number of UEs.
   /// \return Number of UEs.
   size_t get_nof_ues() const { return ues.size(); }
+
+  /// \brief Get the number of DRBs configured across all UEs.
+  /// \return Number of DRBs.
+  size_t get_nof_drbs() const;
+
+  /// \brief Get all UE contexts currently known by the CU-CP.
+  std::vector<cu_cp_ue*> get_ues();
 
   // common
 

@@ -24,6 +24,7 @@
 
 #include "srsran/cu_cp/cu_cp_types.h"
 #include "srsran/f1ap/f1ap_ue_id_types.h"
+#include "srsran/f1ap/ntn_ul_slot_resource_request.h"
 #include "srsran/f1ap/ue_context_management_configs.h"
 #include "srsran/ran/cause/f1ap_cause.h"
 #include "srsran/ran/cu_types.h"
@@ -103,6 +104,7 @@ struct f1ap_ue_context_setup_request {
   std::vector<f1ap_drb_to_setup>                     drbs_to_be_setup_list;  // max size = 64
   std::optional<bool>                                inactivity_monitoring_request;
   std::optional<f1ap_rat_freq_prio_info>             rat_freq_prio_info;
+  std::optional<f1ap_ntn_ul_slot_resource_request>   ntn_ul_slot_request;
   byte_buffer                                        rrc_container;
   std::optional<uint64_t>                            masked_imeisv;
   std::optional<std::string>                         serving_plmn;
@@ -181,6 +183,7 @@ struct f1ap_ue_context_modification_request {
   std::optional<f1ap_cu_to_du_rrc_info>              cu_to_du_rrc_info;
   std::optional<f1ap_tx_action_ind>                  tx_action_ind;
   byte_buffer                                        res_coordination_transfer_container;
+  std::optional<f1ap_ntn_ul_slot_resource_request>   ntn_ul_slot_request;
   std::optional<f1ap_rrc_recfg_complete_ind>         rrc_recfg_complete_ind;
   byte_buffer                                        rrc_container;
   std::vector<f1ap_scell_to_be_setup_mod_item>       scell_to_be_setup_mod_list;

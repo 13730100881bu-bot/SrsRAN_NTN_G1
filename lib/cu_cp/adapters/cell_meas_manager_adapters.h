@@ -45,6 +45,18 @@ public:
     handler->handle_neighbor_better_than_spcell(ue_index, neighbor_gnb_id, neighbor_nci, neighbor_pci);
   }
 
+  bool on_ntn_location_handover_required(const ntn_location_handover_trigger& trigger) override
+  {
+    srsran_assert(handler != nullptr, "Mobility manager handler must not be nullptr");
+    return handler->handle_ntn_location_handover_required(trigger);
+  }
+
+  void on_ntn_served_beams_updated(const std::vector<std::string>& beam_ids) override
+  {
+    srsran_assert(handler != nullptr, "Mobility manager handler must not be nullptr");
+    handler->handle_ntn_served_beams_updated(beam_ids);
+  }
+
 private:
   mobility_manager_measurement_handler* handler = nullptr;
 };

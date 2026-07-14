@@ -19,3 +19,4 @@
 #
 
 add_subdirectory(flexible_du)
+add_subdirectory(o_cu_cp)

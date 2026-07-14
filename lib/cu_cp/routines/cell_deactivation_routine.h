@@ -45,7 +45,7 @@ public:
 
   static const char* name() { return "Cell Deactivation Routine"; }
 
-  void release_ues();
+  std::vector<cu_cp_ue_context_release_command> make_ue_release_commands();
 
   void get_remaining_plmns(const du_cell_configuration& cell_cfg);
 
@@ -59,22 +59,18 @@ private:
   ue_manager&                       ue_mng;
   srslog::basic_logger&             logger;
 
-  unique_timer ue_release_timer;
-
   // (Sub-)Routine requests.
   f1ap_gnb_cu_configuration_update f1ap_cu_cfg_update;
 
   // (Sub-)Routine results.
   f1ap_gnb_cu_configuration_update_response f1ap_cu_cfg_update_response;
   bool                                      routine_success = true;
+  cu_cp_ue_context_release_batch_response   ue_release_response;
 
-  std::unordered_map<ue_index_t, bool>           ue_release_status;
-  std::unordered_map<ue_index_t, bool>::iterator ue_release_status_it;
-  bool                                           all_ues_released = false;
-  std::unordered_set<plmn_identity>              remaining_plmns;
-  std::vector<du_index_t>                        du_indexes;
-  std::vector<du_index_t>::iterator              du_idx_it;
-  du_processor*                                  du_proc = nullptr;
+  std::unordered_set<plmn_identity> remaining_plmns;
+  std::vector<du_index_t>           du_indexes;
+  std::vector<du_index_t>::iterator du_idx_it;
+  du_processor*                     du_proc = nullptr;
 };
 
 } // namespace srs_cu_cp

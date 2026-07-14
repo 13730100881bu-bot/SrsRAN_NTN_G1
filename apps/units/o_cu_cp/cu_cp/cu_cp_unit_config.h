@@ -31,6 +31,8 @@
 #include "srsran/ran/qos/five_qi.h"
 #include "srsran/ran/s_nssai.h"
 #include "srsran/ran/tac.h"
+#include <optional>
+#include <string>
 #include <vector>
 
 namespace srsran {
@@ -132,14 +134,88 @@ struct cu_cp_unit_cell_config_item {
   // TODO: Add optional SSB parameters.
 };
 
+/// NTN location-based mobility application configuration.
+struct cu_cp_unit_ntn_location_mobility_config {
+  bool enabled = false;
+
+  /// JSON file containing the static NTN beam table.
+  std::string beam_table_json_file;
+
+  /// Minimum satellite elevation angle for runtime served beam selection.
+  double served_beam_min_elevation_deg = 10.0;
+
+  /// Maximum number of beams simultaneously served by the hopping schedule.
+  unsigned max_nof_served_beams = 1;
+
+  /// Rotate the active CU-CP beam-set window across visible beams when more beams are visible than can be active.
+  bool served_beam_hopping_enabled = false;
+
+  /// Number of satellite-state update periods that one hopping window should hold before rotating.
+  unsigned served_beam_hopping_dwell_updates = 1;
+
+  /// Satellite state source used for runtime served beam updates: manual, circular_orbit or tle.
+  std::string satellite_state_source = "manual";
+
+  /// Period of orbit-driven satellite state updates. Zero disables automatic updates.
+  unsigned satellite_state_update_period_ms = 0;
+
+  double circular_orbit_altitude_m               = 500000.0;
+  double circular_orbit_inclination_deg          = 53.0;
+  double circular_orbit_raan_deg                 = 0.0;
+  double circular_orbit_argument_of_latitude_deg = 0.0;
+  std::optional<double> circular_orbit_epoch_unix_s;
+
+  std::string tle_satellite_name;
+  std::string tle_line1;
+  std::string tle_line2;
+
+  /// Period used when UE position is derived from periodic MeasurementReport messages. Zero disables report-count
+  /// derivation from this period.
+  unsigned measurement_report_period_ms = 0;
+
+  /// Minimum stable candidate time before handover.
+  unsigned time_to_trigger_ms = 0;
+
+  /// Maximum gap between consecutive location samples for the same candidate. Zero disables the gap check.
+  unsigned max_report_gap_ms = 0;
+
+  /// Maximum accepted age of a location sample. Zero disables the age check.
+  unsigned location_max_age_ms = 0;
+
+  /// Retry timeout after an accepted NTN handover trigger. Zero disables automatic retry.
+  unsigned handover_retry_timeout_ms = 0;
+
+  /// Required consecutive location samples for the same candidate beam.
+  unsigned required_consecutive_location_reports = 1;
+
+  /// Additional serving-beam margin to reduce boundary ping-pong.
+  double boundary_hysteresis_m = 0.0;
+
+  /// Optional maximum accepted UE horizontal position error.
+  std::optional<double> max_horizontal_accuracy_m;
+
+  /// Locally forward accepted NTN UE location reports to NGAP LocationReport.
+  bool core_network_reporting_local_forwarding_enabled = false;
+
+  /// Accept AMF LocationReportingControl requests for NTN location reporting.
+  bool core_network_reporting_amf_control_enabled = true;
+
+  /// Minimum interval between two core-network LocationReports for the same UE. Zero disables throttling.
+  unsigned core_network_reporting_min_report_interval_ms = 0;
+};
+
 /// All mobility related configuration parameters.
 struct cu_cp_unit_mobility_config {
   /// List of all cells known to the CU-CP.
   std::vector<cu_cp_unit_cell_config_item> cells;
+  /// JSON file containing static neighbor-cell information and relations.
+  std::string neighbor_cell_info_json_file;
   /// Report config.
   std::vector<cu_cp_unit_report_config> report_configs;
   /// Whether to start HO if neighbor cell measurements arrive.
   bool trigger_handover_from_measurements = false;
+  /// Location-based NTN mobility configuration.
+  cu_cp_unit_ntn_location_mobility_config ntn_location_mobility;
 };
 
 /// RRC specific configuration parameters.
@@ -288,6 +364,13 @@ struct cu_cp_unit_metrics_config {
   cu_cp_unit_metrics_layer_config layers_cfg;
 };
 
+struct cu_cp_unit_admission_watermark_config {
+  /// Maximum accepted UE usage in percent.
+  unsigned max_ue_usage = 100;
+  /// Maximum accepted DRB usage in percent.
+  unsigned max_drb_usage = 100;
+};
+
 /// CU-CP application unit configuration.
 struct cu_cp_unit_config {
   /// Node name.
@@ -302,6 +385,12 @@ struct cu_cp_unit_config {
   uint64_t max_nof_ues = 8192;
   /// Maximum number of DRBs per UE.
   uint8_t max_nof_drbs_per_ue = 8;
+  /// Admission watermarks for initial accesses.
+  cu_cp_unit_admission_watermark_config initial_access_admission = {};
+  /// Admission watermarks for RRC reestablishments.
+  cu_cp_unit_admission_watermark_config reestablishment_admission = {};
+  /// Admission watermarks for handover target admissions.
+  cu_cp_unit_admission_watermark_config handover_admission = {};
   /// Inactivity timer in seconds.
   int inactivity_timer = 120;
   /// PDU session request timeout in seconds (must be larger than T310).

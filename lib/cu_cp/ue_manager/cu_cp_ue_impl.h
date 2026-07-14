@@ -97,6 +97,7 @@ public:
 
   /// \brief Get the UP resource manager of the UE.
   up_resource_manager& get_up_resource_manager() override { return up_mng; }
+  const up_resource_manager& get_up_resource_manager() const { return up_mng; }
 
   /// \brief Get the task scheduler of the UE.
   ue_task_scheduler& get_task_sched() override { return task_sched; }

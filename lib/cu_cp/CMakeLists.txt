@@ -20,6 +20,8 @@
 
 add_subdirectory(cell_meas_manager)
 add_subdirectory(mobility_manager)
+add_subdirectory(neighbor_cell_manager)
+add_subdirectory(ntn_mobility)
 add_subdirectory(up_resource_manager)
 add_subdirectory(ue_security_manager)
 
@@ -52,6 +54,7 @@ set(SOURCES
         routines/pdu_session_resource_setup_routine.cpp
         routines/pdu_session_resource_release_routine.cpp
         routines/pdu_session_resource_modification_routine.cpp
+        routines/ue_batch_release_routine.cpp
         routines/ue_context_release_routine.cpp
         routines/reestablishment_context_modification_routine.cpp
         routines/ue_removal_routine.cpp
@@ -76,6 +79,8 @@ add_library(srsran_cu_cp STATIC ${SOURCES})
 target_link_libraries(srsran_cu_cp
         srsran_cu_cp_cell_meas_manager
         srsran_cu_cp_mobility_manager
+        srsran_cu_cp_neighbor_cell_manager
+        srsran_cu_cp_ntn_mobility
         srsran_ue_security_manager
         srsran_e1ap_cu_cp
         srsran_f1ap_cu

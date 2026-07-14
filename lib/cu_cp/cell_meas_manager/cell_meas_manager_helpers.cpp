@@ -22,6 +22,9 @@
 
 #include "cell_meas_manager_helpers.h"
 #include "srsran/srslog/srslog.h"
+#include <cmath>
+#include <set>
+#include <unordered_set>
 
 using namespace srsran;
 using namespace srs_cu_cp;
@@ -68,6 +71,104 @@ bool srsran::srs_cu_cp::is_valid_configuration(
     const cell_meas_manager_cfg&                                cfg,
     const std::unordered_map<ssb_frequency_t, rrc_meas_obj_nr>& ssb_freq_to_meas_object)
 {
+  const auto& ntn_cfg = cfg.ntn_location_mobility;
+  if (ntn_cfg.enabled) {
+    if (ntn_cfg.beams.empty()) {
+      srslog::fetch_basic_logger(LOG_CHAN).error("NTN location mobility requires at least one static beam");
+      return false;
+    }
+    if (ntn_cfg.required_consecutive_location_reports == 0) {
+      srslog::fetch_basic_logger(LOG_CHAN).error("NTN location mobility requires at least one consecutive report");
+      return false;
+    }
+    if (!std::isfinite(ntn_cfg.served_beam_min_elevation_deg) || ntn_cfg.served_beam_min_elevation_deg < -90.0 ||
+        ntn_cfg.served_beam_min_elevation_deg > 90.0) {
+      srslog::fetch_basic_logger(LOG_CHAN).error("NTN served beam minimum elevation must be within [-90, 90] degrees");
+      return false;
+    }
+    if (ntn_cfg.max_nof_served_beams == 0) {
+      srslog::fetch_basic_logger(LOG_CHAN).error("NTN max number of served beams must be greater than zero");
+      return false;
+    }
+    if (ntn_cfg.served_beam_hopping_dwell_updates == 0) {
+      srslog::fetch_basic_logger(LOG_CHAN).error("NTN served beam hopping dwell updates must be greater than zero");
+      return false;
+    }
+    const auto& sat_state_cfg = ntn_cfg.satellite_state_update;
+    if (sat_state_cfg.source != ntn_satellite_state_source::manual) {
+      if (sat_state_cfg.update_period.count() <= 0) {
+        srslog::fetch_basic_logger(LOG_CHAN).error("NTN satellite state update period must be greater than zero");
+        return false;
+      }
+      if (sat_state_cfg.source == ntn_satellite_state_source::circular_orbit) {
+        if (!std::isfinite(sat_state_cfg.circular_altitude_m) || sat_state_cfg.circular_altitude_m <= 0.0 ||
+            !std::isfinite(sat_state_cfg.circular_inclination_deg) ||
+            !std::isfinite(sat_state_cfg.circular_raan_deg) ||
+            !std::isfinite(sat_state_cfg.circular_argument_of_latitude_deg)) {
+          srslog::fetch_basic_logger(LOG_CHAN).error("Invalid NTN circular orbit configuration");
+          return false;
+        }
+      }
+      if (sat_state_cfg.source == ntn_satellite_state_source::tle &&
+          (sat_state_cfg.tle_line1.empty() || sat_state_cfg.tle_line2.empty())) {
+        srslog::fetch_basic_logger(LOG_CHAN).error("NTN TLE orbit source requires both TLE lines");
+        return false;
+      }
+    }
+    if (ntn_cfg.boundary_hysteresis_m < 0.0) {
+      srslog::fetch_basic_logger(LOG_CHAN).error("NTN beam boundary hysteresis must not be negative");
+      return false;
+    }
+    if (ntn_cfg.max_horizontal_accuracy_m.has_value() && ntn_cfg.max_horizontal_accuracy_m.value() < 0.0) {
+      srslog::fetch_basic_logger(LOG_CHAN).error("NTN maximum horizontal accuracy must not be negative");
+      return false;
+    }
+    if (ntn_cfg.measurement_report_period.count() < 0 || ntn_cfg.time_to_trigger.count() < 0 ||
+        ntn_cfg.max_report_gap.count() < 0 || ntn_cfg.location_max_age.count() < 0 ||
+        ntn_cfg.handover_retry_timeout.count() < 0 ||
+        ntn_cfg.core_network_reporting.min_report_interval.count() < 0) {
+      srslog::fetch_basic_logger(LOG_CHAN).error("NTN location mobility timers must not be negative");
+      return false;
+    }
+
+    bool                            has_enabled_beam = false;
+    std::unordered_set<std::string> beam_ids;
+    std::set<nr_cell_identity>      beam_ncis;
+    for (const auto& beam : ntn_cfg.beams) {
+      if (beam.beam_id.empty()) {
+        srslog::fetch_basic_logger(LOG_CHAN).error("NTN beam id must not be empty");
+        return false;
+      }
+      if (!beam_ids.emplace(beam.beam_id).second) {
+        srslog::fetch_basic_logger(LOG_CHAN).error("Duplicate NTN beam id '{}'", beam.beam_id);
+        return false;
+      }
+      if (!beam_ncis.emplace(beam.nci).second) {
+        srslog::fetch_basic_logger(LOG_CHAN).error("Duplicate NTN beam nci={:#x}", beam.nci);
+        return false;
+      }
+      has_enabled_beam |= beam.enabled;
+      if (cfg.cells.find(beam.nci) == cfg.cells.end()) {
+        srslog::fetch_basic_logger(LOG_CHAN).error("NTN beam '{}' nci={:#x} has no cell measurement config",
+                                                   beam.beam_id,
+                                                   beam.nci);
+        return false;
+      }
+      if (beam.center_latitude_deg < -90.0 || beam.center_latitude_deg > 90.0 ||
+          beam.center_longitude_deg < -180.0 || beam.center_longitude_deg > 180.0 ||
+          beam.coverage_radius_m <= 0.0 ||
+          !std::isfinite(beam.center_latitude_deg) || !std::isfinite(beam.center_longitude_deg) ||
+          !std::isfinite(beam.coverage_radius_m)) {
+        srslog::fetch_basic_logger(LOG_CHAN).error("Invalid NTN beam position '{}'", beam.beam_id);
+        return false;
+      }
+    }
+    if (!has_enabled_beam) {
+      srslog::fetch_basic_logger(LOG_CHAN).error("NTN location mobility requires at least one enabled beam");
+      return false;
+    }
+  }
+
   std::vector<nr_cell_identity> ncis;
   // Verify neighbor cell lists: cell id must not be included in neighbor cell list.
   for (const auto& cell : cfg.cells) {
@@ -179,7 +280,8 @@ std::vector<ssb_frequency_t> srsran::srs_cu_cp::generate_measurement_object_list
 }
 
 void srsran::srs_cu_cp::generate_report_config(const cell_meas_manager_cfg&  cfg,
-                                               const nr_cell_identity        nci,
+                                               const nr_cell_identity        meas_obj_nci,
+                                               const nr_cell_identity        serving_nci,
                                                const report_cfg_id_t         report_cfg_id,
                                                rrc_meas_cfg&                 meas_cfg,
                                                cell_meas_manager_ue_context& ue_meas_context)
@@ -193,12 +295,12 @@ void srsran::srs_cu_cp::generate_report_config(const cell_meas_manager_cfg&  cfg
   // Add meas id to link the cell and the report together.
   rrc_meas_id_to_add_mod meas_id_to_add_mod;
   meas_id_to_add_mod.meas_id       = ue_meas_context.allocate_meas_id();
-  meas_id_to_add_mod.meas_obj_id   = ue_meas_context.nci_to_meas_obj_id.at(nci);
+  meas_id_to_add_mod.meas_obj_id   = ue_meas_context.nci_to_meas_obj_id.at(meas_obj_nci);
   meas_id_to_add_mod.report_cfg_id = report_cfg_id;
   meas_cfg.meas_id_to_add_mod_list.push_back(meas_id_to_add_mod);
 
   // add meas id to lookup
-  auto& serving_cell_cfg = cfg.cells.at(nci).serving_cell_cfg;
+  auto& serving_cell_cfg = cfg.cells.at(serving_nci).serving_cell_cfg;
   ue_meas_context.meas_id_to_meas_context.emplace(meas_id_to_add_mod.meas_id,
                                                   meas_context_t{meas_id_to_add_mod.meas_obj_id,
                                                                  meas_id_to_add_mod.report_cfg_id,

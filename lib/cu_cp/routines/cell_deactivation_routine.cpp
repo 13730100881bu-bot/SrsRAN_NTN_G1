@@ -22,10 +22,10 @@
 
 #include "cell_deactivation_routine.h"
 #include "../du_processor/du_processor_repository.h"
+#include "ue_batch_release_routine.h"
 #include "srsran/f1ap/cu_cp/f1ap_cu_configuration_update.h"
 #include "srsran/ran/cause/ngap_cause.h"
 #include "srsran/ran/plmn_identity.h"
-#include "srsran/support/async/async_timer.h"
 #include "srsran/support/async/coroutine.h"
 
 using namespace srsran;
@@ -43,8 +43,7 @@ cell_deactivation_routine::cell_deactivation_routine(const cu_cp_configuration& 
   du_db(du_db_),
   ue_release_handler(ue_release_handler_),
   ue_mng(ue_mng_),
-  logger(logger_),
-  ue_release_timer(timer_factory{*cu_cp_cfg.services.timers, *cu_cp_cfg.services.cu_cp_executor}.create_timer())
+  logger(logger_)
 {
 }
 
@@ -55,22 +54,15 @@ void cell_deactivation_routine::operator()(coro_context<async_task<void>>& ctx)
   logger.info("\"{}\" started...", name());
 
   // Release all UEs with the PLMNs served by the disconnected AMF.
-  release_ues();
-
-  // Wait until all UEs are released.
-  while (true) {
-    all_ues_released = true;
-    for (ue_release_status_it = ue_release_status.begin(); ue_release_status_it != ue_release_status.end();
-         ++ue_release_status_it) {
-      if (!ue_release_status_it->second) {
-        CORO_AWAIT(async_wait_for(ue_release_timer, std::chrono::milliseconds(10)));
-        all_ues_released = false;
-      }
-    }
-    if (all_ues_released) {
-      logger.info("All UEs released");
-      break;
-    }
+  CORO_AWAIT_VALUE(
+      ue_release_response,
+      launch_async<ue_batch_release_routine>(make_ue_release_commands(), ue_release_handler, ue_mng, logger));
+  if (!ue_release_response.success()) {
+    routine_success = false;
+    logger.warning("Cell deactivation UE release finished with not_found={} duplicate={} schedule_failed={}",
+                   ue_release_response.ues_not_found.size(),
+                   ue_release_response.duplicate_ues.size(),
+                   ue_release_response.failed_to_schedule_ues.size());
   }
 
   // Deactivate all cells that serve this PLMN.
@@ -104,33 +96,26 @@ void cell_deactivation_routine::operator()(coro_context<async_task<void>>& ctx)
   CORO_RETURN();
 }
 
-void cell_deactivation_routine::release_ues()
+std::vector<cu_cp_ue_context_release_command> cell_deactivation_routine::make_ue_release_commands()
 {
+  std::vector<cu_cp_ue_context_release_command> commands;
+
   // Release all UEs with the PLMNs served by the disconnected AMF.
   for (const auto& plmn : plmns) {
     std::vector<cu_cp_ue*> ues = ue_mng.find_ues(plmn);
 
     for (const auto& ue : ues) {
       if (ue != nullptr) {
-        ue_release_status[ue->get_ue_index()] = false;
         logger.info("ue={}: Releasing UE (PLMN {}) due to N2 disconnection", ue->get_ue_index(), plmn);
-        ue->get_task_sched().schedule_async_task(launch_async(
-            [this,
-             command      = cu_cp_ue_context_release_command{ue->get_ue_index(),
-                                                        ngap_cause_transport_t::transport_res_unavailable,
-                                                        true,
-                                                        std::chrono::seconds{5}},
-             &ue_released = ue_release_status.at(ue->get_ue_index())](coro_context<async_task<void>>& ctx) {
-              CORO_BEGIN(ctx);
-              // The outcome of the procedure is ignored, as we don't send anything to the (lost) AMF.
-              CORO_AWAIT(ue_release_handler.handle_ue_context_release_command(command));
-              ue_released = true;
-              logger.info("ue={}: UE released", command.ue_index);
-              CORO_RETURN();
-            }));
+        commands.push_back(cu_cp_ue_context_release_command{ue->get_ue_index(),
+                                                            ngap_cause_transport_t::transport_res_unavailable,
+                                                            true,
+                                                            std::chrono::seconds{5}});
       }
     }
   }
+
+  return commands;
 }
 
 void cell_deactivation_routine::get_remaining_plmns(const du_cell_configuration& cell_cfg)

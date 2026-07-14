@@ -24,6 +24,7 @@
 #include "../f1ap_asn1_converters.h"
 #include "asn1_helpers.h"
 #include "srsran/f1ap/f1ap_message.h"
+#include "srsran/f1ap/ntn_ul_slot_resource_request.h"
 #include "srsran/ran/cause/ngap_cause.h"
 
 using namespace srsran;
@@ -186,6 +187,10 @@ static void fill_asn1_ue_context_modification_request(asn1::f1ap::ue_context_mod
   if (!request.res_coordination_transfer_container.empty()) {
     asn1_request->res_coordination_transfer_container_present = true;
     asn1_request->res_coordination_transfer_container         = request.res_coordination_transfer_container.copy();
+  } else if (request.ntn_ul_slot_request.has_value()) {
+    asn1_request->res_coordination_transfer_container_present = true;
+    asn1_request->res_coordination_transfer_container =
+        encode_f1ap_ntn_ul_slot_resource_request(*request.ntn_ul_slot_request);
   }
 
   // rrc recfg complete ind

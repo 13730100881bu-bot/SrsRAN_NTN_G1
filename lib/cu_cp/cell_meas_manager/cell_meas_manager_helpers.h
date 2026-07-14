@@ -49,14 +49,16 @@ void add_old_meas_config_to_rem_list(const rrc_meas_cfg& old_cfg, rrc_meas_cfg& 
 std::vector<ssb_frequency_t> generate_measurement_object_list(const cell_meas_manager_cfg& cfg,
                                                               nr_cell_identity             serving_nci);
 
-/// \brief Generate report configuration for the given cell configuration.
+/// \brief Generate report configuration for the given measurement object cell configuration.
 /// \param[in] cfg The cell configuration.
-/// \param[in] nci The cell id.
+/// \param[in] meas_obj_nci The cell id used to select the measurement object.
+/// \param[in] serving_nci The serving cell id used when handling reports produced by this configuration.
 /// \param[in] report_cfg_id The report configuration id.
 /// \param[out] meas_cfg The resulting measurement configuration.
 /// \param[out] ue_meas_context The UE measurement context.
 void generate_report_config(const cell_meas_manager_cfg&  cfg,
-                            const nr_cell_identity        nci,
+                            const nr_cell_identity        meas_obj_nci,
+                            const nr_cell_identity        serving_nci,
                             const report_cfg_id_t         report_cfg_id,
                             rrc_meas_cfg&                 meas_cfg,
                             cell_meas_manager_ue_context& ue_meas_context);

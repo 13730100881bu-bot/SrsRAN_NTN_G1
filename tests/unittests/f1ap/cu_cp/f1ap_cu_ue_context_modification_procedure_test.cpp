@@ -24,6 +24,7 @@
 #include "tests/test_doubles/f1ap/f1ap_test_messages.h"
 #include "srsran/asn1/f1ap/common.h"
 #include "srsran/asn1/f1ap/f1ap_pdu_contents_ue.h"
+#include "srsran/f1ap/ntn_ul_slot_resource_request.h"
 #include "srsran/support/async/async_test_utils.h"
 #include <gtest/gtest.h>
 
@@ -270,6 +271,59 @@ TEST_F(f1ap_cu_ue_context_modification_test, when_f1ap_receives_response_then_pr
   EXPECT_TRUE(t.get().success);
   EXPECT_EQ(t.get().drbs_setup_list.size(), 1);
   EXPECT_EQ(t.get().srbs_setup_mod_list.size(), 0);
+}
+
+TEST_F(f1ap_cu_ue_context_modification_test,
+       when_ntn_ul_slot_request_is_present_then_modification_request_carries_resource_coordination_container)
+{
+  test_ue& ue = run_ue_context_setup();
+
+  f1ap_ue_context_modification_request request = {};
+  request.ue_index                             = ue.ue_index;
+  request.ntn_ul_slot_request.emplace();
+  request.ntn_ul_slot_request->sr_slot_offset  = 3U;
+  request.ntn_ul_slot_request->srs_slot_offset = 7U;
+  request.ntn_ul_slot_request->sr_slot_period  = 10U;
+  request.ntn_ul_slot_request->srs_slot_period = 20U;
+
+  this->start_procedure(request);
+
+  ASSERT_TRUE(was_ue_context_modification_msg_sent(ue.du_ue_id.value()));
+  const auto& asn1_request = this->f1ap_pdu_notifier.last_f1ap_msg.pdu.init_msg().value.ue_context_mod_request();
+  ASSERT_TRUE(asn1_request->res_coordination_transfer_container_present);
+
+  const std::optional<f1ap_ntn_ul_slot_resource_request> decoded_slot_request =
+      decode_f1ap_ntn_ul_slot_resource_request(asn1_request->res_coordination_transfer_container);
+  ASSERT_TRUE(decoded_slot_request.has_value());
+  ASSERT_TRUE(decoded_slot_request->sr_slot_offset.has_value());
+  ASSERT_TRUE(decoded_slot_request->srs_slot_offset.has_value());
+  ASSERT_TRUE(decoded_slot_request->sr_slot_period.has_value());
+  ASSERT_TRUE(decoded_slot_request->srs_slot_period.has_value());
+  ASSERT_EQ(*decoded_slot_request->sr_slot_offset, 3U);
+  ASSERT_EQ(*decoded_slot_request->srs_slot_offset, 7U);
+  ASSERT_EQ(*decoded_slot_request->sr_slot_period, 10U);
+  ASSERT_EQ(*decoded_slot_request->srs_slot_period, 20U);
+}
+
+TEST_F(f1ap_cu_ue_context_modification_test,
+       when_empty_ntn_ul_slot_request_is_present_then_modification_request_carries_clear_container)
+{
+  test_ue& ue = run_ue_context_setup();
+
+  f1ap_ue_context_modification_request request = {};
+  request.ue_index                             = ue.ue_index;
+  request.ntn_ul_slot_request.emplace();
+
+  this->start_procedure(request);
+
+  ASSERT_TRUE(was_ue_context_modification_msg_sent(ue.du_ue_id.value()));
+  const auto& asn1_request = this->f1ap_pdu_notifier.last_f1ap_msg.pdu.init_msg().value.ue_context_mod_request();
+  ASSERT_TRUE(asn1_request->res_coordination_transfer_container_present);
+
+  const std::optional<f1ap_ntn_ul_slot_resource_request> decoded_slot_request =
+      decode_f1ap_ntn_ul_slot_resource_request(asn1_request->res_coordination_transfer_container);
+  ASSERT_TRUE(decoded_slot_request.has_value());
+  ASSERT_TRUE(is_empty(*decoded_slot_request));
 }
 
 TEST_F(f1ap_cu_ue_context_modification_test,

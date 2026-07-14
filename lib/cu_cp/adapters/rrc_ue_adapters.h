@@ -183,7 +183,7 @@ public:
   bool on_ue_setup_request() override
   {
     srsran_assert(controller != nullptr, "CU-CP controller must not be nullptr");
-    return controller->request_ue_setup();
+    return controller->request_ue_setup(cu_cp_admission_request_type::initial_access);
   }
 
   bool on_ue_setup_complete_received(const plmn_identity& plmn) override
@@ -264,6 +264,14 @@ public:
   {
     srsran_assert(meas_handler != nullptr, "Measurement handler must not be nullptr");
     meas_handler->handle_measurement_report(ue_index, meas_results);
+  }
+
+  void on_ue_location_report(const ntn_ue_location_report& location_report) override
+  {
+    srsran_assert(meas_handler != nullptr, "Measurement handler must not be nullptr");
+    ntn_ue_location_report report = location_report;
+    report.ue_index              = ue_index;
+    meas_handler->handle_ue_location_report(report);
   }
 
 private:

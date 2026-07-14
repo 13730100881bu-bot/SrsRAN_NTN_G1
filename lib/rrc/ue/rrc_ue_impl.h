@@ -136,6 +136,8 @@ private:
   void handle_rrc_transaction_complete(const asn1::rrc_nr::ul_dcch_msg_s& msg, uint8_t transaction_id_);
   void handle_security_mode_complete(const asn1::rrc_nr::security_mode_complete_s& msg);
   void handle_measurement_report(const asn1::rrc_nr::meas_report_s& msg);
+  void handle_location_measurement_indication(const asn1::rrc_nr::location_meas_ind_s& msg);
+  void handle_ue_assistance_information(const asn1::rrc_nr::ue_assist_info_s& msg);
 
   // message senders
   /// Packs a DL-CCCH message and logs the message

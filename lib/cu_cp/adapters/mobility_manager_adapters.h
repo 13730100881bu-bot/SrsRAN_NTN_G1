@@ -45,6 +45,12 @@ public:
     return cu_cp_handler->handle_intra_cu_handover_request(request, source_du_index, target_du_index);
   }
 
+  void on_ntn_handover_result(const ntn_handover_result& result) override
+  {
+    srsran_assert(cu_cp_handler != nullptr, "CU-CP handler must not be nullptr");
+    cu_cp_handler->handle_mobility_ntn_handover_result(result);
+  }
+
 private:
   cu_cp_mobility_manager_handler* cu_cp_handler = nullptr;
 };
