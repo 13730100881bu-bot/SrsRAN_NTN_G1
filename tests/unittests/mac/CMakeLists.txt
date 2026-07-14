@@ -39,6 +39,7 @@ add_executable(mac_test
         mac_dl_cfg_test.cpp
         mac_metrics_test.cpp
         mac_config_helpers_test.cpp
+        mac_ntn_access_calendar_manager_test.cpp
         slot_point_time_mapper_test.cpp
 )
 target_link_libraries(mac_test
@@ -52,3 +53,8 @@ target_link_libraries(mac_test
         gtest
         gtest_main)
 gtest_discover_tests(mac_test)
+
+add_executable(mac_ntn_access_calendar_compiler_test mac_ntn_access_calendar_compiler_test.cpp)
+target_include_directories(mac_ntn_access_calendar_compiler_test PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(mac_ntn_access_calendar_compiler_test srsran_support gtest gtest_main)
+gtest_discover_tests(mac_ntn_access_calendar_compiler_test)

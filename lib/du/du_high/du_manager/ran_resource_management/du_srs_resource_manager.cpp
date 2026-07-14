@@ -23,6 +23,7 @@
 #include "du_srs_resource_manager.h"
 #include "du_ue_resource_config.h"
 #include "srsran/ran/srs/srs_bandwidth_configuration.h"
+#include <algorithm>
 
 using namespace srsran;
 using namespace srs_du;
@@ -258,9 +259,25 @@ bool du_srs_policy_max_ul_rate::alloc_resources(cell_group_config& cell_grp_cfg)
     srs_config& ue_srs_cfg    = cell_cfg_ded.serv_cell_cfg.ul_config->init_ul_bwp.srs_cfg.value();
     auto&       free_srs_list = ue_du_cell.srs_res_offset_free_list;
 
-    // Find the best resource ID and offset for this UE, according to the class policy.
-    auto srs_res_id_offset = ue_du_cell.find_optimal_ue_srs_resource();
-    srsran_assert(srs_res_id_offset != free_srs_list.end(), "No SRS resource returned from a non-emtpy set");
+    const std::optional<unsigned> requested_srs_slot_offset =
+        cell_grp_cfg.ntn_ul_slot_request.has_value() ? cell_grp_cfg.ntn_ul_slot_request->srs_slot_offset : std::nullopt;
+    const std::optional<unsigned> requested_srs_slot_period =
+        cell_grp_cfg.ntn_ul_slot_request.has_value() ? cell_grp_cfg.ntn_ul_slot_request->srs_slot_period : std::nullopt;
+    if (requested_srs_slot_period.has_value() &&
+        *requested_srs_slot_period != static_cast<unsigned>(ue_du_cell.cell_cfg.srs_cfg.srs_period.value())) {
+      for (auto& cfg_to_reset : cell_grp_cfg.cells) {
+        cfg_to_reset.serv_cell_cfg.ul_config->init_ul_bwp.srs_cfg.reset();
+      }
+      return false;
+    }
+
+    auto srs_res_id_offset = ue_du_cell.find_optimal_ue_srs_resource(requested_srs_slot_offset);
+    if (srs_res_id_offset == free_srs_list.end()) {
+      for (auto& cfg_to_reset : cell_grp_cfg.cells) {
+        cfg_to_reset.serv_cell_cfg.ul_config->init_ul_bwp.srs_cfg.reset();
+      }
+      return false;
+    }
 
     const auto& du_res_it = ue_du_cell.get_du_srs_res_cfg(srs_res_id_offset->first);
     srsran_assert(du_res_it != ue_du_cell.cell_srs_res_list.end(), "The provided cell-ID is invalid");
@@ -313,8 +330,20 @@ bool du_srs_policy_max_ul_rate::alloc_resources(cell_group_config& cell_grp_cfg)
 }
 
 std::vector<du_srs_policy_max_ul_rate::cell_context::pair_res_id_offset>::const_iterator
-du_srs_policy_max_ul_rate::cell_context::find_optimal_ue_srs_resource()
+du_srs_policy_max_ul_rate::cell_context::find_optimal_ue_srs_resource(
+    std::optional<unsigned> requested_slot_offset)
 {
+  if (requested_slot_offset.has_value()) {
+    auto requested_res_it =
+        std::find_if(srs_res_offset_free_list.begin(),
+                     srs_res_offset_free_list.end(),
+                     [requested_slot_offset](const pair_res_id_offset& srs_res) {
+                       return srs_res.second == *requested_slot_offset;
+                     });
+
+    return requested_res_it != srs_res_offset_free_list.end() ? requested_res_it : srs_res_offset_free_list.end();
+  }
+
   // The weights assigned here can be set to arbitrarily value, as long as:
   // - symbol_weight_base is greater than 0;
   // - reuse_slot_discount is less than symbol_weight_base;

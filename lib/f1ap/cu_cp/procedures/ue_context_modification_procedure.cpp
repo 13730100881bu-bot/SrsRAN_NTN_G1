@@ -372,6 +372,13 @@ static void fill_f1ap_ue_context_modification_response(f1ap_ue_context_modificat
 {
   res.success = true;
 
+  // res coordination transfer container
+  if (asn1_response->res_coordination_transfer_container_present) {
+    res.res_coordination_transfer_container = asn1_response->res_coordination_transfer_container.copy();
+    res.ntn_ul_slot_result =
+        decode_f1ap_ntn_ul_slot_resource_result(asn1_response->res_coordination_transfer_container);
+  }
+
   // DUtoCURRCInformation
   if (asn1_response->du_to_cu_rrc_info_present) {
     res.du_to_cu_rrc_info.cell_group_cfg      = asn1_response->du_to_cu_rrc_info.cell_group_cfg.copy();

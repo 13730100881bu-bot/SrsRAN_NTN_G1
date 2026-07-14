@@ -28,6 +28,7 @@
 #include "srsran/cu_cp/cu_cp_ue_messages.h"
 #include "srsran/f1ap/cu_cp/du_setup_notifier.h"
 #include "srsran/f1ap/cu_cp/f1ap_cu_configuration_update.h"
+#include "srsran/f1ap/cu_cp/f1ap_cu_resource_coordination.h"
 #include "srsran/f1ap/cu_cp/f1ap_cu_ue_context_update.h"
 #include "srsran/f1ap/cu_cp/f1ap_du_context.h"
 #include "srsran/f1ap/cu_cp/f1ap_nrppa_msg_handling.h"
@@ -174,6 +175,10 @@ public:
   /// 'true' in case of a successful outcome, 'false' otherwise.
   virtual async_task<f1ap_gnb_cu_configuration_update_response>
   handle_gnb_cu_configuration_update(const f1ap_gnb_cu_configuration_update& request) = 0;
+
+  /// \brief Initiates the gNB-DU Resource Coordination procedure as per TS 38.473 section 8.2.9.
+  virtual async_task<f1ap_gnb_du_resource_coordination_response>
+  handle_gnb_du_resource_coordination_request(const f1ap_gnb_du_resource_coordination_request& request) = 0;
 };
 
 /// Combined entry point for F1AP handling.

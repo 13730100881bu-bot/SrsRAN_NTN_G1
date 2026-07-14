@@ -26,6 +26,7 @@
 #include "f1ap_du_connection_handler.h"
 #include "log_helpers.h"
 #include "procedures/f1ap_du_gnbdu_config_update_procedure.h"
+#include "procedures/f1ap_du_gnbdu_resource_coordination_procedure.h"
 #include "procedures/f1ap_du_initiated_reset_procedure.h"
 #include "procedures/f1ap_du_positioning_procedures.h"
 #include "procedures/f1ap_du_removal_procedure.h"
@@ -161,6 +162,12 @@ void f1ap_du_impl::handle_reset(const reset_s& msg)
 void f1ap_du_impl::handle_gnb_cu_configuration_update(const gnb_cu_cfg_upd_s& msg)
 {
   du_mng.schedule_async_task(launch_async<gnb_cu_configuration_update_procedure>(msg, du_mng, *tx_pdu_notifier));
+}
+
+void f1ap_du_impl::handle_gnb_du_resource_coordination_request(const gnb_du_res_coordination_request_s& msg)
+{
+  du_mng.schedule_async_task(
+      launch_async<f1ap_du_gnbdu_resource_coordination_procedure>(msg, du_mng, *tx_pdu_notifier));
 }
 
 void f1ap_du_impl::handle_ue_context_setup_request(const asn1::f1ap::ue_context_setup_request_s& msg)
@@ -415,6 +422,9 @@ void f1ap_du_impl::handle_initiating_message(const init_msg_s& msg)
       break;
     case msg_types::gnb_cu_cfg_upd:
       handle_gnb_cu_configuration_update(msg.value.gnb_cu_cfg_upd());
+      break;
+    case msg_types::gnb_du_res_coordination_request:
+      handle_gnb_du_resource_coordination_request(msg.value.gnb_du_res_coordination_request());
       break;
     case msg_types::dl_rrc_msg_transfer:
       handle_dl_rrc_message_transfer(msg.value.dl_rrc_msg_transfer());

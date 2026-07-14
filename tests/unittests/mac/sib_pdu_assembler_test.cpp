@@ -205,6 +205,30 @@ TEST_F(sib_pdu_assembler_test, when_dynamic_si_pdu_update_is_enqueued_then_new_p
   ASSERT_EQ(make_pdu_with_padding(dynamic_msg, tbs), new_pdu);
 }
 
+TEST_F(sib_pdu_assembler_test, when_dynamic_si_pdu_update_has_invalid_start_slot_then_payload_is_used_immediately)
+{
+  auto base_msg = make_random_pdu();
+  this->update_si_pdus(sys_info_cfg.sib1, std::vector<bcch_dl_sch_payload_type>{{base_msg.copy()}});
+  ASSERT_EQ(last_version, 1);
+
+  auto                     dynamic_msg = make_random_pdu();
+  std::vector<byte_buffer> dynamic_pdus;
+  dynamic_pdus.emplace_back(dynamic_msg.copy());
+
+  mac_cell_sys_info_pdu_update update_req;
+  update_req.si_msg_idx  = 0;
+  update_req.sib_idx     = 19;
+  update_req.si_messages = span<byte_buffer>(dynamic_pdus.data(), dynamic_pdus.size());
+  ASSERT_FALSE(update_req.slot.valid());
+  ASSERT_TRUE(assembler.enqueue_si_message_pdu_updates(update_req));
+
+  units::bytes    tbs{static_cast<unsigned>(std::max(base_msg.length(), dynamic_msg.length())) + 20U};
+  sib_information si_info = make_sib_pdu(0, 1, tbs);
+
+  span<const uint8_t> new_pdu = assembler.encode_si_pdu(current_slot, si_info);
+  ASSERT_EQ(make_pdu_with_padding(dynamic_msg, tbs), new_pdu);
+}
+
 TEST_F(sib_pdu_assembler_test, when_dynamic_multi_si_pdu_update_is_enqueued_then_pdus_are_selected_by_period)
 {
   auto base_msg = make_random_pdu();
@@ -239,6 +263,40 @@ TEST_F(sib_pdu_assembler_test, when_dynamic_multi_si_pdu_update_is_enqueued_then
 
   span<const uint8_t> fallback_pdu = assembler.encode_si_pdu(update_req.slot + 1, si_info);
   ASSERT_EQ(make_pdu_with_padding(base_msg, tbs), fallback_pdu);
+}
+
+TEST_F(sib_pdu_assembler_test, when_dynamic_si_pdu_update_is_cleared_then_static_payload_is_used_again)
+{
+  auto base_msg = make_random_pdu();
+  this->update_si_pdus(sys_info_cfg.sib1, std::vector<bcch_dl_sch_payload_type>{{base_msg.copy()}});
+  ASSERT_EQ(last_version, 1);
+
+  auto                     dynamic_msg = make_random_pdu();
+  std::vector<byte_buffer> dynamic_pdus;
+  dynamic_pdus.emplace_back(dynamic_msg.copy());
+
+  mac_cell_sys_info_pdu_update update_req;
+  update_req.si_msg_idx  = 0;
+  update_req.sib_idx     = 19;
+  update_req.slot        = current_slot + 4;
+  update_req.si_messages = span<byte_buffer>(dynamic_pdus.data(), dynamic_pdus.size());
+  ASSERT_TRUE(assembler.enqueue_si_message_pdu_updates(update_req));
+
+  mac_cell_sys_info_pdu_update clear_req;
+  clear_req.si_msg_idx = 0;
+  clear_req.sib_idx    = 19;
+  clear_req.slot       = current_slot + 8;
+  clear_req.clear      = true;
+  ASSERT_TRUE(assembler.enqueue_si_message_pdu_updates(clear_req));
+
+  units::bytes    tbs{static_cast<unsigned>(std::max(base_msg.length(), dynamic_msg.length())) + 20U};
+  sib_information si_info = make_sib_pdu(0, 1, tbs);
+
+  span<const uint8_t> dynamic_pdu = assembler.encode_si_pdu(update_req.slot, si_info);
+  ASSERT_EQ(make_pdu_with_padding(dynamic_msg, tbs), dynamic_pdu);
+
+  span<const uint8_t> cleared_pdu = assembler.encode_si_pdu(clear_req.slot, si_info);
+  ASSERT_EQ(make_pdu_with_padding(base_msg, tbs), cleared_pdu);
 }
 
 TEST_F(sib_pdu_assembler_test, when_segmented_si_message_is_added_then_encoding_matched_added_si_message)

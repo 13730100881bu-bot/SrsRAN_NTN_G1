@@ -327,6 +327,43 @@ TEST_F(f1ap_cu_ue_context_modification_test,
 }
 
 TEST_F(f1ap_cu_ue_context_modification_test,
+       when_modification_response_carries_ntn_slot_result_then_result_is_forwarded_to_cu_cp)
+{
+  test_ue& ue = run_ue_context_setup();
+
+  f1ap_ue_context_modification_request request = {};
+  request.ue_index                             = ue.ue_index;
+  request.ntn_ul_slot_request.emplace();
+  request.ntn_ul_slot_request->sr_slot_offset  = 3U;
+  request.ntn_ul_slot_request->sr_slot_period  = 10U;
+  request.ntn_ul_slot_request->srs_slot_offset = 7U;
+  request.ntn_ul_slot_request->srs_slot_period = 20U;
+
+  this->start_procedure(request);
+
+  f1ap_ntn_ul_slot_resource_result result;
+  result.accepted = true;
+  result.reason   = f1ap_ntn_ul_slot_resource_result_reason::applied;
+  result.applied_request = *request.ntn_ul_slot_request;
+
+  f1ap_message ue_context_modification_response = test_helpers::generate_ue_context_modification_response(
+      ue.du_ue_id.value(), ue.cu_ue_id.value(), to_rnti(0x4601));
+  auto& resp = *ue_context_modification_response.pdu.successful_outcome().value.ue_context_mod_resp();
+  resp.res_coordination_transfer_container_present = true;
+  resp.res_coordination_transfer_container         = encode_f1ap_ntn_ul_slot_resource_result(result);
+  f1ap->handle_message(ue_context_modification_response);
+
+  ASSERT_TRUE(t.ready());
+  ASSERT_TRUE(t.get().success);
+  ASSERT_TRUE(t.get().ntn_ul_slot_result.has_value());
+  EXPECT_TRUE(t.get().ntn_ul_slot_result->accepted);
+  EXPECT_EQ(t.get().ntn_ul_slot_result->reason, f1ap_ntn_ul_slot_resource_result_reason::applied);
+  ASSERT_TRUE(t.get().ntn_ul_slot_result->applied_request.has_value());
+  EXPECT_EQ(t.get().ntn_ul_slot_result->applied_request->sr_slot_offset, std::optional<unsigned>{3U});
+  EXPECT_EQ(t.get().ntn_ul_slot_result->applied_request->srs_slot_offset, std::optional<unsigned>{7U});
+}
+
+TEST_F(f1ap_cu_ue_context_modification_test,
        when_f1ap_receives_response_with_failed_drb_then_it_forwards_the_failed_drb_outwards)
 {
   // Preamble.

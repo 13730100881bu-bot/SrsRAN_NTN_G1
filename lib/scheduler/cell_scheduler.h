@@ -32,10 +32,14 @@
 #include "config/cell_configuration.h"
 #include "logging/scheduler_event_logger.h"
 #include "logging/scheduler_result_logger.h"
+#include "ntn_access_calendar_gate.h"
 #include "pdcch_scheduling/pdcch_resource_allocator_impl.h"
 #include "pucch_scheduling/pucch_allocator_impl.h"
 #include "uci_scheduling/uci_allocator_impl.h"
 #include "ue_scheduling/ue_scheduler.h"
+#include <atomic>
+#include <memory>
+#include <mutex>
 
 namespace srsran {
 
@@ -76,6 +80,8 @@ public:
 
   void handle_paging_information(const sched_paging_information& pi) { pg_sch.handle_paging_information(pi); }
 
+  ntn_access_calendar_response handle_ntn_access_calendar_update(const ntn_access_calendar_request& request);
+
   scheduler_feedback_handler&         get_feedback_handler() { return ue_sched->get_feedback_handler(); }
   scheduler_cell_positioning_handler& get_positioning_handler() { return ue_sched->get_positioning_handler(); }
   scheduler_dl_buffer_state_indication_handler& get_dl_buffer_state_indication_handler()
@@ -91,6 +97,13 @@ private:
 
   /// Resource grid of this cell.
   cell_resource_allocator res_grid;
+
+  /// The gate is allocated only on opt-in prepare, avoiding large calendar banks for terrestrial cells.
+  const unsigned                                      access_calendar_numerology;
+  const uint32_t                                      access_calendar_minimum_lead_slots;
+  std::mutex                                          access_calendar_creation_mutex;
+  std::unique_ptr<scheduler_ntn_access_calendar_gate> access_calendar_gate_owner;
+  std::atomic<scheduler_ntn_access_calendar_gate*>    access_calendar_gate{nullptr};
 
   /// Logger of cell events and scheduling results.
   scheduler_event_logger  event_logger;

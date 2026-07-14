@@ -102,6 +102,10 @@ inline std::optional<uint8_t> get_transaction_id(const asn1::f1ap::init_msg_s& o
       return out.value.error_ind()->transaction_id;
     case init_types::init_ul_rrc_msg_transfer:
       return out.value.init_ul_rrc_msg_transfer()->transaction_id;
+    case init_types::positioning_assist_info_ctrl:
+      return out.value.positioning_assist_info_ctrl()->transaction_id;
+    case init_types::positioning_assist_info_feedback:
+      return out.value.positioning_assist_info_feedback()->transaction_id;
       // TODO: Remaining cases.
     default:
       break;
@@ -226,6 +230,8 @@ inline std::optional<gnb_du_ue_f1ap_id_t> get_gnb_du_ue_f1ap_id(const asn1::f1ap
       return (gnb_du_ue_f1ap_id_t)success_outcome.value.ue_context_mod_resp()->gnb_du_ue_f1ap_id;
     case success_types::ue_context_mod_confirm:
       return (gnb_du_ue_f1ap_id_t)success_outcome.value.ue_context_mod_confirm()->gnb_du_ue_f1ap_id;
+    case success_types::positioning_info_resp:
+      return (gnb_du_ue_f1ap_id_t)success_outcome.value.positioning_info_resp()->gnb_du_ue_f1ap_id;
     default:
       // TODO: Add remaining.
       break;
@@ -250,6 +256,8 @@ get_gnb_du_ue_f1ap_id(const asn1::f1ap::unsuccessful_outcome_s& unsuccessful_out
       return (gnb_du_ue_f1ap_id_t)unsuccessful_outcome.value.ue_context_mod_fail()->gnb_du_ue_f1ap_id;
     case unsuccess_types::ue_context_mod_refuse:
       return (gnb_du_ue_f1ap_id_t)unsuccessful_outcome.value.ue_context_mod_refuse()->gnb_du_ue_f1ap_id;
+    case unsuccess_types::positioning_info_fail:
+      return (gnb_du_ue_f1ap_id_t)unsuccessful_outcome.value.positioning_info_fail()->gnb_du_ue_f1ap_id;
     default:
       // TODO: Add remaining.
       break;

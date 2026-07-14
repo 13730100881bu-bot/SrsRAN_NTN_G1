@@ -82,7 +82,11 @@ public:
   du_ran_resource_manager_impl& operator=(const du_ran_resource_manager_impl&) = delete;
 
   expected<ue_ran_resource_configurator, std::string>
-  create_ue_resource_configurator(du_ue_index_t ue_index, du_cell_index_t pcell_index, bool has_tc_rnti) override;
+  create_ue_resource_configurator(
+      du_ue_index_t                                    ue_index,
+      du_cell_index_t                                  pcell_index,
+      bool                                             has_tc_rnti,
+      std::optional<ntn_ul_slot_resource_request>      ntn_ul_slot_request = std::nullopt) override;
 
   /// \brief Updates a UE's cell configuration context based on the F1 UE Context Update request.
   ///
@@ -112,6 +116,10 @@ private:
   error_type<std::string>
        allocate_cell_resources(du_ue_index_t ue_index, du_cell_index_t cell_index, serv_cell_index_t serv_cell_index);
   void deallocate_cell_resources(du_ue_index_t ue_index, serv_cell_index_t serv_cell_index);
+  error_type<std::string>
+  reallocate_pcell_ul_slot_resources(du_ue_index_t                                      ue_index,
+                                     du_ue_resource_config&                             ue_res,
+                                     const std::optional<ntn_ul_slot_resource_request>& slot_request);
 
   span<const du_cell_config> cell_cfg_list;
   srslog::basic_logger&      logger;

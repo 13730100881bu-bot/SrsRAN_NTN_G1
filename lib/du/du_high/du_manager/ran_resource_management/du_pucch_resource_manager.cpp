@@ -253,10 +253,8 @@ bool du_pucch_resource_manager::alloc_resources(cell_group_config& cell_grp_cfg)
   // Allocation of SR PUCCH offset.
   std::optional<std::pair<unsigned, unsigned>> sr_res_offset;
   std::optional<std::pair<unsigned, unsigned>> csi_res_offset;
-  auto                                         sr_res_offset_it = free_sr_list.begin();
-  // Iterate over the list of SR resource/offsets and find the first one that doesn't exceed the maximum number of PUCCH
-  // grants.
-  while (sr_res_offset_it != free_sr_list.end()) {
+  const auto try_allocate_sr_resource =
+      [&](std::vector<std::pair<unsigned, unsigned>>::iterator sr_res_offset_it) -> bool {
     bool pucch_cnt_exceeded = false;
     for (unsigned sr_off = sr_res_offset_it->second; sr_off < lcm_csi_sr_period; sr_off += sr_period_slots) {
       srsran_assert(sr_off < static_cast<unsigned>(du_cell_res_ctxt.pucch_grants_per_slot_cnt.size()),
@@ -269,15 +267,14 @@ bool du_pucch_resource_manager::alloc_resources(cell_group_config& cell_grp_cfg)
 
     // If the PUCCH count is exceeded, proceed with the next SR resource/offset pair.
     if (pucch_cnt_exceeded) {
-      ++sr_res_offset_it;
-      continue;
+      return false;
     }
 
     if (not default_csi_report_cfg.has_value()) {
       // No CSI report to allocate. Allocation successful.
       sr_res_offset = *sr_res_offset_it;
       free_sr_list.erase(sr_res_offset_it);
-      break;
+      return true;
     }
 
     const pucch_resource sr_res = default_pucch_res_list[sr_du_res_idx_to_pucch_res_idx(sr_res_offset_it->first)];
@@ -297,9 +294,38 @@ bool du_pucch_resource_manager::alloc_resources(cell_group_config& cell_grp_cfg)
       free_csi_list.erase(optimal_res_it);
       sr_res_offset = *sr_res_offset_it;
       free_sr_list.erase(sr_res_offset_it);
-      break;
+      return true;
     }
 
+    return false;
+  };
+
+  const std::optional<unsigned> requested_sr_slot_offset =
+      cell_grp_cfg.ntn_ul_slot_request.has_value() ? cell_grp_cfg.ntn_ul_slot_request->sr_slot_offset : std::nullopt;
+  const std::optional<unsigned> requested_sr_slot_period =
+      cell_grp_cfg.ntn_ul_slot_request.has_value() ? cell_grp_cfg.ntn_ul_slot_request->sr_slot_period : std::nullopt;
+  if (requested_sr_slot_period.has_value() && *requested_sr_slot_period != sr_period_slots) {
+    disable_pucch_cfg(cell_grp_cfg);
+    return false;
+  }
+  if (requested_sr_slot_offset.has_value()) {
+    auto requested_sr_offset_it =
+        std::find_if(free_sr_list.begin(), free_sr_list.end(), [requested_sr_slot_offset](const auto& res) {
+          return res.second == *requested_sr_slot_offset;
+        });
+    if (requested_sr_offset_it == free_sr_list.end() || !try_allocate_sr_resource(requested_sr_offset_it)) {
+      disable_pucch_cfg(cell_grp_cfg);
+      return false;
+    }
+  }
+
+  // Iterate over the list of SR resource/offsets and find the first one that doesn't exceed the maximum number of PUCCH
+  // grants.
+  auto sr_res_offset_it = free_sr_list.begin();
+  while (not sr_res_offset.has_value() and sr_res_offset_it != free_sr_list.end()) {
+    if (try_allocate_sr_resource(sr_res_offset_it)) {
+      break;
+    }
     ++sr_res_offset_it;
   }
 

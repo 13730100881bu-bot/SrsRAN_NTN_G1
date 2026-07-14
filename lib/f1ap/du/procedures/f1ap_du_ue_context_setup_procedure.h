@@ -46,6 +46,9 @@ private:
   /// Initiates UE Configuration in the DU.
   async_task<f1ap_ue_context_update_response> request_du_ue_config();
 
+  /// Builds the DU UE creation request, including NTN target C-RNTI when CU-CP provided it.
+  f1ap_ue_context_creation_request make_ue_context_creation_request() const;
+
   /// Sends UE Context Setup Response to CU.
   void send_ue_context_setup_response();
 
@@ -72,6 +75,7 @@ private:
   const f1ap_du_context&    du_ctxt;
   expected<du_cell_index_t> sp_cell_index = make_unexpected(default_error_t());
 
+  std::optional<f1ap_ntn_ul_slot_resource_request> decoded_ntn_ul_slot_request;
   std::optional<f1ap_ue_context_creation_response> du_ue_create_response;
   f1ap_ue_context_update_response                  du_ue_cfg_response;
   std::vector<f1ap_drb_failed_to_setupmod>         failed_drbs;

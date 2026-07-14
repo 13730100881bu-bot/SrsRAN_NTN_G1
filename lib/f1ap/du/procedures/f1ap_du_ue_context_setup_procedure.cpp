@@ -26,6 +26,7 @@
 #include "proc_logger.h"
 #include "srsran/asn1/f1ap/common.h"
 #include "srsran/f1ap/f1ap_message.h"
+#include "srsran/f1ap/ntn_ul_slot_resource_request.h"
 #include "srsran/support/async/async_no_op_task.h"
 
 using namespace srsran;
@@ -88,6 +89,11 @@ void f1ap_du_ue_context_setup_procedure::operator()(coro_context<async_task<void
     CORO_EARLY_RETURN();
   }
 
+  if (msg->res_coordination_transfer_container_present) {
+    decoded_ntn_ul_slot_request =
+        decode_f1ap_ntn_ul_slot_resource_request(msg->res_coordination_transfer_container);
+  }
+
   if (msg->gnb_du_ue_f1ap_id_present) {
     const gnb_cu_ue_f1ap_id_t gnb_cu_ue_f1ap_id = int_to_gnb_cu_ue_f1ap_id(msg->gnb_cu_ue_f1ap_id);
     const gnb_du_ue_f1ap_id_t gnb_du_ue_f1ap_id = int_to_gnb_du_ue_f1ap_id(msg->gnb_du_ue_f1ap_id);
@@ -111,8 +117,7 @@ void f1ap_du_ue_context_setup_procedure::operator()(coro_context<async_task<void
     // [TS38.473, 8.3.1.2] If no UE-associated logical F1-connection exists, the UE-associated logical F1-connection
     // shall be established as part of the procedure.
     // Request the creation of a new UE context in the DU.
-    CORO_AWAIT_VALUE(du_ue_create_response,
-                     du_mng.request_ue_creation(f1ap_ue_context_creation_request{ue_index, sp_cell_index.value()}));
+    CORO_AWAIT_VALUE(du_ue_create_response, du_mng.request_ue_creation(make_ue_context_creation_request()));
     if (not du_ue_create_response->result) {
       // Failed to create UE context in the DU.
       logger.warning("{}: Failed to allocate new UE context in DU.",
@@ -196,11 +201,24 @@ f1ap_du_ue_context_setup_procedure::get_cell_index_from_nr_cgi(nr_cell_global_id
   return make_unexpected(default_error_t());
 }
 
+f1ap_ue_context_creation_request f1ap_du_ue_context_setup_procedure::make_ue_context_creation_request() const
+{
+  f1ap_ue_context_creation_request creation_request{ue_index, sp_cell_index.value()};
+  if (decoded_ntn_ul_slot_request.has_value() && decoded_ntn_ul_slot_request->requested_c_rnti.has_value()) {
+    creation_request.requested_c_rnti = decoded_ntn_ul_slot_request->requested_c_rnti;
+  }
+  return creation_request;
+}
+
 async_task<f1ap_ue_context_update_response> f1ap_du_ue_context_setup_procedure::request_du_ue_config()
 {
   // Construct DU request.
   f1ap_ue_context_update_request du_request = {};
   du_request.ue_index                       = ue->context.ue_index;
+
+  if (msg->res_coordination_transfer_container_present) {
+    du_request.ntn_ul_slot_request = decoded_ntn_ul_slot_request;
+  }
 
   auto plmn = plmn_identity::from_bytes(msg->sp_cell_id.plmn_id.to_bytes());
   auto nci  = nr_cell_identity::create(msg->sp_cell_id.nr_cell_id.to_number());
@@ -296,6 +314,12 @@ void f1ap_du_ue_context_setup_procedure::send_ue_context_setup_response()
   if (du_ue_cfg_response.full_config_present) {
     resp->full_cfg_present = true;
     resp->full_cfg.value   = asn1::f1ap::full_cfg_opts::full;
+  }
+
+  if (du_ue_cfg_response.ntn_ul_slot_result.has_value()) {
+    resp->res_coordination_transfer_container_present = true;
+    resp->res_coordination_transfer_container =
+        encode_f1ap_ntn_ul_slot_resource_result(*du_ue_cfg_response.ntn_ul_slot_result);
   }
 
   // > If the C-RNTI IE is included in the UE CONTEXT SETUP RESPONSE, the gNB-CU shall consider that the C-RNTI has

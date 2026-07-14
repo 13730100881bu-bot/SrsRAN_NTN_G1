@@ -26,6 +26,7 @@
 #include "proc_logger.h"
 #include "srsran/asn1/f1ap/common.h"
 #include "srsran/f1ap/f1ap_message.h"
+#include "srsran/f1ap/ntn_ul_slot_resource_request.h"
 #include "srsran/support/async/async_no_op_task.h"
 
 using namespace srsran;
@@ -84,6 +85,11 @@ void f1ap_du_ue_context_modification_procedure::create_du_request(const asn1::f1
 {
   // Construct DU request.
   du_request.ue_index = ue.context.ue_index;
+
+  if (msg->res_coordination_transfer_container_present) {
+    du_request.ntn_ul_slot_request =
+        decode_f1ap_ntn_ul_slot_resource_request(msg->res_coordination_transfer_container);
+  }
 
   if (msg->sp_cell_id_present) {
     // > [TS 38.473, 8.3.4.2] "If the SpCell ID IE is included in the UE CONTEXT MODIFICATION REQUEST message, the
@@ -169,9 +175,15 @@ void f1ap_du_ue_context_modification_procedure::send_ue_context_modification_res
   f1ap_msg.pdu.set_successful_outcome().load_info_obj(ASN1_F1AP_ID_UE_CONTEXT_MOD);
   ue_context_mod_resp_s& resp = f1ap_msg.pdu.successful_outcome().value.ue_context_mod_resp();
 
-  resp->gnb_du_ue_f1ap_id                           = gnb_du_ue_f1ap_id_to_uint(ue.context.gnb_du_ue_f1ap_id);
-  resp->gnb_cu_ue_f1ap_id                           = gnb_cu_ue_f1ap_id_to_uint(ue.context.gnb_cu_ue_f1ap_id);
-  resp->res_coordination_transfer_container_present = false;
+  resp->gnb_du_ue_f1ap_id = gnb_du_ue_f1ap_id_to_uint(ue.context.gnb_du_ue_f1ap_id);
+  resp->gnb_cu_ue_f1ap_id = gnb_cu_ue_f1ap_id_to_uint(ue.context.gnb_cu_ue_f1ap_id);
+  if (du_response.ntn_ul_slot_result.has_value()) {
+    resp->res_coordination_transfer_container_present = true;
+    resp->res_coordination_transfer_container =
+        encode_f1ap_ntn_ul_slot_resource_result(*du_response.ntn_ul_slot_result);
+  } else {
+    resp->res_coordination_transfer_container_present = false;
+  }
 
   // DRBs-SetupMod-List
   resp->drbs_setup_mod_list         = make_drbs_setup_mod_list(du_response.drbs_setup);

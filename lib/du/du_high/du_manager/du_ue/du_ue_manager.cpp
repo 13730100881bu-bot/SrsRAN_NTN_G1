@@ -95,7 +95,10 @@ du_ue_manager::handle_ue_create_request(const f1ap_ue_context_creation_request& 
     CORO_BEGIN(ctx);
 
     CORO_AWAIT(launch_async<ue_creation_procedure>(
-        du_ue_creation_request{msg.ue_index, msg.pcell_index, rnti_t::INVALID_RNTI, {}}, *this, cfg, cell_res_alloc));
+        du_ue_creation_request{msg.ue_index, msg.pcell_index, msg.requested_c_rnti.value_or(rnti_t::INVALID_RNTI), {}},
+        *this,
+        cfg,
+        cell_res_alloc));
 
     bool result = ue_db.contains(msg.ue_index);
     CORO_RETURN(f1ap_ue_context_creation_response{result, result ? find_ue(msg.ue_index)->rnti : rnti_t::INVALID_RNTI});

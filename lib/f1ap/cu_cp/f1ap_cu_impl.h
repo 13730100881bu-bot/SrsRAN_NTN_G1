@@ -85,12 +85,19 @@ public:
   handle_positioning_information_request(const positioning_information_request_t& request) override;
   async_task<expected<positioning_activation_response_t, positioning_activation_failure_t>>
   handle_positioning_activation_request(const positioning_activation_request_t& request) override;
+  async_task<expected<positioning_deactivation_response_t, positioning_deactivation_failure_t>>
+  handle_positioning_deactivation_request(const positioning_deactivation_request_t& request) override;
+  async_task<expected<positioning_assistance_information_feedback_t, positioning_assistance_information_failure_t>>
+  handle_positioning_assistance_information_control(
+      const positioning_assistance_information_control_request_t& request) override;
   async_task<expected<measurement_response_t, measurement_failure_t>>
   handle_positioning_measurement_request(const measurement_request_t& request) override;
 
   // f1ap_interface_management_handler functions.
   async_task<f1ap_gnb_cu_configuration_update_response>
   handle_gnb_cu_configuration_update(const f1ap_gnb_cu_configuration_update& request) override;
+  async_task<f1ap_gnb_du_resource_coordination_response>
+  handle_gnb_du_resource_coordination_request(const f1ap_gnb_du_resource_coordination_request& request) override;
 
   // f1ap_cu_interface
   f1ap_message_handler&              get_f1ap_message_handler() override { return *this; }

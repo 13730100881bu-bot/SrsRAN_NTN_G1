@@ -23,6 +23,7 @@
 #include "f1ap_du_test_helpers.h"
 #include "test_doubles/f1ap/f1ap_test_message_validators.h"
 #include "srsran/asn1/f1ap/f1ap_pdu_contents_ue.h"
+#include "srsran/f1ap/ntn_ul_slot_resource_request.h"
 #include "srsran/support/test_utils.h"
 #include <gtest/gtest.h>
 
@@ -47,7 +48,9 @@ protected:
 
   void start_procedure(const std::initializer_list<drb_id_t>& drbs,
                        byte_buffer                            rrc_container        = {},
-                       bool                                   rrc_delivery_request = false)
+                       bool                                   rrc_delivery_request = false,
+                       std::optional<f1ap_ntn_ul_slot_resource_request> ntn_slot_request = std::nullopt,
+                       std::optional<f1ap_ntn_ul_slot_resource_result>  ntn_slot_result  = std::nullopt)
   {
     this->f1c_gw.clear_tx_pdus();
 
@@ -63,6 +66,7 @@ protected:
     }
     this->f1ap_du_cfg_handler.next_ue_context_update_response.cell_group_cfg =
         byte_buffer::create({0x1, 0x2, 0x3}).value();
+    this->f1ap_du_cfg_handler.next_ue_context_update_response.ntn_ul_slot_result = std::move(ntn_slot_result);
 
     // Initiate procedure in F1AP.
     f1ap_message msg = test_helpers::generate_ue_context_modification_request(
@@ -71,6 +75,12 @@ protected:
       msg.pdu.init_msg().value.ue_context_mod_request()->rrc_delivery_status_request_present = true;
       msg.pdu.init_msg().value.ue_context_mod_request()->rrc_delivery_status_request.value =
           asn1::f1ap::rrc_delivery_status_request_opts::true_value;
+    }
+    if (ntn_slot_request.has_value()) {
+      auto& request = *msg.pdu.init_msg().value.ue_context_mod_request();
+      request.res_coordination_transfer_container_present = true;
+      request.res_coordination_transfer_container =
+          encode_f1ap_ntn_ul_slot_resource_request(*ntn_slot_request);
     }
     f1ap->handle_message(msg);
 
@@ -106,6 +116,58 @@ TEST_F(f1ap_du_ue_context_modification_test, when_f1ap_receives_request_then_f1a
   ASSERT_EQ(req.srbs_to_setup.size(), 0);
   ASSERT_EQ(req.drbs_to_setup.size(), 1);
   ASSERT_EQ(req.drbs_to_setup[0].drb_id, drb_id_t::drb1);
+}
+
+TEST_F(f1ap_du_ue_context_modification_test,
+       when_ntn_ul_slot_container_is_present_then_f1ap_du_passes_decoded_request_to_du_manager)
+{
+  f1ap_ntn_ul_slot_resource_request slot_request;
+  slot_request.sr_slot_offset  = 3U;
+  slot_request.sr_slot_period  = 10U;
+  slot_request.srs_slot_offset = 7U;
+  slot_request.srs_slot_period = 20U;
+
+  start_procedure({drb_id_t::drb1}, {}, false, slot_request);
+
+  ASSERT_TRUE(this->f1ap_du_cfg_handler.last_ue_context_update_req.has_value());
+  const f1ap_ue_context_update_request& req = *this->f1ap_du_cfg_handler.last_ue_context_update_req;
+  ASSERT_TRUE(req.ntn_ul_slot_request.has_value());
+  EXPECT_EQ(req.ntn_ul_slot_request->sr_slot_offset, std::optional<unsigned>{3U});
+  EXPECT_EQ(req.ntn_ul_slot_request->sr_slot_period, std::optional<unsigned>{10U});
+  EXPECT_EQ(req.ntn_ul_slot_request->srs_slot_offset, std::optional<unsigned>{7U});
+  EXPECT_EQ(req.ntn_ul_slot_request->srs_slot_period, std::optional<unsigned>{20U});
+}
+
+TEST_F(f1ap_du_ue_context_modification_test,
+       when_du_manager_reports_ntn_slot_result_then_f1ap_du_returns_resource_coordination_container)
+{
+  f1ap_ntn_ul_slot_resource_request slot_request;
+  slot_request.sr_slot_offset  = 3U;
+  slot_request.sr_slot_period  = 10U;
+  slot_request.srs_slot_offset = 7U;
+  slot_request.srs_slot_period = 20U;
+
+  f1ap_ntn_ul_slot_resource_result slot_result;
+  slot_result.accepted = true;
+  slot_result.reason   = f1ap_ntn_ul_slot_resource_result_reason::applied;
+  slot_result.applied_request = slot_request;
+
+  start_procedure({drb_id_t::drb1}, {}, false, slot_request, slot_result);
+
+  auto sent_pdu = this->f1c_gw.pop_tx_pdu();
+  ASSERT_TRUE(sent_pdu.has_value());
+  ASSERT_TRUE(is_ue_context_modification_response_valid(sent_pdu.value()));
+  const ue_context_mod_resp_s& resp = sent_pdu.value().pdu.successful_outcome().value.ue_context_mod_resp();
+  ASSERT_TRUE(resp->res_coordination_transfer_container_present);
+
+  const std::optional<f1ap_ntn_ul_slot_resource_result> decoded_result =
+      decode_f1ap_ntn_ul_slot_resource_result(resp->res_coordination_transfer_container);
+  ASSERT_TRUE(decoded_result.has_value());
+  EXPECT_TRUE(decoded_result->accepted);
+  EXPECT_EQ(decoded_result->reason, f1ap_ntn_ul_slot_resource_result_reason::applied);
+  ASSERT_TRUE(decoded_result->applied_request.has_value());
+  EXPECT_EQ(decoded_result->applied_request->sr_slot_offset, std::optional<unsigned>{3U});
+  EXPECT_EQ(decoded_result->applied_request->srs_slot_offset, std::optional<unsigned>{7U});
 }
 
 TEST_F(f1ap_du_ue_context_modification_test,

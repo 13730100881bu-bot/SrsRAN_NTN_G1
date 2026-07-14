@@ -77,9 +77,11 @@ dummy_ue_resource_configurator_factory::dummy_resource_updater::ue_capabilities(
 }
 
 expected<ue_ran_resource_configurator, std::string>
-dummy_ue_resource_configurator_factory::create_ue_resource_configurator(du_ue_index_t   ue_index,
-                                                                        du_cell_index_t pcell_index,
-                                                                        bool            has_tc_rnti)
+dummy_ue_resource_configurator_factory::create_ue_resource_configurator(
+    du_ue_index_t                               ue_index,
+    du_cell_index_t                             pcell_index,
+    bool                                        has_tc_rnti,
+    std::optional<ntn_ul_slot_resource_request> ntn_ul_slot_request)
 {
   if (ue_resource_pool.count(ue_index) > 0) {
     return make_unexpected(std::string("Duplicate UE index"));
@@ -91,6 +93,7 @@ dummy_ue_resource_configurator_factory::create_ue_resource_configurator(du_ue_in
                                                       config_helpers::create_default_initial_ue_spcell_cell_config());
   ue_resource_pool[ue_index].cell_group.cells[0].serv_cell_cfg.cell_index = pcell_index;
   ue_resource_pool[ue_index].cell_group.cells[0].serv_cell_idx            = SERVING_CELL_PCELL_IDX;
+  ue_resource_pool[ue_index].cell_group.ntn_ul_slot_request               = std::move(ntn_ul_slot_request);
   return ue_ran_resource_configurator{std::make_unique<dummy_resource_updater>(*this, ue_index)};
 }
 

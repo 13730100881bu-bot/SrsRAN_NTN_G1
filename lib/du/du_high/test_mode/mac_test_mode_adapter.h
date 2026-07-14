@@ -166,6 +166,9 @@ public:
 
   mac_ue_configurator& get_ue_configurator() override { return *this; }
 
+  mac_ntn_rnti_lease_pool_result apply_ntn_rnti_lease_pool_update(
+      const mac_ntn_rnti_lease_pool_update& request) override;
+
   mac_cell_rach_handler& get_rach_handler(du_cell_index_t cell_index) override
   {
     struct dummy_mac_cell_rach_handler : public mac_cell_rach_handler {

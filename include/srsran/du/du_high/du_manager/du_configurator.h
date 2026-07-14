@@ -93,6 +93,8 @@ struct du_si_pdu_update_request {
   slot_point slot;
   /// SI period in nof slots, required if more than one are SI PDU passed.
   std::optional<unsigned> si_slot_period;
+  /// Clear any previously enqueued dynamic SI PDU override for this SI message.
+  bool clear = false;
   /// Packed content of SIB messages.
   span<byte_buffer> si_messages;
 };

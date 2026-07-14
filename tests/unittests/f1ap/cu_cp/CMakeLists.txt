@@ -24,10 +24,14 @@ target_link_libraries(f1ap_cu_test_helpers f1ap_test_helpers srsran_f1ap_du srsr
 
 set(SOURCES
         f1ap_cu_gnb_cu_configuration_update_procedure_test.cpp
+        f1ap_cu_gnbdu_resource_coordination_test.cpp
         f1ap_cu_ue_context_test.cpp
         f1ap_cu_ue_context_setup_procedure_test.cpp
         f1ap_cu_ue_context_modification_procedure_test.cpp
         f1ap_cu_ue_context_release_procedure_test.cpp
+        f1ap_cu_positioning_activation_test.cpp
+        f1ap_cu_positioning_information_test.cpp
+        f1ap_cu_positioning_measurement_test.cpp
         f1ap_cu_test.cpp
         f1ap_cu_paging_test.cpp)
 

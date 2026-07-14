@@ -97,6 +97,54 @@ TEST_F(mac_rach_handler_test, when_cb_rach_detected_then_tc_rnti_is_allocated_an
   ASSERT_EQ(sched.last_rach_ind.value().occasions[0].preambles[0].tc_rnti, to_rnti(0x4601));
 }
 
+TEST_F(mac_rach_handler_test, when_ntn_lease_mode_is_enabled_then_cb_rach_uses_cucp_reserved_rnti)
+{
+  rnti_mng.set_ntn_rnti_lease_mode(true);
+  ASSERT_TRUE(rnti_mng.add_ntn_rnti_lease(to_rnti(0x4701)));
+
+  mac_rach_indication rach = make_rach_indication(create_cb_preamble());
+  cell_handler.handle_rach_indication(rach);
+
+  ASSERT_TRUE(sched.last_rach_ind.has_value());
+  ASSERT_EQ(sched.last_rach_ind.value().occasions.size(), 1);
+  ASSERT_EQ(sched.last_rach_ind.value().occasions[0].preambles.size(), 1);
+  EXPECT_EQ(sched.last_rach_ind.value().occasions[0].preambles[0].tc_rnti, to_rnti(0x4701));
+}
+
+TEST_F(mac_rach_handler_test, when_ntn_lease_mode_is_enabled_for_multiple_cells_then_cb_rach_uses_current_cell_pool)
+{
+  auto second_cell_cfg        = sched_cfg;
+  second_cell_cfg.cell_index  = to_du_cell_index(1);
+  auto& second_cell_handler   = handler.add_cell(second_cell_cfg);
+  const uint8_t preamble_id   = create_cb_preamble();
+  mac_rach_indication rach    = make_rach_indication(preamble_id);
+
+  rnti_mng.set_ntn_rnti_lease_mode(to_du_cell_index(0), true);
+  rnti_mng.set_ntn_rnti_lease_mode(to_du_cell_index(1), true);
+  ASSERT_TRUE(rnti_mng.add_ntn_rnti_lease(to_du_cell_index(0), to_rnti(0x4701)));
+  ASSERT_TRUE(rnti_mng.add_ntn_rnti_lease(to_du_cell_index(1), to_rnti(0x4801)));
+
+  second_cell_handler.handle_rach_indication(rach);
+
+  ASSERT_TRUE(sched.last_rach_ind.has_value());
+  ASSERT_EQ(sched.last_rach_ind.value().cell_index, to_du_cell_index(1));
+  ASSERT_EQ(sched.last_rach_ind.value().occasions.size(), 1);
+  ASSERT_EQ(sched.last_rach_ind.value().occasions[0].preambles.size(), 1);
+  EXPECT_EQ(sched.last_rach_ind.value().occasions[0].preambles[0].tc_rnti, to_rnti(0x4801));
+  EXPECT_EQ(rnti_mng.nof_ntn_rnti_leases(to_du_cell_index(0)), 1U);
+  EXPECT_EQ(rnti_mng.nof_ntn_rnti_leases(to_du_cell_index(1)), 0U);
+}
+
+TEST_F(mac_rach_handler_test, when_ntn_lease_mode_is_enabled_but_pool_is_empty_then_cb_rach_is_not_forwarded)
+{
+  rnti_mng.set_ntn_rnti_lease_mode(true);
+
+  mac_rach_indication rach = make_rach_indication(create_cb_preamble());
+  cell_handler.handle_rach_indication(rach);
+
+  ASSERT_FALSE(sched.last_rach_ind.has_value());
+}
+
 TEST_F(mac_rach_handler_test, when_cf_rach_detected_then_allocated_crnti_is_used)
 {
   uint8_t cfra_preamble = create_cf_preamble();

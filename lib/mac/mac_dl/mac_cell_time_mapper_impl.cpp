@@ -85,7 +85,7 @@ mac_cell_time_mapper_impl::mac_cell_time_mapper_impl(unsigned numerology_) :
   logger(srslog::fetch_basic_logger("MAC")),
   cur_slot_time_mapping(atomic_sfn_time_mapper(numerology_)),
   numerology(numerology_),
-  slot_dur(usecs{1000U >> numerology_})
+  slot_dur(nsecs{1000000U >> numerology_})
 {
 }
 
@@ -146,7 +146,7 @@ std::optional<slot_point> mac_cell_time_mapper_impl::get_slot_point(time_point t
     return std::nullopt;
   }
 
-  const auto time_difference = std::chrono::duration_cast<std::chrono::microseconds>(time - last.time_point);
+  const auto time_difference = std::chrono::duration_cast<std::chrono::nanoseconds>(time - last.time_point);
   const auto nof_slots       = time_difference.count() / slot_dur.count();
   return last.sl_tx + nof_slots;
 }

@@ -105,6 +105,7 @@ struct f1ap_ue_context_setup_request {
   std::optional<bool>                                inactivity_monitoring_request;
   std::optional<f1ap_rat_freq_prio_info>             rat_freq_prio_info;
   std::optional<f1ap_ntn_ul_slot_resource_request>   ntn_ul_slot_request;
+  std::optional<rnti_t>                               requested_c_rnti;
   byte_buffer                                        rrc_container;
   std::optional<uint64_t>                            masked_imeisv;
   std::optional<std::string>                         serving_plmn;
@@ -145,6 +146,7 @@ struct f1ap_ue_context_setup_response {
   f1ap_du_to_cu_rrc_info                           du_to_cu_rrc_info;
   std::optional<rnti_t>                            c_rnti;
   std::optional<byte_buffer>                       res_coordination_transfer_container;
+  std::optional<f1ap_ntn_ul_slot_resource_result>  ntn_ul_slot_result;
   std::optional<bool>                              full_cfg;
   std::vector<f1ap_drb_setupmod>                   drbs_setup_list;
   std::vector<f1ap_srb_failed_to_setup>            srbs_failed_to_be_setup_list;
@@ -217,6 +219,7 @@ struct f1ap_ue_context_modification_response {
   bool success = false;
   // ue context modification response
   byte_buffer                                      res_coordination_transfer_container;
+  std::optional<f1ap_ntn_ul_slot_resource_result>  ntn_ul_slot_result;
   f1ap_du_to_cu_rrc_info                           du_to_cu_rrc_info;
   std::vector<f1ap_drb_setupmod>                   drbs_setup_list;
   std::vector<f1ap_drb_setupmod>                   drbs_modified_list;

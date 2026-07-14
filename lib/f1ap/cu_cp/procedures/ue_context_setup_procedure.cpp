@@ -279,7 +279,9 @@ static void fill_asn1_ue_context_setup_request(asn1::f1ap::ue_context_setup_requ
   if (!request.res_coordination_transfer_container.empty()) {
     asn1_request->res_coordination_transfer_container_present = true;
     asn1_request->res_coordination_transfer_container         = request.res_coordination_transfer_container.copy();
-  } else if (request.ntn_ul_slot_request.has_value() && !is_empty(*request.ntn_ul_slot_request)) {
+  } else if (request.ntn_ul_slot_request.has_value() &&
+             (!is_empty(*request.ntn_ul_slot_request) ||
+              request.ntn_ul_slot_request->requested_c_rnti.has_value())) {
     asn1_request->res_coordination_transfer_container_present = true;
     asn1_request->res_coordination_transfer_container =
         encode_f1ap_ntn_ul_slot_resource_request(*request.ntn_ul_slot_request);
@@ -425,6 +427,8 @@ static void fill_f1ap_ue_context_setup_response(f1ap_ue_context_setup_response& 
   // res coordination transfer container
   if (asn1_response->res_coordination_transfer_container_present) {
     response.res_coordination_transfer_container = asn1_response->res_coordination_transfer_container.copy();
+    response.ntn_ul_slot_result =
+        decode_f1ap_ntn_ul_slot_resource_result(asn1_response->res_coordination_transfer_container);
   }
 
   // full cfg

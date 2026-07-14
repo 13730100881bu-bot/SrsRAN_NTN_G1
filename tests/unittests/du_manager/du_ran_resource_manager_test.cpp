@@ -878,3 +878,136 @@ TEST_P(du_ran_res_mng_pucch_srs_tester, when_alloc_fail_ue_has_no_srs_and_no_puc
 }
 
 INSTANTIATE_TEST_SUITE_P(different_f1_f2_resources, du_ran_res_mng_pucch_srs_tester, ::testing::Values(true, false));
+
+TEST(du_pucch_resource_manager_ntn_slot_request, allocates_requested_sr_slot_offset_when_available)
+{
+  static constexpr unsigned requested_sr_offset = 3U;
+
+  cell_config_builder_params params = {.dl_f_ref_arfcn = 365000U, .csi_rs_enabled = false};
+  du_cell_config             du_cfg = config_helpers::make_default_du_cell_config(params);
+  du_cfg.ue_ded_serv_cell_cfg.ul_config.value().init_ul_bwp.pucch_cfg->sr_res_list.front().period =
+      sr_periodicity::sl_10;
+
+  std::vector<du_cell_config> cell_cfg_list{du_cfg};
+  du_pucch_resource_manager   pucch_res_mng(cell_cfg_list, 31);
+
+  cell_group_config cell_grp_cfg;
+  cell_grp_cfg.cells.insert(SERVING_CELL_PCELL_IDX,
+                            cell_config_dedicated{SERVING_CELL_PCELL_IDX, du_cfg.ue_ded_serv_cell_cfg});
+  cell_grp_cfg.ntn_ul_slot_request.emplace();
+  cell_grp_cfg.ntn_ul_slot_request->sr_slot_offset = requested_sr_offset;
+  cell_grp_cfg.ntn_ul_slot_request->sr_slot_period = 10U;
+
+  ASSERT_TRUE(pucch_res_mng.alloc_resources(cell_grp_cfg));
+
+  const auto& sr_res_list = cell_grp_cfg.cells[0].serv_cell_cfg.ul_config->init_ul_bwp.pucch_cfg->sr_res_list;
+  ASSERT_FALSE(sr_res_list.empty());
+  EXPECT_EQ(sr_res_list.front().offset, requested_sr_offset);
+}
+
+TEST(du_pucch_resource_manager_ntn_slot_request, fails_when_requested_sr_slot_period_does_not_match_cell_config)
+{
+  cell_config_builder_params params = {.dl_f_ref_arfcn = 365000U, .csi_rs_enabled = false};
+  du_cell_config             du_cfg = config_helpers::make_default_du_cell_config(params);
+  du_cfg.ue_ded_serv_cell_cfg.ul_config.value().init_ul_bwp.pucch_cfg->sr_res_list.front().period =
+      sr_periodicity::sl_10;
+
+  std::vector<du_cell_config> cell_cfg_list{du_cfg};
+  du_pucch_resource_manager   pucch_res_mng(cell_cfg_list, 31);
+
+  cell_group_config cell_grp_cfg;
+  cell_grp_cfg.cells.insert(SERVING_CELL_PCELL_IDX,
+                            cell_config_dedicated{SERVING_CELL_PCELL_IDX, du_cfg.ue_ded_serv_cell_cfg});
+  cell_grp_cfg.ntn_ul_slot_request.emplace();
+  cell_grp_cfg.ntn_ul_slot_request->sr_slot_offset = 3U;
+  cell_grp_cfg.ntn_ul_slot_request->sr_slot_period = 20U;
+
+  ASSERT_FALSE(pucch_res_mng.alloc_resources(cell_grp_cfg));
+}
+
+TEST(du_srs_resource_manager_ntn_slot_request, allocates_requested_srs_slot_offset_when_available)
+{
+  static constexpr unsigned requested_srs_offset = 7U;
+
+  cell_config_builder_params params = {.dl_f_ref_arfcn = 365000U, .csi_rs_enabled = false};
+  du_cell_config             du_cfg = config_helpers::make_default_du_cell_config(params);
+  auto&                      srs_cfg = du_cfg.srs_cfg;
+  srs_cfg.tx_comb                    = tx_comb_size::n2;
+  srs_cfg.max_nof_symbols            = 1U;
+  srs_cfg.nof_symbols                = srs_nof_symbols::n1;
+  srs_cfg.cyclic_shift_reuse_factor  = nof_cyclic_shifts::no_cyclic_shift;
+  srs_cfg.sequence_id_reuse_factor   = 1U;
+  srs_cfg.srs_period.emplace(srs_periodicity::sl10);
+
+  std::vector<du_cell_config> cell_cfg_list{du_cfg};
+  du_srs_policy_max_ul_rate   srs_res_mng(cell_cfg_list);
+
+  cell_group_config cell_grp_cfg;
+  cell_grp_cfg.cells.insert(SERVING_CELL_PCELL_IDX,
+                            cell_config_dedicated{SERVING_CELL_PCELL_IDX, du_cfg.ue_ded_serv_cell_cfg});
+  cell_grp_cfg.cells[0].serv_cell_cfg.ul_config->init_ul_bwp.srs_cfg.reset();
+  cell_grp_cfg.ntn_ul_slot_request.emplace();
+  cell_grp_cfg.ntn_ul_slot_request->srs_slot_offset = requested_srs_offset;
+  cell_grp_cfg.ntn_ul_slot_request->srs_slot_period = 10U;
+
+  ASSERT_TRUE(srs_res_mng.alloc_resources(cell_grp_cfg));
+
+  const auto& srs_res_list = cell_grp_cfg.cells[0].serv_cell_cfg.ul_config->init_ul_bwp.srs_cfg->srs_res_list;
+  ASSERT_FALSE(srs_res_list.empty());
+  ASSERT_TRUE(srs_res_list.front().periodicity_and_offset.has_value());
+  EXPECT_EQ(srs_res_list.front().periodicity_and_offset->offset, requested_srs_offset);
+}
+
+TEST(du_ran_resource_manager_ntn_slot_request, reconfigures_existing_pcell_with_requested_sr_and_srs_slot_offsets)
+{
+  static constexpr unsigned requested_sr_offset  = 3U;
+  static constexpr unsigned requested_srs_offset = 7U;
+
+  cell_config_builder_params params = {.dl_f_ref_arfcn = 365000U, .csi_rs_enabled = false};
+  du_cell_config             du_cfg = config_helpers::make_default_du_cell_config(params);
+  du_cfg.ue_ded_serv_cell_cfg.ul_config.value().init_ul_bwp.pucch_cfg->sr_res_list.front().period =
+      sr_periodicity::sl_10;
+  auto& srs_cfg                     = du_cfg.srs_cfg;
+  srs_cfg.tx_comb                   = tx_comb_size::n2;
+  srs_cfg.max_nof_symbols           = 1U;
+  srs_cfg.nof_symbols               = srs_nof_symbols::n1;
+  srs_cfg.cyclic_shift_reuse_factor = nof_cyclic_shifts::no_cyclic_shift;
+  srs_cfg.sequence_id_reuse_factor  = 1U;
+  srs_cfg.srs_period.emplace(srs_periodicity::sl10);
+
+  std::vector<du_cell_config>        cell_cfg_list{du_cfg};
+  std::map<srb_id_t, du_srb_config>  srb_cfg_list;
+  std::map<five_qi_t, du_qos_config> qos_cfg_list =
+      config_helpers::make_default_du_qos_config_list(/* warn_on_drop */ true, 1000);
+  du_test_mode_config dummy_test_mode_cfg{};
+
+  du_ran_resource_manager_impl res_mng(cell_cfg_list,
+                                       scheduler_expert_config{.ue = {.max_pucchs_per_slot = 31}},
+                                       srb_cfg_list,
+                                       qos_cfg_list,
+                                       dummy_test_mode_cfg);
+  auto ue_res = res_mng.create_ue_resource_configurator(to_du_ue_index(0), to_du_cell_index(0), true);
+  ASSERT_TRUE(ue_res.has_value());
+  ASSERT_FALSE(ue_res->resource_alloc_failed());
+
+  f1ap_ue_context_update_request update_req;
+  update_req.ue_index = to_du_ue_index(0);
+  update_req.ntn_ul_slot_request.emplace();
+  update_req.ntn_ul_slot_request->sr_slot_offset  = requested_sr_offset;
+  update_req.ntn_ul_slot_request->sr_slot_period  = 10U;
+  update_req.ntn_ul_slot_request->srs_slot_offset = requested_srs_offset;
+  update_req.ntn_ul_slot_request->srs_slot_period = 10U;
+
+  const du_ue_resource_update_response update_resp = ue_res->update(to_du_cell_index(0), update_req);
+  ASSERT_FALSE(update_resp.failed());
+
+  const auto& pcell = ue_res->value().cell_group.cells[0].serv_cell_cfg;
+  const auto& sr_res_list = pcell.ul_config->init_ul_bwp.pucch_cfg->sr_res_list;
+  ASSERT_FALSE(sr_res_list.empty());
+  EXPECT_EQ(sr_res_list.front().offset, requested_sr_offset);
+
+  const auto& srs_res_list = pcell.ul_config->init_ul_bwp.srs_cfg->srs_res_list;
+  ASSERT_FALSE(srs_res_list.empty());
+  ASSERT_TRUE(srs_res_list.front().periodicity_and_offset.has_value());
+  EXPECT_EQ(srs_res_list.front().periodicity_and_offset->offset, requested_srs_offset);
+}

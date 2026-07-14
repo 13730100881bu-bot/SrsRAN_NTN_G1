@@ -45,6 +45,8 @@ public:
 
   void handle_slice_reconfiguration_request(const du_cell_slice_reconfig_request& req) override;
 
+  ntn_access_calendar_response handle_ntn_access_calendar_update(const ntn_access_calendar_request& request) override;
+
   // Sys Info handling.
   void handle_si_update_request(const si_scheduling_update_request& req) override;
 

@@ -21,7 +21,9 @@
  */
 
 #include "du_ran_resource_manager_impl.h"
+#include "srsran/f1ap/ntn_ul_slot_resource_request.h"
 #include "srsran/mac/config/mac_cell_group_config_factory.h"
+#include "srsran/ran/sr_configuration.h"
 #include "srsran/scheduler/config/serving_cell_config_factory.h"
 #include "srsran/srslog/srslog.h"
 
@@ -73,6 +75,66 @@ static void reset_serv_cell_cfg(serving_cell_config& serv_cell_cfg)
   serv_cell_cfg.ul_config->init_ul_bwp.srs_cfg.reset();
 }
 
+static std::optional<ntn_ul_slot_resource_request>
+make_du_ntn_ul_slot_resource_request(const std::optional<f1ap_ntn_ul_slot_resource_request>& request)
+{
+  if (!request.has_value() || is_empty(*request)) {
+    return std::nullopt;
+  }
+
+  ntn_ul_slot_resource_request du_request;
+  du_request.sr_slot_offset  = request->sr_slot_offset;
+  du_request.srs_slot_offset = request->srs_slot_offset;
+  du_request.sr_slot_period  = request->sr_slot_period;
+  du_request.srs_slot_period = request->srs_slot_period;
+  return du_request;
+}
+
+static bool is_same_ntn_ul_slot_resource_request(const std::optional<ntn_ul_slot_resource_request>& current_request,
+                                                 const std::optional<ntn_ul_slot_resource_request>& next_request)
+{
+  if (current_request.has_value() != next_request.has_value()) {
+    return false;
+  }
+  if (!current_request.has_value()) {
+    return true;
+  }
+  return current_request->sr_slot_offset == next_request->sr_slot_offset &&
+         current_request->srs_slot_offset == next_request->srs_slot_offset &&
+         current_request->sr_slot_period == next_request->sr_slot_period &&
+         current_request->srs_slot_period == next_request->srs_slot_period;
+}
+
+static f1ap_ntn_ul_slot_resource_result make_f1ap_ntn_ul_slot_resource_result(
+    bool accepted, f1ap_ntn_ul_slot_resource_result_reason reason, const std::optional<ntn_ul_slot_resource_request>& request)
+{
+  f1ap_ntn_ul_slot_resource_result result;
+  result.accepted = accepted;
+  result.reason   = reason;
+  if (request.has_value()) {
+    f1ap_ntn_ul_slot_resource_request f1ap_request;
+    f1ap_request.sr_slot_offset  = request->sr_slot_offset;
+    f1ap_request.srs_slot_offset = request->srs_slot_offset;
+    f1ap_request.sr_slot_period  = request->sr_slot_period;
+    f1ap_request.srs_slot_period = request->srs_slot_period;
+    if (!is_empty(f1ap_request)) {
+      result.applied_request = f1ap_request;
+    }
+  }
+  return result;
+}
+
+static f1ap_ntn_ul_slot_resource_result_reason get_ntn_ul_slot_reject_reason(const std::string& error)
+{
+  if (error.find("SRS") != std::string::npos) {
+    return f1ap_ntn_ul_slot_resource_result_reason::srs_offset_unavailable;
+  }
+  if (error.find("PUCCH") != std::string::npos) {
+    return f1ap_ntn_ul_slot_resource_result_reason::sr_offset_unavailable;
+  }
+  return f1ap_ntn_ul_slot_resource_result_reason::du_resource_conflict;
+}
+
 du_ran_resource_manager_impl::du_ran_resource_manager_impl(span<const du_cell_config>                cell_cfg_list_,
                                                            const scheduler_expert_config&            scheduler_cfg,
                                                            const std::map<srb_id_t, du_srb_config>&  srb_config,
@@ -117,9 +179,11 @@ du_ran_resource_manager_impl::du_ran_resource_manager_impl(span<const du_cell_co
 }
 
 expected<ue_ran_resource_configurator, std::string>
-du_ran_resource_manager_impl::create_ue_resource_configurator(du_ue_index_t   ue_index,
-                                                              du_cell_index_t pcell_index,
-                                                              bool            has_tc_rnti)
+du_ran_resource_manager_impl::create_ue_resource_configurator(
+    du_ue_index_t                               ue_index,
+    du_cell_index_t                             pcell_index,
+    bool                                        has_tc_rnti,
+    std::optional<ntn_ul_slot_resource_request> ntn_ul_slot_request)
 {
   if (ue_res_pool.contains(ue_index)) {
     return make_unexpected(std::string("Double allocation of same UE not supported"));
@@ -127,6 +191,7 @@ du_ran_resource_manager_impl::create_ue_resource_configurator(du_ue_index_t   ue
   ue_res_pool.emplace(ue_index, *this);
   auto& ue_res = ue_res_pool[ue_index];
   auto& mcg    = ue_res.cg_cfg;
+  mcg.cell_group.ntn_ul_slot_request = std::move(ntn_ul_slot_request);
 
   // UE initialized PCell.
   // Note: In case of lack of RAN resource availability, the return will be error type.
@@ -159,6 +224,14 @@ du_ran_resource_manager_impl::update_context(du_ue_index_t                      
   ue_resource_context&           u      = ue_res_pool[ue_index];
   du_ue_resource_config&         ue_mcg = u.cg_cfg;
   du_ue_resource_update_response resp;
+  const std::optional<ntn_ul_slot_resource_request> next_ntn_ul_slot_request =
+      make_du_ntn_ul_slot_resource_request(upd_req.ntn_ul_slot_request);
+  const bool pcell_reallocated =
+      !ue_mcg.cell_group.cells.contains(SERVING_CELL_PCELL_IDX) ||
+      ue_mcg.cell_group.cells[SERVING_CELL_PCELL_IDX].serv_cell_cfg.cell_index != pcell_idx;
+  const bool ntn_ul_slot_request_changed =
+      upd_req.ntn_ul_slot_request.has_value() &&
+      !is_same_ntn_ul_slot_resource_request(ue_mcg.cell_group.ntn_ul_slot_request, next_ntn_ul_slot_request);
 
   // > Deallocate resources for previously configured cells that have now been removed or changed.
   if (ue_mcg.cell_group.cells.contains(0) and ue_mcg.cell_group.cells[0].serv_cell_cfg.cell_index != pcell_idx) {
@@ -178,6 +251,9 @@ du_ran_resource_manager_impl::update_context(du_ue_index_t                      
   }
 
   // > Allocate resources for new or modified cells.
+  if (upd_req.ntn_ul_slot_request.has_value() && pcell_reallocated) {
+    ue_mcg.cell_group.ntn_ul_slot_request = next_ntn_ul_slot_request;
+  }
   if (not ue_mcg.cell_group.cells.contains(0) or ue_mcg.cell_group.cells[0].serv_cell_cfg.cell_index != pcell_idx) {
     // >> PCell changed. Allocate new PCell resources.
     error_type<std::string> outcome = allocate_cell_resources(ue_index, pcell_idx, SERVING_CELL_PCELL_IDX);
@@ -190,6 +266,20 @@ du_ran_resource_manager_impl::update_context(du_ue_index_t                      
     // >> SCells Added/Modified. Allocate new SCell resources.
     if (not allocate_cell_resources(ue_index, sc.cell_index, sc.serv_cell_index).has_value()) {
       resp.failed_scells.push_back(sc.serv_cell_index);
+    }
+  }
+  if (ntn_ul_slot_request_changed && !pcell_reallocated) {
+    error_type<std::string> outcome =
+        reallocate_pcell_ul_slot_resources(ue_index, ue_mcg, next_ntn_ul_slot_request);
+    if (not outcome.has_value()) {
+      resp.ntn_ul_slot_result =
+          make_f1ap_ntn_ul_slot_resource_result(false, get_ntn_ul_slot_reject_reason(outcome.error()), std::nullopt);
+    } else if (upd_req.ntn_ul_slot_request.has_value()) {
+      resp.ntn_ul_slot_result = make_f1ap_ntn_ul_slot_resource_result(
+          true,
+          next_ntn_ul_slot_request.has_value() ? f1ap_ntn_ul_slot_resource_result_reason::applied
+                                               : f1ap_ntn_ul_slot_resource_result_reason::clear_applied,
+          next_ntn_ul_slot_request);
     }
   }
 
@@ -214,7 +304,59 @@ du_ran_resource_manager_impl::update_context(du_ue_index_t                      
   resp.failed_drbs.insert(
       resp.failed_drbs.end(), bearer_resp.drbs_failed_to_mod.begin(), bearer_resp.drbs_failed_to_mod.end());
 
+  if (upd_req.ntn_ul_slot_request.has_value() && !resp.ntn_ul_slot_result.has_value()) {
+    resp.ntn_ul_slot_result = make_f1ap_ntn_ul_slot_resource_result(
+        true,
+        next_ntn_ul_slot_request.has_value() ? f1ap_ntn_ul_slot_resource_result_reason::applied
+                                             : f1ap_ntn_ul_slot_resource_result_reason::clear_applied,
+        next_ntn_ul_slot_request);
+  }
+
   return resp;
+}
+
+error_type<std::string> du_ran_resource_manager_impl::reallocate_pcell_ul_slot_resources(
+    du_ue_index_t                                      ue_index,
+    du_ue_resource_config&                             ue_res,
+    const std::optional<ntn_ul_slot_resource_request>& slot_request)
+{
+  if (!ue_res.cell_group.cells.contains(SERVING_CELL_PCELL_IDX)) {
+    return make_unexpected(fmt::format("Unable to reallocate NTN UL slot resources for ue={}: PCell is missing",
+                                       fmt::underlying(ue_index)));
+  }
+
+  const std::optional<ntn_ul_slot_resource_request> previous_slot_request = ue_res.cell_group.ntn_ul_slot_request;
+
+  auto restore_previous_resources = [&]() {
+    ue_res.cell_group.ntn_ul_slot_request = previous_slot_request;
+    if (not srs_res_mng->alloc_resources(ue_res.cell_group)) {
+      logger.error("ue={}: Failed to restore previous SRS resources after NTN UL slot reallocation failure",
+                   fmt::underlying(ue_index));
+      return;
+    }
+    if (not pucch_res_mng.alloc_resources(ue_res.cell_group)) {
+      srs_res_mng->dealloc_resources(ue_res.cell_group);
+      logger.error("ue={}: Failed to restore previous PUCCH resources after NTN UL slot reallocation failure",
+                   fmt::underlying(ue_index));
+    }
+  };
+
+  pucch_res_mng.dealloc_resources(ue_res.cell_group);
+  srs_res_mng->dealloc_resources(ue_res.cell_group);
+
+  ue_res.cell_group.ntn_ul_slot_request = slot_request;
+  if (not srs_res_mng->alloc_resources(ue_res.cell_group)) {
+    restore_previous_resources();
+    return make_unexpected(fmt::format("Unable to reallocate SRS resources for ue={}", fmt::underlying(ue_index)));
+  }
+
+  if (not pucch_res_mng.alloc_resources(ue_res.cell_group)) {
+    srs_res_mng->dealloc_resources(ue_res.cell_group);
+    restore_previous_resources();
+    return make_unexpected(fmt::format("Unable to reallocate PUCCH resources for ue={}", fmt::underlying(ue_index)));
+  }
+
+  return {};
 }
 
 void du_ran_resource_manager_impl::deallocate_context(du_ue_index_t ue_index)

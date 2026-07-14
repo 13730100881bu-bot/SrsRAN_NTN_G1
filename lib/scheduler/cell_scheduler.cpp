@@ -33,6 +33,9 @@ cell_scheduler::cell_scheduler(const scheduler_expert_config&                  s
                                cell_metrics_handler&                           metrics_handler) :
   cell_cfg(cell_cfg_),
   res_grid(cell_cfg),
+  access_calendar_numerology(to_numerology_value(cell_cfg.scs_common)),
+  access_calendar_minimum_lead_slots(
+      std::max(res_grid.max_dl_slot_alloc_delay, res_grid.max_ul_slot_alloc_delay) + 1),
   event_logger(cell_cfg.cell_index, cell_cfg.pci),
   metrics(metrics_handler),
   result_logger(sched_cfg.log_broadcast_messages, cell_cfg.pci),
@@ -50,6 +53,31 @@ cell_scheduler::cell_scheduler(const scheduler_expert_config&                  s
   // Register new cell in the UE scheduler.
   ue_sched = ue_sched_.add_cell(ue_cell_scheduler_creation_request{
       msg.cell_index, &pdcch_sch, &pucch_alloc, &uci_alloc, &res_grid, &metrics, &event_logger});
+}
+
+ntn_access_calendar_response
+cell_scheduler::handle_ntn_access_calendar_update(const ntn_access_calendar_request& request)
+{
+  scheduler_ntn_access_calendar_gate* gate = access_calendar_gate.load(std::memory_order_acquire);
+  if (gate == nullptr) {
+    if (request.operation != ntn_access_calendar_operation::prepare) {
+      ntn_access_calendar_response response;
+      response.state        = ntn_access_calendar_state::cleared;
+      response.reason       = ntn_access_calendar_reject_reason::none;
+      response.version      = request.version;
+      response.content_hash = request.content_hash;
+      return response;
+    }
+    std::lock_guard<std::mutex> lock(access_calendar_creation_mutex);
+    gate = access_calendar_gate.load(std::memory_order_relaxed);
+    if (gate == nullptr) {
+      access_calendar_gate_owner = std::make_unique<scheduler_ntn_access_calendar_gate>(
+          cell_cfg.cell_index, access_calendar_numerology, access_calendar_minimum_lead_slots);
+      gate = access_calendar_gate_owner.get();
+      access_calendar_gate.store(gate, std::memory_order_release);
+    }
+  }
+  return gate->handle_update(request);
 }
 
 void cell_scheduler::handle_si_update_request(const si_scheduling_update_request& msg)
@@ -94,6 +122,12 @@ void cell_scheduler::run_slot(slot_point sl_tx)
   // Mark the start of the slot.
   auto slot_start_tp = std::chrono::high_resolution_clock::now();
 
+  // Consume a prepared calendar before any common scheduler starts filling current or future resource-grid slots.
+  scheduler_ntn_access_calendar_gate* calendar_gate = access_calendar_gate.load(std::memory_order_acquire);
+  if (calendar_gate != nullptr) {
+    calendar_gate->slot_indication(sl_tx);
+  }
+
   // If there are skipped slots, handle them. Otherwise, the cell grid and cached results are not correctly cleared.
   if (SRSRAN_LIKELY(res_grid.slot_tx().valid())) {
     while (SRSRAN_UNLIKELY(res_grid.slot_tx() + 1 != sl_tx)) {
@@ -131,6 +165,16 @@ void cell_scheduler::run_slot(slot_point sl_tx)
 
   // > Schedule UE DL and UL data.
   ue_sched->run_slot(sl_tx);
+
+  // Static SSB and PRACH opportunities are always prefilled so an aborted pending plan can immediately fall back to
+  // the previous plan. Suppress only the current scheduler result before it is handed to MAC/PHY. The corresponding
+  // resource-grid reservation remains conservative and no unauthorized PDU can reach RF.
+  if (calendar_gate != nullptr && not calendar_gate->is_allowed(sl_tx, ntn_access_calendar_purpose::ssb)) {
+    res_grid[0].result.dl.bc.ssb_info.clear();
+  }
+  if (calendar_gate != nullptr && not calendar_gate->is_allowed(sl_tx, ntn_access_calendar_purpose::prach)) {
+    res_grid[0].result.ul.prachs.clear();
+  }
 
   // > Mark stop of the slot processing
   auto slot_stop_tp = std::chrono::high_resolution_clock::now();

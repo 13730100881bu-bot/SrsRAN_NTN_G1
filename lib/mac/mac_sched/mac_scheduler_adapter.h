@@ -28,6 +28,7 @@
 #include "srsran/mac/mac_cell_control_information_handler.h"
 #include "srsran/mac/mac_cell_rach_handler.h"
 #include "srsran/mac/mac_paging_information_handler.h"
+#include "srsran/scheduler/ntn_access_calendar.h"
 
 namespace srsran {
 
@@ -55,6 +56,15 @@ public:
   /// \brief Gets the positioning measurement handler.
   /// \return Positioning measurement handler.
   virtual mac_positioning_measurement_handler& get_positioning_handler() = 0;
+
+  /// Prepare, query or clear a per-cell NTN access-calendar software gate.
+  virtual ntn_access_calendar_response handle_ntn_access_calendar_update(const ntn_access_calendar_request& request)
+  {
+    ntn_access_calendar_response response;
+    response.version      = request.version;
+    response.content_hash = request.content_hash;
+    return response;
+  }
 };
 
 } // namespace srsran

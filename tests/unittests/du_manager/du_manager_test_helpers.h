@@ -298,8 +298,11 @@ public:
     {
       return mac_cell_slot_time_info{slot_point(1, 1), std::chrono::system_clock::now()};
     }
-    std::optional<time_point> get_time_point(slot_point slot) const override { return std::nullopt; }
-    std::optional<slot_point> get_slot_point(time_point time) const override { return std::nullopt; }
+    std::optional<time_point> get_time_point(slot_point slot) const override { return mapped_time_point; }
+    std::optional<slot_point> get_slot_point(time_point time) const override { return mapped_slot_point; }
+
+    std::optional<time_point> mapped_time_point;
+    std::optional<slot_point> mapped_slot_point;
   };
 
   mac_cell_dummy             mac_cell;
@@ -309,6 +312,9 @@ public:
   std::optional<mac_ue_reconfiguration_request>             last_ue_reconf_msg{};
   std::optional<mac_ue_delete_request>                      last_ue_delete_msg{};
   std::optional<mac_dl_buffer_state_indication_message>     last_dl_bs;
+  std::optional<mac_ntn_rnti_lease_pool_update>             last_ntn_rnti_lease_pool_update;
+  std::optional<mac_ntn_access_calendar_update>              last_ntn_access_calendar_update;
+  mac_ntn_access_calendar_result                             next_ntn_access_calendar_result;
   byte_buffer                                               last_pushed_ul_ccch_msg;
   std::optional<du_ue_index_t>                              last_ue_config_applied;
   wait_manual_event_tester<mac_ue_create_response>          wait_ue_create;
@@ -319,6 +325,22 @@ public:
   mac_cell_manager&                    get_cell_manager() override { return *this; }
   mac_ue_configurator&                 get_ue_configurator() override { return *this; }
   mac_positioning_measurement_handler& get_positioning_handler() override { return *this; }
+  mac_ntn_rnti_lease_pool_result apply_ntn_rnti_lease_pool_update(
+      const mac_ntn_rnti_lease_pool_update& request) override
+  {
+    last_ntn_rnti_lease_pool_update = request;
+    mac_ntn_rnti_lease_pool_result result;
+    result.accepted        = true;
+    result.reason          = "accepted";
+    result.accepted_leases = request.leases;
+    return result;
+  }
+  mac_ntn_access_calendar_result
+  apply_ntn_access_calendar_update(const mac_ntn_access_calendar_update& request) override
+  {
+    last_ntn_access_calendar_update = request;
+    return next_ntn_access_calendar_result;
+  }
 
   mac_cell_controller&  add_cell(const mac_cell_creation_request& cell_cfg) override { return mac_cell; }
   void                  remove_cell(du_cell_index_t cell_index) override {}
@@ -393,7 +415,11 @@ public:
   dummy_ue_resource_configurator_factory();
 
   expected<ue_ran_resource_configurator, std::string>
-  create_ue_resource_configurator(du_ue_index_t ue_index, du_cell_index_t pcell_index, bool has_tc_rnti) override;
+  create_ue_resource_configurator(
+      du_ue_index_t                                    ue_index,
+      du_cell_index_t                                  pcell_index,
+      bool                                             has_tc_rnti,
+      std::optional<ntn_ul_slot_resource_request>      ntn_ul_slot_request = std::nullopt) override;
 };
 
 f1ap_ue_context_update_request create_f1ap_ue_context_update_request(du_ue_index_t                   ue_idx,

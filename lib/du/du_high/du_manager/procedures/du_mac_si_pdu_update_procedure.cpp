@@ -62,6 +62,7 @@ async_task<du_si_pdu_update_response> srsran::srs_du::start_du_mac_si_pdu_update
     mac_req.new_si_pdu_info->sib_idx        = static_cast<uint8_t>(req.sib_idx);
     mac_req.new_si_pdu_info->slot           = req.slot;
     mac_req.new_si_pdu_info->si_slot_period = req.si_slot_period;
+    mac_req.new_si_pdu_info->clear          = req.clear;
     mac_req.new_si_pdu_info->si_messages    = req.si_messages;
 
     CORO_AWAIT_VALUE(mac_resp, params.mac.mgr.get_cell_manager().get_cell_controller(cell_index).reconfigure(mac_req));

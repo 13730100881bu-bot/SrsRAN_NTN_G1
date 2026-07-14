@@ -102,7 +102,7 @@ private:
 /// conversion.
 class mac_cell_time_mapper_impl final : public mac_cell_time_mapper
 {
-  using usecs = std::chrono::microseconds;
+  using nsecs = std::chrono::nanoseconds;
 
 public:
   explicit mac_cell_time_mapper_impl(unsigned numerology_);
@@ -132,11 +132,11 @@ private:
   /// Numerology parameter that determines slot duration and frame structure.
   const unsigned numerology;
 
-  /// Duration of a single slot in microseconds.
-  const usecs slot_dur;
+  /// Duration of a single slot. Nanosecond precision is required for numerology mu=4 (62.5 microseconds).
+  const nsecs slot_dur;
 
   /// Duration of a full system frame (10 milliseconds).
-  static constexpr usecs frame_dur = usecs{10000};
+  static constexpr nsecs frame_dur = nsecs{10000000};
 };
 
 } // namespace srsran

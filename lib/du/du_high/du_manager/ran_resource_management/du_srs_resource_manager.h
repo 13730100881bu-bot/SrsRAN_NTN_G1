@@ -91,7 +91,8 @@ private:
     using pair_res_id_offset = std::pair<unsigned, unsigned>;
 
     // Returns the best SRS resource ID and offset for this UE, according to the policy defined in this class.
-    std::vector<pair_res_id_offset>::const_iterator find_optimal_ue_srs_resource();
+    std::vector<pair_res_id_offset>::const_iterator
+    find_optimal_ue_srs_resource(std::optional<unsigned> requested_slot_offset = std::nullopt);
 
     // Check if this SRS offset has already some SRS resources allocated at a given symbol interval, but can still host
     // more.

@@ -34,8 +34,10 @@
 #include "srsran/mac/mac_pdu_handler.h"
 #include "srsran/support/async/async_timer.h"
 #include "srsran/support/executors/execute_until_success.h"
+#include <algorithm>
 #include <condition_variable>
 #include <future>
+#include <limits>
 #include <thread>
 
 using namespace srsran;
@@ -193,6 +195,285 @@ du_manager_impl::handle_cu_context_update_request(const gnbcu_config_update_requ
   return launch_async<cu_configuration_procedure>(request, cell_mng, ue_mng, params, metrics);
 }
 
+async_task<f1ap_ntn_rnti_lease_pool_result>
+du_manager_impl::handle_ntn_rnti_lease_pool_update_request(const f1ap_ntn_rnti_lease_pool_update& request)
+{
+  mac_ntn_rnti_lease_pool_update mac_update;
+  mac_update.cell_index = request.cell_index;
+  switch (request.operation) {
+    case f1ap_ntn_rnti_lease_pool_operation::replace:
+      mac_update.operation = mac_ntn_rnti_lease_pool_operation::replace;
+      break;
+    case f1ap_ntn_rnti_lease_pool_operation::add:
+      mac_update.operation = mac_ntn_rnti_lease_pool_operation::add;
+      break;
+    case f1ap_ntn_rnti_lease_pool_operation::clear:
+      mac_update.operation = mac_ntn_rnti_lease_pool_operation::clear;
+      break;
+  }
+  mac_update.leases = request.leases;
+
+  const mac_ntn_rnti_lease_pool_result mac_result = params.mac.mgr.apply_ntn_rnti_lease_pool_update(mac_update);
+
+  f1ap_ntn_rnti_lease_pool_result result;
+  result.generation_id    = request.generation_id;
+  result.accepted         = mac_result.accepted;
+  result.reject_reason    = mac_result.reason;
+  result.accepted_leases  = mac_result.accepted_leases;
+  result.rejected_leases  = mac_result.rejected_leases;
+
+  return launch_async([result](coro_context<async_task<f1ap_ntn_rnti_lease_pool_result>>& ctx) mutable {
+    CORO_BEGIN(ctx);
+    CORO_RETURN(result);
+  });
+}
+
+async_task<f1ap_ntn_resource_audit_result>
+du_manager_impl::handle_ntn_resource_audit_request(const f1ap_ntn_resource_audit_request& request)
+{
+  f1ap_ntn_resource_audit_result result;
+  result.generation_id = request.generation_id;
+  result.accepted      = true;
+
+  return launch_async([result](coro_context<async_task<f1ap_ntn_resource_audit_result>>& ctx) mutable {
+    CORO_BEGIN(ctx);
+    CORO_RETURN(result);
+  });
+}
+
+async_task<f1ap_ntn_sib19_broadcast_result>
+du_manager_impl::handle_ntn_sib19_broadcast_update_request(const f1ap_ntn_sib19_broadcast_update& request)
+{
+  auto launch_result = [](f1ap_ntn_sib19_broadcast_result result) {
+    return launch_async([result](coro_context<async_task<f1ap_ntn_sib19_broadcast_result>>& ctx) mutable {
+      CORO_BEGIN(ctx);
+      CORO_RETURN(result);
+    });
+  };
+
+  f1ap_ntn_sib19_broadcast_result result;
+  result.generation_id = request.generation_id;
+
+  std::vector<byte_buffer> si_messages;
+  if (request.operation == f1ap_ntn_sib19_broadcast_operation::update) {
+    if (request.packed_sib19.empty()) {
+      result.status        = f1ap_ntn_sib19_broadcast_result_status::packing_failed;
+      result.reject_reason = "empty_sib19_payload";
+      return launch_result(result);
+    }
+    auto sib19_copy = request.packed_sib19.deep_copy(byte_buffer::fallback_allocation_tag{});
+    if (!sib19_copy.has_value()) {
+      result.status        = f1ap_ntn_sib19_broadcast_result_status::packing_failed;
+      result.reject_reason = "failed_to_copy_sib19_payload";
+      return launch_result(result);
+    }
+    si_messages.push_back(std::move(sib19_copy.value()));
+  }
+
+  if (request.operation != f1ap_ntn_sib19_broadcast_operation::update &&
+      request.operation != f1ap_ntn_sib19_broadcast_operation::clear) {
+    result.status        = f1ap_ntn_sib19_broadcast_result_status::malformed_request;
+    result.reject_reason = "invalid_operation";
+    return launch_result(result);
+  }
+  if (!cell_mng.has_cell(request.cell_index)) {
+    result.status        = f1ap_ntn_sib19_broadcast_result_status::si_slot_missing;
+    result.reject_reason = "unknown_cell";
+    return launch_result(result);
+  }
+  const du_cell_config& cell_cfg = cell_mng.get_cell_cfg(request.cell_index);
+  if (cell_cfg.nr_cgi.nci != request.nci || cell_cfg.pci != request.pci) {
+    result.status        = f1ap_ntn_sib19_broadcast_result_status::malformed_request;
+    result.reject_reason = "wrong_cell_or_pci";
+    return launch_result(result);
+  }
+  if (!cell_cfg.si_config.has_value() || request.si_msg_idx >= cell_cfg.si_config->si_sched_info.size()) {
+    result.status        = f1ap_ntn_sib19_broadcast_result_status::si_slot_missing;
+    result.reject_reason = "sib19_si_slot_missing";
+    return launch_result(result);
+  }
+  const auto& mapping = cell_cfg.si_config->si_sched_info[request.si_msg_idx].sib_mapping_info;
+  if (std::find(mapping.begin(), mapping.end(), sib_type::sib19) == mapping.end() || request.sib_idx != 19) {
+    result.status        = f1ap_ntn_sib19_broadcast_result_status::si_slot_missing;
+    result.reject_reason = "sib19_not_mapped_to_si_message";
+    return launch_result(result);
+  }
+  if (!cell_mng.is_cell_active(request.cell_index)) {
+    result.status        = f1ap_ntn_sib19_broadcast_result_status::mac_update_failed;
+    result.reject_reason = "cell_not_active";
+    return launch_result(result);
+  }
+
+  return launch_async([this,
+                       request,
+                       nr_cgi      = cell_cfg.nr_cgi,
+                       si_messages = std::move(si_messages),
+                       du_req      = du_si_pdu_update_request{},
+                       si_resp     = du_si_pdu_update_response{},
+                       result](
+                          coro_context<async_task<f1ap_ntn_sib19_broadcast_result>>& ctx) mutable {
+    CORO_BEGIN(ctx);
+
+    du_req.nr_cgi      = nr_cgi;
+    du_req.si_msg_idx  = request.si_msg_idx;
+    du_req.sib_idx     = request.sib_idx;
+    du_req.slot        = request.valid_from;
+    du_req.clear       = request.operation == f1ap_ntn_sib19_broadcast_operation::clear;
+    du_req.si_messages = span<byte_buffer>(si_messages.data(), si_messages.size());
+
+    CORO_AWAIT_VALUE(si_resp, start_du_mac_si_pdu_update(du_req, params, cell_mng));
+
+    if (si_resp.success) {
+      result.status = du_req.clear ? f1ap_ntn_sib19_broadcast_result_status::clear_applied
+                                   : f1ap_ntn_sib19_broadcast_result_status::applied;
+    } else {
+      result.status        = f1ap_ntn_sib19_broadcast_result_status::mac_update_failed;
+      result.reject_reason = "mac_update_failed";
+    }
+    CORO_RETURN(result);
+  });
+}
+
+async_task<f1ap_ntn_access_calendar_result>
+du_manager_impl::handle_ntn_access_calendar_update_request(const f1ap_ntn_access_calendar_update& request)
+{
+  auto launch_result = [](f1ap_ntn_access_calendar_result result) {
+    return launch_async([result = std::move(result)](
+                            coro_context<async_task<f1ap_ntn_access_calendar_result>>& ctx) mutable {
+      CORO_BEGIN(ctx);
+      CORO_RETURN(result);
+    });
+  };
+
+  f1ap_ntn_access_calendar_result result;
+  result.catalog_version     = request.catalog_version;
+  result.schedule_version    = request.schedule_version;
+  result.source_content_hash = request.source_content_hash;
+  result.calendar_hash       = request.calendar_hash;
+
+  mac_ntn_access_calendar_update mac_request;
+  switch (request.operation) {
+    case f1ap_ntn_access_calendar_operation::prepare:
+      mac_request.operation = mac_ntn_access_calendar_operation::prepare;
+      break;
+    case f1ap_ntn_access_calendar_operation::query:
+      mac_request.operation = mac_ntn_access_calendar_operation::query;
+      break;
+    case f1ap_ntn_access_calendar_operation::clear:
+      mac_request.operation = mac_ntn_access_calendar_operation::clear;
+      break;
+    case f1ap_ntn_access_calendar_operation::invalid:
+      result.reject_reason = "invalid_operation";
+      return launch_result(std::move(result));
+  }
+  mac_request.schedule_version = request.schedule_version;
+  mac_request.calendar_hash    = request.calendar_hash;
+  mac_request.activation_epoch = std::chrono::system_clock::time_point{
+      std::chrono::milliseconds{static_cast<int64_t>(request.activation_epoch_unix_ms)}};
+  mac_request.valid_until =
+      std::chrono::system_clock::time_point{
+          std::chrono::milliseconds{static_cast<int64_t>(request.valid_until_unix_ms)}};
+  mac_request.cycle_duration = std::chrono::microseconds{request.cycle_duration_us};
+
+  if (request.operation == f1ap_ntn_access_calendar_operation::prepare) {
+    if (request.cells.size() != 2 || request.cells[0].du_cell_index == request.cells[1].du_cell_index ||
+        request.cells[0].nci == request.cells[1].nci) {
+      result.reject_reason = "prepare_requires_two_distinct_cells";
+      return launch_result(std::move(result));
+    }
+
+    for (unsigned i = 0; i != request.cells.size(); ++i) {
+      const f1ap_ntn_access_calendar_cell& source_cell = request.cells[i];
+      if (!cell_mng.has_cell(source_cell.du_cell_index)) {
+        result.reject_reason = "unknown_cell";
+        return launch_result(std::move(result));
+      }
+      const du_cell_config& cell_cfg = cell_mng.get_cell_cfg(source_cell.du_cell_index);
+      if (cell_cfg.nr_cgi.nci != source_cell.nci || cell_cfg.pci != source_cell.pci) {
+        result.reject_reason = "identity_mismatch";
+        return launch_result(std::move(result));
+      }
+      if (!cell_mng.is_cell_active(source_cell.du_cell_index)) {
+        result.reject_reason = "cell_not_active";
+        return launch_result(std::move(result));
+      }
+
+      mac_ntn_access_calendar_cell& target_cell = mac_request.cells[i];
+      target_cell.cell_index = source_cell.du_cell_index;
+      target_cell.nci        = source_cell.nci;
+      target_cell.pci        = source_cell.pci;
+      target_cell.intents.reserve(source_cell.intents.size());
+      for (const f1ap_ntn_access_calendar_intent& source_intent : source_cell.intents) {
+        mac_ntn_access_calendar_intent target_intent;
+        target_intent.position_id = source_intent.position_id;
+        target_intent.start_time  = std::chrono::microseconds{source_intent.start_time_us};
+        target_intent.duration    = std::chrono::microseconds{source_intent.duration_us};
+        target_intent.port_id     = source_intent.port_id;
+        switch (source_intent.direction) {
+          case f1ap_ntn_access_calendar_direction::downlink:
+            target_intent.direction = mac_ntn_access_calendar_direction::downlink;
+            break;
+          case f1ap_ntn_access_calendar_direction::uplink:
+            target_intent.direction = mac_ntn_access_calendar_direction::uplink;
+            break;
+          case f1ap_ntn_access_calendar_direction::invalid:
+            result.reject_reason = "invalid_intent_direction";
+            return launch_result(std::move(result));
+        }
+        switch (source_intent.purpose) {
+          case f1ap_ntn_access_calendar_purpose::ssb_sib_paging:
+            target_intent.purpose = mac_ntn_access_calendar_purpose::ssb_sib_paging;
+            break;
+          case f1ap_ntn_access_calendar_purpose::ssb_sib_paging_rar:
+            target_intent.purpose = mac_ntn_access_calendar_purpose::ssb_sib_paging_rar;
+            break;
+          case f1ap_ntn_access_calendar_purpose::prach_ro:
+            target_intent.purpose = mac_ntn_access_calendar_purpose::prach_ro;
+            break;
+          case f1ap_ntn_access_calendar_purpose::prach_ul_beam:
+            target_intent.purpose = mac_ntn_access_calendar_purpose::prach_ul_beam;
+            break;
+          case f1ap_ntn_access_calendar_purpose::invalid:
+            result.reject_reason = "invalid_intent_purpose";
+            return launch_result(std::move(result));
+        }
+        target_cell.intents.push_back(std::move(target_intent));
+      }
+    }
+  }
+
+  const mac_ntn_access_calendar_result mac_result = params.mac.mgr.apply_ntn_access_calendar_update(mac_request);
+  switch (mac_result.status) {
+    case mac_ntn_access_calendar_status::preparing:
+      result.status = f1ap_ntn_access_calendar_result_status::preparing;
+      break;
+    case mac_ntn_access_calendar_status::ready:
+      result.status = f1ap_ntn_access_calendar_result_status::ready;
+      break;
+    case mac_ntn_access_calendar_status::applied:
+      result.status = f1ap_ntn_access_calendar_result_status::applied;
+      break;
+    case mac_ntn_access_calendar_status::cleared:
+      result.status = f1ap_ntn_access_calendar_result_status::cleared;
+      break;
+    case mac_ntn_access_calendar_status::unsupported:
+      result.status = f1ap_ntn_access_calendar_result_status::unsupported;
+      break;
+    case mac_ntn_access_calendar_status::rejected:
+      result.status = f1ap_ntn_access_calendar_result_status::rejected;
+      break;
+  }
+  result.reject_reason = mac_result.reason;
+  if (mac_result.effective_activation_slot.valid()) {
+    result.activation_slot = mac_result.effective_activation_slot;
+  }
+  for (unsigned i = 0; i != result.accepted_intents_per_cell.size(); ++i) {
+    result.accepted_intents_per_cell[i] = static_cast<uint16_t>(
+        std::min(mac_result.accepted_intents[i], static_cast<unsigned>(std::numeric_limits<uint16_t>::max())));
+  }
+  return launch_result(std::move(result));
+}
+
 async_task<f1ap_ue_context_creation_response>
 du_manager_impl::handle_ue_context_creation(const f1ap_ue_context_creation_request& request)
 {
@@ -291,6 +572,7 @@ void du_manager_impl::handle_si_pdu_update(const du_si_pdu_update_request& req)
                                     sib_idx        = req.sib_idx,
                                     slot           = req.slot,
                                     si_slot_period = req.si_slot_period,
+                                    clear          = req.clear,
                                     si_messages    = std::move(si_messages),
                                     req_copy       = du_si_pdu_update_request{}](
                                        coro_context<async_task<void>>& ctx) mutable {
@@ -306,6 +588,7 @@ void du_manager_impl::handle_si_pdu_update(const du_si_pdu_update_request& req)
     req_copy.sib_idx        = sib_idx;
     req_copy.slot           = slot;
     req_copy.si_slot_period = si_slot_period;
+    req_copy.clear          = clear;
     req_copy.si_messages    = span<byte_buffer>(si_messages.data(), si_messages.size());
 
     CORO_AWAIT(start_du_mac_si_pdu_update(req_copy, params, cell_mng));

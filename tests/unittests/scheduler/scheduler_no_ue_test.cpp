@@ -106,3 +106,143 @@ TEST_F(sched_no_ue_tester, test_rach_indication)
   ASSERT_TRUE(res.dl.ue_grants.empty());
   ASSERT_TRUE(not res.dl.rar_grants.empty());
 }
+
+TEST_F(sched_no_ue_tester, when_calendar_allows_only_prach_then_ssb_is_gated_without_gating_prach)
+{
+  scheduler_expert_config  sched_cfg = config_helpers::make_default_scheduler_expert_config();
+  sched_cfg_dummy_notifier cfg_notif;
+  scheduler_impl           sch{scheduler_config{sched_cfg, cfg_notif}};
+
+  sched_cell_configuration_request_message cell_cfg_msg =
+      sched_config_helper::make_default_sched_cell_configuration_request();
+  ASSERT_TRUE(sch.handle_cell_configuration_request(cell_cfg_msg));
+  ASSERT_TRUE(sch.slot_indication(slot_point{0, 0}, cell_cfg_msg.cell_index).success);
+
+  ntn_access_calendar_request request;
+  request.operation       = ntn_access_calendar_operation::prepare;
+  request.cell_index      = cell_cfg_msg.cell_index;
+  request.version         = 1;
+  request.content_hash    = "sha256:prach-only";
+  request.activation_slot = slot_point{0, 32};
+  request.validity_slots  = 1000;
+  request.cycle_slots     = 1;
+  request.windows.push_back({0, 1, ntn_access_calendar_purpose_bit(ntn_access_calendar_purpose::prach)});
+  ASSERT_EQ(sch.handle_ntn_access_calendar_update(request).state, ntn_access_calendar_state::ready);
+
+  unsigned nof_ssbs   = 0;
+  unsigned nof_prachs = 0;
+  for (unsigned count = 1; count != 200; ++count) {
+    const sched_result& result = sch.slot_indication(slot_point{0, count}, cell_cfg_msg.cell_index);
+    ASSERT_TRUE(result.success);
+    if (count >= request.activation_slot.to_uint()) {
+      nof_ssbs += result.dl.bc.ssb_info.size();
+      nof_prachs += result.ul.prachs.size();
+    }
+  }
+
+  EXPECT_EQ(nof_ssbs, 0U);
+  EXPECT_GT(nof_prachs, 0U);
+
+  ntn_access_calendar_request query;
+  query.operation    = ntn_access_calendar_operation::query;
+  query.cell_index   = request.cell_index;
+  query.version      = request.version;
+  query.content_hash = request.content_hash;
+  EXPECT_EQ(sch.handle_ntn_access_calendar_update(query).state, ntn_access_calendar_state::applied);
+}
+
+TEST_F(sched_no_ue_tester, when_calendar_allows_only_ssb_then_prach_is_gated_without_gating_ssb)
+{
+  scheduler_expert_config  sched_cfg = config_helpers::make_default_scheduler_expert_config();
+  sched_cfg_dummy_notifier cfg_notif;
+  scheduler_impl           sch{scheduler_config{sched_cfg, cfg_notif}};
+
+  sched_cell_configuration_request_message cell_cfg_msg =
+      sched_config_helper::make_default_sched_cell_configuration_request();
+  ASSERT_TRUE(sch.handle_cell_configuration_request(cell_cfg_msg));
+  ASSERT_TRUE(sch.slot_indication(slot_point{0, 0}, cell_cfg_msg.cell_index).success);
+
+  ntn_access_calendar_request request;
+  request.operation       = ntn_access_calendar_operation::prepare;
+  request.cell_index      = cell_cfg_msg.cell_index;
+  request.version         = 1;
+  request.content_hash    = "sha256:ssb-only";
+  request.activation_slot = slot_point{0, 32};
+  request.validity_slots  = 1000;
+  request.cycle_slots     = 1;
+  request.windows.push_back({0, 1, ntn_access_calendar_purpose_bit(ntn_access_calendar_purpose::ssb)});
+  ASSERT_EQ(sch.handle_ntn_access_calendar_update(request).state, ntn_access_calendar_state::ready);
+
+  unsigned nof_ssbs   = 0;
+  unsigned nof_prachs = 0;
+  for (unsigned count = 1; count != 200; ++count) {
+    const sched_result& result = sch.slot_indication(slot_point{0, count}, cell_cfg_msg.cell_index);
+    ASSERT_TRUE(result.success);
+    if (count >= request.activation_slot.to_uint()) {
+      nof_ssbs += result.dl.bc.ssb_info.size();
+      nof_prachs += result.ul.prachs.size();
+    }
+  }
+
+  EXPECT_GT(nof_ssbs, 0U);
+  EXPECT_EQ(nof_prachs, 0U);
+}
+
+TEST_F(sched_no_ue_tester, when_active_update_is_cleared_then_current_results_restore_previous_plan)
+{
+  scheduler_expert_config  sched_cfg = config_helpers::make_default_scheduler_expert_config();
+  sched_cfg_dummy_notifier cfg_notif;
+  scheduler_impl           sch{scheduler_config{sched_cfg, cfg_notif}};
+
+  sched_cell_configuration_request_message cell_cfg_msg =
+      sched_config_helper::make_default_sched_cell_configuration_request();
+  ASSERT_TRUE(sch.handle_cell_configuration_request(cell_cfg_msg));
+  ASSERT_TRUE(sch.slot_indication(slot_point{0, 0}, cell_cfg_msg.cell_index).success);
+
+  ntn_access_calendar_request version1;
+  version1.operation       = ntn_access_calendar_operation::prepare;
+  version1.cell_index      = cell_cfg_msg.cell_index;
+  version1.version         = 1;
+  version1.content_hash    = "sha256:ssb-v1";
+  version1.activation_slot = slot_point{0, 32};
+  version1.validity_slots  = 1000;
+  version1.cycle_slots     = 1;
+  version1.windows.push_back({0, 1, ntn_access_calendar_purpose_bit(ntn_access_calendar_purpose::ssb)});
+  ASSERT_EQ(sch.handle_ntn_access_calendar_update(version1).state, ntn_access_calendar_state::ready);
+
+  for (unsigned count = 1; count <= 40; ++count) {
+    ASSERT_TRUE(sch.slot_indication(slot_point{0, count}, cell_cfg_msg.cell_index).success);
+  }
+
+  ntn_access_calendar_request version2 = version1;
+  version2.version                     = 2;
+  version2.content_hash                = "sha256:prach-v2";
+  version2.activation_slot             = slot_point{0, 80};
+  version2.windows.clear();
+  version2.windows.push_back({0, 1, ntn_access_calendar_purpose_bit(ntn_access_calendar_purpose::prach)});
+  ASSERT_EQ(sch.handle_ntn_access_calendar_update(version2).state, ntn_access_calendar_state::ready);
+
+  for (unsigned count = 41; count <= 100; ++count) {
+    ASSERT_TRUE(sch.slot_indication(slot_point{0, count}, cell_cfg_msg.cell_index).success);
+  }
+
+  ntn_access_calendar_request clear_version2;
+  clear_version2.operation    = ntn_access_calendar_operation::clear;
+  clear_version2.cell_index   = version2.cell_index;
+  clear_version2.version      = version2.version;
+  clear_version2.content_hash = version2.content_hash;
+  ASSERT_EQ(sch.handle_ntn_access_calendar_update(clear_version2).state, ntn_access_calendar_state::ready);
+
+  unsigned nof_ssbs_after_restore   = 0;
+  unsigned nof_prachs_after_restore = 0;
+  for (unsigned count = 101; count <= 160; ++count) {
+    const sched_result& result = sch.slot_indication(slot_point{0, count}, cell_cfg_msg.cell_index);
+    ASSERT_TRUE(result.success);
+    nof_ssbs_after_restore += result.dl.bc.ssb_info.size();
+    nof_prachs_after_restore += result.ul.prachs.size();
+  }
+
+  EXPECT_GT(nof_ssbs_after_restore, 0U);
+  EXPECT_EQ(nof_prachs_after_restore, 0U);
+  EXPECT_EQ(sch.handle_ntn_access_calendar_update(clear_version2).state, ntn_access_calendar_state::cleared);
+}

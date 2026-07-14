@@ -4,6 +4,7 @@
 #include "srsran/du/du_high/du_manager/du_configurator.h"
 #include "srsran/f1ap/du/f1ap_du.h"
 #include "srsran/f1ap/du/f1ap_du_positioning_handler.h"
+#include "srsran/f1ap/ntn_access_calendar.h"
 #include "srsran/mac/mac_cell_manager.h"
 #include "srsran/ran/du_types.h"
 #include "srsran/support/async/async_task.h"
@@ -60,6 +61,22 @@ public:
   /// \brief Handle request to update context by the CU via F1AP.
   virtual async_task<gnbcu_config_update_response>
   handle_cu_context_update_request(const gnbcu_config_update_request& request) = 0;
+
+  /// \brief Handle an NTN RNTI lease-pool update requested by the CU via F1AP.
+  virtual async_task<f1ap_ntn_rnti_lease_pool_result>
+  handle_ntn_rnti_lease_pool_update_request(const f1ap_ntn_rnti_lease_pool_update& request) = 0;
+
+  /// \brief Handle an NTN resource audit query requested by the CU via F1AP.
+  virtual async_task<f1ap_ntn_resource_audit_result>
+  handle_ntn_resource_audit_request(const f1ap_ntn_resource_audit_request& request) = 0;
+
+  /// \brief Handle an NTN SIB19 broadcast payload update requested by the CU via F1AP.
+  virtual async_task<f1ap_ntn_sib19_broadcast_result>
+  handle_ntn_sib19_broadcast_update_request(const f1ap_ntn_sib19_broadcast_update& request) = 0;
+
+  /// Handle a versioned two-cell NTN access calendar requested by the CU via private F1AP coordination payload.
+  virtual async_task<f1ap_ntn_access_calendar_result>
+  handle_ntn_access_calendar_update_request(const f1ap_ntn_access_calendar_update& request) = 0;
 
   /// \brief Create a new UE context in the DU with an assigned UE index.
   virtual async_task<f1ap_ue_context_creation_response>

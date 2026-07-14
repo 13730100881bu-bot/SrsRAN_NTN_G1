@@ -24,6 +24,7 @@
 
 #include "srsran/adt/expected.h"
 #include "srsran/asn1/f1ap/f1ap.h"
+#include "srsran/asn1/f1ap/f1ap_pdu_contents.h"
 #include "srsran/support/async/event_signal.h"
 #include "srsran/support/async/protocol_transaction_manager.h"
 
@@ -36,6 +37,10 @@ using f1ap_transaction_response = expected<asn1::f1ap::successful_outcome_s, asn
 /// F1AP protocol transaction type.
 using f1ap_transaction = protocol_transaction<f1ap_transaction_response>;
 
+using f1ap_positioning_assistance_feedback_response = asn1::f1ap::positioning_assist_info_feedback_s;
+using f1ap_positioning_assistance_feedback_transaction =
+    protocol_transaction<f1ap_positioning_assistance_feedback_response>;
+
 class f1ap_event_manager
 {
   /// Transaction Response Container, which gets indexed by transaction_id.
@@ -43,6 +48,7 @@ class f1ap_event_manager
 
 public:
   protocol_transaction_manager<f1ap_transaction_response> transactions;
+  protocol_transaction_manager<f1ap_positioning_assistance_feedback_response> positioning_assistance_transactions;
 
   /// F1 TRP information exchange outcome.
   using f1ap_trp_information_outcome_t =
@@ -59,7 +65,11 @@ public:
       expected<const asn1::f1ap::gnb_cu_cfg_upd_ack_s*, const asn1::f1ap::gnb_cu_cfg_upd_fail_s*>;
   event_signal<f1ap_gnb_cu_configuration_update_outcome_t> f1ap_gnb_cu_configuration_update_outcome;
 
-  explicit f1ap_event_manager(timer_factory timer_service) : transactions(MAX_NOF_TRANSACTIONS, timer_service) {}
+  explicit f1ap_event_manager(timer_factory timer_service) :
+    transactions(MAX_NOF_TRANSACTIONS, timer_service),
+    positioning_assistance_transactions(MAX_NOF_TRANSACTIONS, timer_service)
+  {
+  }
 };
 
 } // namespace srs_cu_cp

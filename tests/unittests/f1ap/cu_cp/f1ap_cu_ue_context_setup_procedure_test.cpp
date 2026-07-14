@@ -125,6 +125,30 @@ TEST_F(f1ap_cu_ue_context_setup_test, when_ntn_ul_slot_request_is_present_then_i
   ASSERT_EQ(sent_req->res_coordination_transfer_container, make_ntn_ul_slot_resource_container(3U, 7U, 10U, 20U));
 }
 
+TEST_F(f1ap_cu_ue_context_setup_test, when_ntn_target_crnti_is_present_then_private_container_carries_it)
+{
+  f1ap_ue_context_setup_request req = create_ue_context_setup_request({});
+  req.ntn_ul_slot_request.emplace();
+  req.ntn_ul_slot_request->sr_slot_offset   = 3U;
+  req.ntn_ul_slot_request->srs_slot_offset  = 7U;
+  req.ntn_ul_slot_request->sr_slot_period   = 10U;
+  req.ntn_ul_slot_request->srs_slot_period  = 20U;
+  req.ntn_ul_slot_request->requested_c_rnti = to_rnti(0x4610);
+  req.requested_c_rnti                      = to_rnti(0x4610);
+
+  this->start_procedure(req);
+
+  const ue_context_setup_request_s& sent_req =
+      this->f1ap_pdu_notifier.last_f1ap_msg.pdu.init_msg().value.ue_context_setup_request();
+  ASSERT_TRUE(sent_req->res_coordination_transfer_container_present);
+  const std::optional<f1ap_ntn_ul_slot_resource_request> decoded =
+      decode_f1ap_ntn_ul_slot_resource_request(sent_req->res_coordination_transfer_container);
+  ASSERT_TRUE(decoded.has_value());
+  ASSERT_EQ(decoded->requested_c_rnti, std::optional<rnti_t>{to_rnti(0x4610)});
+  ASSERT_EQ(decoded->sr_slot_offset, std::optional<unsigned>{3U});
+  ASSERT_EQ(decoded->srs_slot_period, std::optional<unsigned>{20U});
+}
+
 TEST_F(f1ap_cu_ue_context_setup_test, when_response_received_then_procedure_successful)
 {
   // Start UE CONTEXT SETUP procedure and return back the response from the DU.

@@ -31,15 +31,25 @@
 #include "srsran/ran/qos/qos_parameters.h"
 #include "srsran/rlc/rlc_config.h"
 #include "srsran/scheduler/config/serving_cell_config.h"
+#include <optional>
 
 namespace srsran {
 namespace srs_du {
 
+/// Optional NTN-driven uplink control/sounding slot request for UE-dedicated resources.
+struct ntn_ul_slot_resource_request {
+  std::optional<unsigned> sr_slot_offset;
+  std::optional<unsigned> srs_slot_offset;
+  std::optional<unsigned> sr_slot_period;
+  std::optional<unsigned> srs_slot_period;
+};
+
 /// This struct stores the accumulated CellGroupConfig.
 struct cell_group_config {
-  mac_cell_group_config                 mcg_cfg;
-  physical_cell_group_config            pcg_cfg;
-  slotted_vector<cell_config_dedicated> cells;
+  mac_cell_group_config                       mcg_cfg;
+  physical_cell_group_config                  pcg_cfg;
+  slotted_vector<cell_config_dedicated>       cells;
+  std::optional<ntn_ul_slot_resource_request> ntn_ul_slot_request;
 };
 
 /// Parameters of an SRB of the DU UE context.

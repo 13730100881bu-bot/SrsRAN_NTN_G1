@@ -320,6 +320,12 @@ void srsran_scheduler_adapter::handle_slice_reconfiguration_request(const du_cel
   sched_impl->handle_slice_reconfiguration_request(req);
 }
 
+ntn_access_calendar_response
+srsran_scheduler_adapter::handle_ntn_access_calendar_update(const ntn_access_calendar_request& request)
+{
+  return sched_impl->handle_ntn_access_calendar_update(request);
+}
+
 void srsran_scheduler_adapter::sched_config_notif_adapter::on_ue_config_complete(du_ue_index_t ue_index,
                                                                                  bool          ue_creation_result)
 {

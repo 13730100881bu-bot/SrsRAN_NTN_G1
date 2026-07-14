@@ -24,6 +24,7 @@
 #include "tests/test_doubles/f1ap/f1ap_test_messages.h"
 #include "srsran/asn1/f1ap/f1ap_pdu_contents_ue.h"
 #include "srsran/du/du_cell_config_helpers.h"
+#include "srsran/f1ap/ntn_ul_slot_resource_request.h"
 #include "srsran/support/test_utils.h"
 #include <gtest/gtest.h>
 
@@ -136,6 +137,63 @@ TEST_F(f1ap_du_ue_context_setup_test, when_f1ap_receives_request_then_f1ap_notif
   ASSERT_EQ(req.drbs_to_setup[0].drb_id, drb_id_t::drb1);
   ASSERT_EQ(req.drbs_to_setup[0].mode, rlc_mode::am);
   ASSERT_EQ(req.drbs_to_setup[0].pdcp_sn_len, pdcp_sn_size::size12bits);
+}
+
+TEST_F(f1ap_du_ue_context_setup_test,
+       when_ntn_ul_slot_container_is_present_then_f1ap_du_passes_decoded_request_to_du_manager)
+{
+  du_creates_f1_logical_connection();
+  f1ap_message msg =
+      test_helpers::generate_ue_context_setup_request(gnb_cu_ue_f1ap_id_t{0},
+                                                      gnb_du_ue_f1ap_id_t{0},
+                                                      1,
+                                                      {drb_id_t::drb1},
+                                                      config_helpers::make_default_du_cell_config().nr_cgi);
+
+  f1ap_ntn_ul_slot_resource_request slot_request;
+  slot_request.sr_slot_offset  = 3U;
+  slot_request.sr_slot_period  = 10U;
+  slot_request.srs_slot_offset = 7U;
+  slot_request.srs_slot_period = 20U;
+
+  auto& request = *msg.pdu.init_msg().value.ue_context_setup_request();
+  request.res_coordination_transfer_container_present = true;
+  request.res_coordination_transfer_container = encode_f1ap_ntn_ul_slot_resource_request(slot_request);
+
+  start_procedure(msg);
+
+  ASSERT_TRUE(this->f1ap_du_cfg_handler.last_ue_context_update_req.has_value());
+  const f1ap_ue_context_update_request& req = *this->f1ap_du_cfg_handler.last_ue_context_update_req;
+  ASSERT_TRUE(req.ntn_ul_slot_request.has_value());
+  EXPECT_EQ(req.ntn_ul_slot_request->sr_slot_offset, std::optional<unsigned>{3U});
+  EXPECT_EQ(req.ntn_ul_slot_request->sr_slot_period, std::optional<unsigned>{10U});
+  EXPECT_EQ(req.ntn_ul_slot_request->srs_slot_offset, std::optional<unsigned>{7U});
+  EXPECT_EQ(req.ntn_ul_slot_request->srs_slot_period, std::optional<unsigned>{20U});
+}
+
+TEST_F(f1ap_du_ue_context_setup_test,
+       when_ntn_target_crnti_is_present_then_f1ap_du_passes_requested_crnti_to_ue_creation)
+{
+  f1ap_message msg = test_helpers::generate_ue_context_setup_request(
+      gnb_cu_ue_f1ap_id_t{0}, std::nullopt, 1, {drb_id_t::drb1}, config_helpers::make_default_du_cell_config().nr_cgi);
+
+  f1ap_ntn_ul_slot_resource_request slot_request;
+  slot_request.sr_slot_offset   = 3U;
+  slot_request.sr_slot_period   = 10U;
+  slot_request.srs_slot_offset  = 7U;
+  slot_request.srs_slot_period  = 20U;
+  slot_request.requested_c_rnti = to_rnti(0x4610);
+  f1ap_du_cfg_handler.next_ue_context_creation_response.crnti = to_rnti(0x4610);
+
+  auto& request = *msg.pdu.init_msg().value.ue_context_setup_request();
+  request.res_coordination_transfer_container_present = true;
+  request.res_coordination_transfer_container = encode_f1ap_ntn_ul_slot_resource_request(slot_request);
+
+  start_procedure(msg);
+
+  ASSERT_TRUE(this->f1ap_du_cfg_handler.last_ue_context_creation_req.has_value());
+  ASSERT_EQ(this->f1ap_du_cfg_handler.last_ue_context_creation_req->requested_c_rnti,
+            std::optional<rnti_t>{to_rnti(0x4610)});
 }
 
 TEST_F(f1ap_du_ue_context_setup_test, when_f1ap_receives_request_then_f1ap_responds_back_with_ue_context_setup_response)

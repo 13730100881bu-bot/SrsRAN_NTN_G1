@@ -42,6 +42,7 @@
 #include "srsran/scheduler/config/serving_cell_config.h"
 #include "srsran/scheduler/config/si_scheduling_config.h"
 #include "srsran/scheduler/config/slice_rrm_policy_config.h"
+#include "srsran/scheduler/ntn_access_calendar.h"
 
 namespace srsran {
 
@@ -226,6 +227,18 @@ public:
 
   /// \brief Handle slice reconfiguration request of a cell.
   virtual void handle_slice_reconfiguration_request(const du_cell_slice_reconfig_request& msg) = 0;
+
+  /// Prepare, query or clear a per-cell NTN access-calendar software gate.
+  ///
+  /// The default implementation preserves compatibility with scheduler implementations that do not support this
+  /// optional feature.
+  virtual ntn_access_calendar_response handle_ntn_access_calendar_update(const ntn_access_calendar_request& request)
+  {
+    ntn_access_calendar_response response;
+    response.version      = request.version;
+    response.content_hash = request.content_hash;
+    return response;
+  }
 };
 
 class scheduler_ue_configurator

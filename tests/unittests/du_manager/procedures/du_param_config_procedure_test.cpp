@@ -23,6 +23,7 @@
 #include "../du_manager_test_helpers.h"
 #include "srsran/du/du_cell_config_helpers.h"
 #include "srsran/du/du_high/du_manager/du_manager_factory.h"
+#include "srsran/support/async/async_test_utils.h"
 #include "srsran/support/executors/task_worker.h"
 #include <gtest/gtest.h>
 
@@ -32,12 +33,19 @@ using namespace srs_du;
 class du_manager_procedure_tester
 {
 public:
-  du_manager_procedure_tester(std::vector<du_cell_config> cfgs = {config_helpers::make_default_du_cell_config()}) :
+  du_manager_procedure_tester(
+      std::vector<du_cell_config> cfgs = {config_helpers::make_default_du_cell_config()},
+      std::optional<unsigned>     nof_cells_to_activate = std::nullopt) :
     cell_cfgs(cfgs), dependencies(cell_cfgs), du_mng(create_du_manager(dependencies.params))
   {
     // Generate automatic responses from F1AP and MAC.
-    dependencies.f1ap.wait_f1_setup.result.value().cells_to_activate.resize(cfgs.size());
-    for (unsigned i = 0; i != cfgs.size(); ++i) {
+    const unsigned active_cell_count = nof_cells_to_activate.value_or(cfgs.size());
+    srsran_assert(active_cell_count <= cfgs.size(),
+                  "Requested {} active cells but only {} cells are configured",
+                  active_cell_count,
+                  cfgs.size());
+    dependencies.f1ap.wait_f1_setup.result.value().cells_to_activate.resize(active_cell_count);
+    for (unsigned i = 0; i != active_cell_count; ++i) {
       dependencies.f1ap.wait_f1_setup.result.value().cells_to_activate[i].cgi = cell_cfgs[i].nr_cgi;
     }
     dependencies.f1ap.wait_f1_setup.ready_ev.set();
@@ -102,6 +110,261 @@ TEST_F(du_manager_du_config_update_test, check_if_slot_time_mapping_is_available
   ASSERT_TRUE(resp.has_value());
   ASSERT_EQ(resp.value().sl_tx, slot_point(1, 1));
 }
+
+static std::vector<du_cell_config> make_two_ntn_calendar_cells()
+{
+  std::vector<du_cell_config> cells(2, config_helpers::make_default_du_cell_config());
+  cells[1].nr_cgi.nci = nr_cell_identity::create(cells[0].nr_cgi.nci.value() + 1).value();
+  // Deliberately reuse the PCI: identity validation must use NCI + PCI + DU cell index, never PCI alone.
+  cells[1].pci = cells[0].pci;
+  return cells;
+}
+
+static f1ap_ntn_access_calendar_update make_ntn_calendar_prepare(span<const du_cell_config> cells)
+{
+  f1ap_ntn_access_calendar_update request;
+  request.operation                = f1ap_ntn_access_calendar_operation::prepare;
+  request.satellite_id             = "P01-S001";
+  request.catalog_version          = 10;
+  request.schedule_version         = 20;
+  request.source_content_hash      = "sha256:source";
+  request.calendar_hash            = "sha256:calendar";
+  request.activation_epoch_unix_ms = 320000;
+  request.valid_until_unix_ms      = 640000;
+  request.cycle_duration_us        = 640000;
+  for (unsigned i = 0; i != cells.size(); ++i) {
+    f1ap_ntn_access_calendar_cell cell;
+    cell.du_cell_index = to_du_cell_index(i);
+    cell.nci        = cells[i].nr_cgi.nci;
+    cell.pci        = cells[i].pci;
+    cell.intents.push_back({"G000001",
+                            0,
+                            2500,
+                            f1ap_ntn_access_calendar_direction::downlink,
+                            f1ap_ntn_access_calendar_purpose::ssb_sib_paging,
+                            0});
+    request.cells.push_back(std::move(cell));
+  }
+  return request;
+}
+
+class du_manager_ntn_access_calendar_test : public du_manager_procedure_tester, public ::testing::Test
+{
+public:
+  du_manager_ntn_access_calendar_test() : du_manager_procedure_tester(make_two_ntn_calendar_cells()) {}
+};
+
+TEST_F(du_manager_ntn_access_calendar_test, when_two_cell_identity_is_valid_then_prepare_is_forwarded_atomically_to_mac)
+{
+  dependencies.mac.next_ntn_access_calendar_result.status = mac_ntn_access_calendar_status::ready;
+  dependencies.mac.next_ntn_access_calendar_result.reason = "scheduler_ready";
+  dependencies.mac.next_ntn_access_calendar_result.accepted_intents = {1, 1};
+  dependencies.mac.next_ntn_access_calendar_result.effective_activation_slot = slot_point{1, 123};
+  f1ap_ntn_access_calendar_update request = make_ntn_calendar_prepare(cell_cfgs);
+
+  async_task<f1ap_ntn_access_calendar_result>         procedure =
+      du_mng->handle_ntn_access_calendar_update_request(request);
+  lazy_task_launcher<f1ap_ntn_access_calendar_result> task(procedure);
+
+  ASSERT_TRUE(task.ready());
+  const f1ap_ntn_access_calendar_result response = task.get();
+  EXPECT_EQ(response.status, f1ap_ntn_access_calendar_result_status::ready);
+  EXPECT_EQ(response.catalog_version, request.catalog_version);
+  EXPECT_EQ(response.schedule_version, request.schedule_version);
+  EXPECT_EQ(response.source_content_hash, request.source_content_hash);
+  EXPECT_EQ(response.calendar_hash, request.calendar_hash);
+  EXPECT_EQ(response.reject_reason, "scheduler_ready");
+  ASSERT_TRUE(response.activation_slot.has_value());
+  EXPECT_EQ(response.activation_slot.value(), slot_point(1, 123));
+  EXPECT_EQ(response.accepted_intents_per_cell[0], 1);
+  EXPECT_EQ(response.accepted_intents_per_cell[1], 1);
+
+  ASSERT_TRUE(dependencies.mac.last_ntn_access_calendar_update.has_value());
+  const mac_ntn_access_calendar_update& mac_request = dependencies.mac.last_ntn_access_calendar_update.value();
+  EXPECT_EQ(mac_request.operation, mac_ntn_access_calendar_operation::prepare);
+  EXPECT_EQ(mac_request.schedule_version, request.schedule_version);
+  EXPECT_EQ(mac_request.calendar_hash, request.calendar_hash);
+  EXPECT_EQ(mac_request.activation_epoch.time_since_epoch(),
+            std::chrono::milliseconds(request.activation_epoch_unix_ms));
+  EXPECT_EQ(mac_request.valid_until.time_since_epoch(), std::chrono::milliseconds(request.valid_until_unix_ms));
+  EXPECT_EQ(mac_request.cycle_duration, std::chrono::microseconds(request.cycle_duration_us));
+  EXPECT_EQ(mac_request.cells[0].nci, cell_cfgs[0].nr_cgi.nci);
+  EXPECT_EQ(mac_request.cells[1].nci, cell_cfgs[1].nr_cgi.nci);
+  EXPECT_EQ(mac_request.cells[0].pci, mac_request.cells[1].pci);
+  ASSERT_EQ(mac_request.cells[0].intents.size(), 1);
+  EXPECT_EQ(mac_request.cells[0].intents[0].position_id, "G000001");
+  EXPECT_EQ(mac_request.cells[0].intents[0].direction, mac_ntn_access_calendar_direction::downlink);
+  EXPECT_EQ(mac_request.cells[0].intents[0].purpose, mac_ntn_access_calendar_purpose::ssb_sib_paging);
+  EXPECT_EQ(mac_request.cells[0].intents[0].port_id, 0);
+}
+
+TEST_F(du_manager_ntn_access_calendar_test, when_cell_nci_mismatches_config_then_prepare_is_rejected_without_mac_mutation)
+{
+  f1ap_ntn_access_calendar_update request = make_ntn_calendar_prepare(cell_cfgs);
+  request.cells[1].nci = nr_cell_identity::create(request.cells[1].nci.value() + 100).value();
+
+  async_task<f1ap_ntn_access_calendar_result>         procedure =
+      du_mng->handle_ntn_access_calendar_update_request(request);
+  lazy_task_launcher<f1ap_ntn_access_calendar_result> task(procedure);
+
+  ASSERT_TRUE(task.ready());
+  const f1ap_ntn_access_calendar_result response = task.get();
+  EXPECT_EQ(response.status, f1ap_ntn_access_calendar_result_status::rejected);
+  EXPECT_EQ(response.reject_reason, "identity_mismatch");
+  EXPECT_FALSE(dependencies.mac.last_ntn_access_calendar_update.has_value());
+}
+
+TEST_F(du_manager_ntn_access_calendar_test, when_cell_pci_mismatches_config_then_prepare_is_rejected_without_mac_mutation)
+{
+  f1ap_ntn_access_calendar_update request = make_ntn_calendar_prepare(cell_cfgs);
+  request.cells[1].pci = static_cast<pci_t>(request.cells[1].pci + 1);
+
+  async_task<f1ap_ntn_access_calendar_result>         procedure =
+      du_mng->handle_ntn_access_calendar_update_request(request);
+  lazy_task_launcher<f1ap_ntn_access_calendar_result> task(procedure);
+
+  ASSERT_TRUE(task.ready());
+  const f1ap_ntn_access_calendar_result response = task.get();
+  EXPECT_EQ(response.status, f1ap_ntn_access_calendar_result_status::rejected);
+  EXPECT_EQ(response.reject_reason, "identity_mismatch");
+  EXPECT_FALSE(dependencies.mac.last_ntn_access_calendar_update.has_value());
+}
+
+TEST_F(du_manager_ntn_access_calendar_test, when_cell_index_is_unknown_then_prepare_is_rejected_without_mac_mutation)
+{
+  f1ap_ntn_access_calendar_update request = make_ntn_calendar_prepare(cell_cfgs);
+  request.cells[1].du_cell_index = to_du_cell_index(2);
+
+  async_task<f1ap_ntn_access_calendar_result>         procedure =
+      du_mng->handle_ntn_access_calendar_update_request(request);
+  lazy_task_launcher<f1ap_ntn_access_calendar_result> task(procedure);
+
+  ASSERT_TRUE(task.ready());
+  const f1ap_ntn_access_calendar_result response = task.get();
+  EXPECT_EQ(response.status, f1ap_ntn_access_calendar_result_status::rejected);
+  EXPECT_EQ(response.reject_reason, "unknown_cell");
+  EXPECT_FALSE(dependencies.mac.last_ntn_access_calendar_update.has_value());
+}
+
+class du_manager_ntn_access_calendar_inactive_cell_test : public du_manager_procedure_tester, public ::testing::Test
+{
+public:
+  du_manager_ntn_access_calendar_inactive_cell_test() :
+    du_manager_procedure_tester(make_two_ntn_calendar_cells(), 1)
+  {
+  }
+};
+
+TEST_F(du_manager_ntn_access_calendar_inactive_cell_test,
+       when_configured_cell_is_inactive_then_prepare_is_rejected_without_mac_mutation)
+{
+  f1ap_ntn_access_calendar_update request = make_ntn_calendar_prepare(cell_cfgs);
+
+  async_task<f1ap_ntn_access_calendar_result>         procedure =
+      du_mng->handle_ntn_access_calendar_update_request(request);
+  lazy_task_launcher<f1ap_ntn_access_calendar_result> task(procedure);
+
+  ASSERT_TRUE(task.ready());
+  const f1ap_ntn_access_calendar_result response = task.get();
+  EXPECT_EQ(response.status, f1ap_ntn_access_calendar_result_status::rejected);
+  EXPECT_EQ(response.reject_reason, "cell_not_active");
+  EXPECT_FALSE(dependencies.mac.last_ntn_access_calendar_update.has_value());
+}
+
+TEST_F(du_manager_ntn_access_calendar_test, when_query_cells_mismatch_config_then_query_is_forwarded_without_validation)
+{
+  dependencies.mac.next_ntn_access_calendar_result.status = mac_ntn_access_calendar_status::preparing;
+  f1ap_ntn_access_calendar_update request = make_ntn_calendar_prepare(cell_cfgs);
+  request.operation = f1ap_ntn_access_calendar_operation::query;
+  request.cells[1].nci = nr_cell_identity::create(request.cells[1].nci.value() + 100).value();
+
+  async_task<f1ap_ntn_access_calendar_result>         procedure =
+      du_mng->handle_ntn_access_calendar_update_request(request);
+  lazy_task_launcher<f1ap_ntn_access_calendar_result> task(procedure);
+
+  ASSERT_TRUE(task.ready());
+  EXPECT_EQ(task.get().status, f1ap_ntn_access_calendar_result_status::preparing);
+  ASSERT_TRUE(dependencies.mac.last_ntn_access_calendar_update.has_value());
+  EXPECT_EQ(dependencies.mac.last_ntn_access_calendar_update->operation, mac_ntn_access_calendar_operation::query);
+}
+
+TEST_F(du_manager_ntn_access_calendar_test, when_clear_cells_mismatch_config_then_clear_is_forwarded_without_validation)
+{
+  dependencies.mac.next_ntn_access_calendar_result.status = mac_ntn_access_calendar_status::cleared;
+  f1ap_ntn_access_calendar_update request = make_ntn_calendar_prepare(cell_cfgs);
+  request.operation = f1ap_ntn_access_calendar_operation::clear;
+  request.cells[1].du_cell_index = to_du_cell_index(2);
+
+  async_task<f1ap_ntn_access_calendar_result>         procedure =
+      du_mng->handle_ntn_access_calendar_update_request(request);
+  lazy_task_launcher<f1ap_ntn_access_calendar_result> task(procedure);
+
+  ASSERT_TRUE(task.ready());
+  EXPECT_EQ(task.get().status, f1ap_ntn_access_calendar_result_status::cleared);
+  ASSERT_TRUE(dependencies.mac.last_ntn_access_calendar_update.has_value());
+  EXPECT_EQ(dependencies.mac.last_ntn_access_calendar_update->operation, mac_ntn_access_calendar_operation::clear);
+}
+
+struct ntn_access_calendar_status_test_case {
+  mac_ntn_access_calendar_status         mac_status;
+  f1ap_ntn_access_calendar_result_status f1ap_status;
+  bool                                   accepted;
+};
+
+class du_manager_ntn_access_calendar_status_test :
+  public du_manager_procedure_tester,
+  public ::testing::TestWithParam<ntn_access_calendar_status_test_case>
+{
+public:
+  du_manager_ntn_access_calendar_status_test() : du_manager_procedure_tester(make_two_ntn_calendar_cells()) {}
+};
+
+TEST_P(du_manager_ntn_access_calendar_status_test, when_mac_returns_status_then_du_maps_complete_result_to_f1)
+{
+  const ntn_access_calendar_status_test_case& test_case = GetParam();
+  dependencies.mac.next_ntn_access_calendar_result.status = test_case.mac_status;
+  dependencies.mac.next_ntn_access_calendar_result.reason = "mac_status_reason";
+  dependencies.mac.next_ntn_access_calendar_result.accepted_intents = {7, 11};
+  dependencies.mac.next_ntn_access_calendar_result.effective_activation_slot = slot_point{1, 321};
+  f1ap_ntn_access_calendar_update request = make_ntn_calendar_prepare(cell_cfgs);
+
+  async_task<f1ap_ntn_access_calendar_result>         procedure =
+      du_mng->handle_ntn_access_calendar_update_request(request);
+  lazy_task_launcher<f1ap_ntn_access_calendar_result> task(procedure);
+
+  ASSERT_TRUE(task.ready());
+  const f1ap_ntn_access_calendar_result response = task.get();
+  EXPECT_EQ(response.status, test_case.f1ap_status);
+  EXPECT_EQ(response.accepted(), test_case.accepted);
+  EXPECT_EQ(response.reject_reason, "mac_status_reason");
+  EXPECT_EQ(response.accepted_intents_per_cell[0], 7);
+  EXPECT_EQ(response.accepted_intents_per_cell[1], 11);
+  ASSERT_TRUE(response.activation_slot.has_value());
+  EXPECT_EQ(response.activation_slot.value(), slot_point(1, 321));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    all_mac_statuses,
+    du_manager_ntn_access_calendar_status_test,
+    ::testing::Values(
+        ntn_access_calendar_status_test_case{mac_ntn_access_calendar_status::preparing,
+                                             f1ap_ntn_access_calendar_result_status::preparing,
+                                             true},
+        ntn_access_calendar_status_test_case{mac_ntn_access_calendar_status::ready,
+                                             f1ap_ntn_access_calendar_result_status::ready,
+                                             true},
+        ntn_access_calendar_status_test_case{mac_ntn_access_calendar_status::applied,
+                                             f1ap_ntn_access_calendar_result_status::applied,
+                                             true},
+        ntn_access_calendar_status_test_case{mac_ntn_access_calendar_status::cleared,
+                                             f1ap_ntn_access_calendar_result_status::cleared,
+                                             true},
+        ntn_access_calendar_status_test_case{mac_ntn_access_calendar_status::rejected,
+                                             f1ap_ntn_access_calendar_result_status::rejected,
+                                             false},
+        ntn_access_calendar_status_test_case{mac_ntn_access_calendar_status::unsupported,
+                                             f1ap_ntn_access_calendar_result_status::unsupported,
+                                             false}));
 
 static du_param_config_request make_dummy_rrm_request()
 {

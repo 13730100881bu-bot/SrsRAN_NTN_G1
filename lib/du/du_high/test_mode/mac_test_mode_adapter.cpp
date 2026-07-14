@@ -544,6 +544,16 @@ mac_cell_control_information_handler& mac_test_mode_adapter::get_control_info_ha
   return *cell_info_handler[cell_index];
 }
 
+mac_ntn_rnti_lease_pool_result
+mac_test_mode_adapter::apply_ntn_rnti_lease_pool_update(const mac_ntn_rnti_lease_pool_update& request)
+{
+  if (mac_adapted == nullptr) {
+    return {false, "test_mode_mac_not_connected", {}, request.leases};
+  }
+
+  return mac_adapted->apply_ntn_rnti_lease_pool_update(request);
+}
+
 void mac_test_mode_adapter::handle_dl_buffer_state_update(const mac_dl_buffer_state_indication_message& dl_bs)
 {
   mac_dl_buffer_state_indication_message dl_bs_copy = dl_bs;

@@ -85,6 +85,19 @@ void scheduler_impl::handle_slice_reconfiguration_request(const du_cell_slice_re
   cells[req.cell_index]->handle_slice_reconfiguration_request(req);
 }
 
+ntn_access_calendar_response
+scheduler_impl::handle_ntn_access_calendar_update(const ntn_access_calendar_request& request)
+{
+  if (not cells.contains(request.cell_index)) {
+    ntn_access_calendar_response response;
+    response.reason       = ntn_access_calendar_reject_reason::cell_not_configured;
+    response.version      = request.version;
+    response.content_hash = request.content_hash;
+    return response;
+  }
+  return cells[request.cell_index]->handle_ntn_access_calendar_update(request);
+}
+
 void scheduler_impl::handle_si_update_request(const si_scheduling_update_request& req)
 {
   srsran_assert(cells.contains(req.cell_index), "cell={} does not exist", fmt::underlying(req.cell_index));

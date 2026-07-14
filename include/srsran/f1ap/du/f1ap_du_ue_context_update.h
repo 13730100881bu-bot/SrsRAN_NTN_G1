@@ -23,6 +23,7 @@
 #pragma once
 
 #include "srsran/adt/byte_buffer.h"
+#include "srsran/f1ap/ntn_ul_slot_resource_request.h"
 #include "srsran/f1ap/ue_context_management_configs.h"
 #include "srsran/ran/du_types.h"
 #include "srsran/ran/nr_cgi.h"
@@ -37,6 +38,7 @@ namespace srs_du {
 struct f1ap_ue_context_creation_request {
   du_ue_index_t   ue_index;
   du_cell_index_t pcell_index;
+  std::optional<rnti_t> requested_c_rnti;
 };
 
 /// \brief Response from the DU back to the F1AP with the created UE index.
@@ -89,6 +91,8 @@ struct f1ap_ue_context_update_request {
   byte_buffer ue_cap_rat_list;
   /// Indiction that the CU-CP has received the RRC reconfiguration complete.
   bool rrc_recfg_complete_ind;
+  /// Optional CU-CP NTN-driven UE-dedicated SR/SRS slot resource request.
+  std::optional<f1ap_ntn_ul_slot_resource_request> ntn_ul_slot_request;
 };
 
 /// \brief Response from DU manager to DU F1AP with the result of the UE context update.
@@ -106,6 +110,7 @@ struct f1ap_ue_context_update_response {
   std::vector<uint8_t> serving_cell_mo_encoded_in_cgc_list;
   byte_buffer          cell_group_cfg;
   byte_buffer          meas_gap_cfg;
+  std::optional<f1ap_ntn_ul_slot_resource_result> ntn_ul_slot_result;
   bool                 full_config_present = false;
 };
 

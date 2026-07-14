@@ -223,12 +223,12 @@ public:
 
   bool enqueue_si_pdu_updates(const mac_cell_sys_info_pdu_update& pdu_update_req) override
   {
-    if (pdu_update_req.si_messages.empty()) {
+    if (!pdu_update_req.clear && pdu_update_req.si_messages.empty()) {
       logger.warning("Discarding dynamic SI PDU update. Cause: No SI messages were provided");
       return false;
     }
 
-    if (pdu_update_req.si_messages.size() > 1 &&
+    if (!pdu_update_req.clear && pdu_update_req.si_messages.size() > 1 &&
         (!pdu_update_req.si_slot_period.has_value() || pdu_update_req.si_slot_period.value() == 0)) {
       logger.warning("Discarding dynamic SI PDU update. Cause: si_slot_period is required for multi-PDU updates");
       return false;
@@ -239,12 +239,15 @@ public:
     update.sib_idx        = pdu_update_req.sib_idx;
     update.start_slot     = pdu_update_req.slot;
     update.si_slot_period = pdu_update_req.si_slot_period;
+    update.clear          = pdu_update_req.clear;
     update.pdus.reserve(pdu_update_req.si_messages.size());
 
-    for (const byte_buffer& si_msg : pdu_update_req.si_messages) {
-      auto pdu = dynamic_si_pdu{make_linear_buffer(si_msg), static_cast<unsigned>(si_msg.length())};
-      retained_pdus.push_back(pdu.buffer);
-      update.pdus.push_back(std::move(pdu));
+    if (!pdu_update_req.clear) {
+      for (const byte_buffer& si_msg : pdu_update_req.si_messages) {
+        auto pdu = dynamic_si_pdu{make_linear_buffer(si_msg), static_cast<unsigned>(si_msg.length()), pdu_update_req.sib_idx};
+        retained_pdus.push_back(pdu.buffer);
+        update.pdus.push_back(std::move(pdu));
+      }
     }
 
     while (retained_pdus.size() > MAX_RETAINED_DYNAMIC_SI_PDUS) {
@@ -258,11 +261,12 @@ public:
     }
     pending_snapshot.write_and_commit(control_snapshot);
 
-    logger.debug("Enqueued dynamic SI PDU update si_msg={} sib={} slot={} nof_pdus={}",
+    logger.debug("Enqueued dynamic SI PDU update si_msg={} sib={} slot={} nof_pdus={} clear={}",
                  pdu_update_req.si_msg_idx,
                  pdu_update_req.sib_idx,
                  pdu_update_req.slot,
-                 pdu_update_req.si_messages.size());
+                 pdu_update_req.si_messages.size(),
+                 pdu_update_req.clear);
 
     return true;
   }
@@ -289,6 +293,13 @@ public:
       return span<const uint8_t>{zeros_payload}.first(tbs);
     }
 
+    logger.debug("Encoding dynamic SI-message {} sib={} slot={} length={} tbs={}",
+                 si_info.si_msg_index.value(),
+                 selected->sib_idx,
+                 sl_tx,
+                 selected->length,
+                 tbs);
+
     return span<const uint8_t>(selected->buffer->data(), tbs);
   }
 
@@ -298,6 +309,7 @@ private:
   struct dynamic_si_pdu {
     bcch_dl_sch_buffer buffer;
     unsigned           length = 0;
+    uint8_t            sib_idx = 0;
   };
 
   struct dynamic_si_pdu_update {
@@ -305,6 +317,7 @@ private:
     uint8_t                          sib_idx    = 0;
     slot_point                       start_slot;
     std::optional<unsigned>          si_slot_period;
+    bool                             clear = false;
     std::vector<dynamic_si_pdu>      pdus;
   };
 
@@ -319,13 +332,23 @@ private:
     const dynamic_si_pdu* selected = nullptr;
 
     for (const dynamic_si_pdu_update& update : snapshot.updates) {
-      if (update.si_msg_idx != si_msg_idx || update.pdus.empty() || sl_tx < update.start_slot) {
+      if (update.si_msg_idx != si_msg_idx) {
+        continue;
+      }
+      if (update.start_slot.valid() && sl_tx < update.start_slot) {
+        continue;
+      }
+      if (update.clear) {
+        selected = nullptr;
+        continue;
+      }
+      if (update.pdus.empty()) {
         continue;
       }
 
       unsigned pdu_idx = 0;
       if (update.pdus.size() > 1) {
-        if (!update.si_slot_period.has_value()) {
+        if (!update.si_slot_period.has_value() || !update.start_slot.valid()) {
           continue;
         }
 

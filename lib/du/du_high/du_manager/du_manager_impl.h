@@ -62,6 +62,14 @@ public:
   async_task<void> handle_f1_reset_request(const std::vector<du_ue_index_t>& ues_to_reset) override;
   async_task<gnbcu_config_update_response>
   handle_cu_context_update_request(const gnbcu_config_update_request& request) override;
+  async_task<f1ap_ntn_rnti_lease_pool_result>
+  handle_ntn_rnti_lease_pool_update_request(const f1ap_ntn_rnti_lease_pool_update& request) override;
+  async_task<f1ap_ntn_resource_audit_result>
+  handle_ntn_resource_audit_request(const f1ap_ntn_resource_audit_request& request) override;
+  async_task<f1ap_ntn_sib19_broadcast_result>
+  handle_ntn_sib19_broadcast_update_request(const f1ap_ntn_sib19_broadcast_update& request) override;
+  async_task<f1ap_ntn_access_calendar_result>
+  handle_ntn_access_calendar_update_request(const f1ap_ntn_access_calendar_update& request) override;
 
   async_task<f1ap_ue_context_creation_response>
   handle_ue_context_creation(const f1ap_ue_context_creation_request& request) override;

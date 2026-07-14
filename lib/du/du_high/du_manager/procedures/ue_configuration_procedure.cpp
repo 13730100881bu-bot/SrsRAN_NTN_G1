@@ -298,6 +298,7 @@ f1ap_ue_context_update_response ue_configuration_procedure::make_ue_config_respo
 {
   f1ap_ue_context_update_response resp;
   resp.result = true;
+  resp.ntn_ul_slot_result = ue_res_cfg_resp.ntn_ul_slot_result;
 
   // > Handle DRBs that were setup or failed to be setup.
   for (const f1ap_drb_to_setup& drb_req : request.drbs_to_setup) {
@@ -479,7 +480,7 @@ bool ue_configuration_procedure::changed_detected() const
 {
   return !request.drbs_to_setup.empty() || !request.drbs_to_mod.empty() || !request.srbs_to_setup.empty() ||
          !request.drbs_to_rem.empty() || !request.scells_to_setup.empty() || !request.scells_to_rem.empty() ||
-         !request.ho_prep_info.empty() || request.full_config_required;
+         !request.ho_prep_info.empty() || request.full_config_required || request.ntn_ul_slot_request.has_value();
 }
 
 void ue_configuration_procedure::handle_rrc_reconfiguration_complete_ind()

@@ -36,6 +36,7 @@ struct du_ue_resource_update_response {
   error_type<std::string>        procedure_error = {};
   std::vector<drb_id_t>          failed_drbs;
   std::vector<serv_cell_index_t> failed_scells;
+  std::optional<f1ap_ntn_ul_slot_resource_result> ntn_ul_slot_result;
 
   bool failed() const { return not procedure_error.has_value(); }
 };
@@ -124,7 +125,11 @@ public:
   /// \brief Create a new UE resource allocation config object.
   /// \return UE Resource configuration if correctly created. Unexpected if no space in the manager was found.
   virtual expected<ue_ran_resource_configurator, std::string>
-  create_ue_resource_configurator(du_ue_index_t ue_index, du_cell_index_t pcell_index, bool has_tc_rnti) = 0;
+  create_ue_resource_configurator(
+      du_ue_index_t                                    ue_index,
+      du_cell_index_t                                  pcell_index,
+      bool                                             has_tc_rnti,
+      std::optional<ntn_ul_slot_resource_request>      ntn_ul_slot_request = std::nullopt) = 0;
 };
 
 } // namespace srs_du

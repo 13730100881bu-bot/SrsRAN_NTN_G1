@@ -114,6 +114,30 @@ public:
     return du_mng->handle_cu_context_update_request(request);
   }
 
+  async_task<f1ap_ntn_rnti_lease_pool_result>
+  request_ntn_rnti_lease_pool_update(const f1ap_ntn_rnti_lease_pool_update& request) override
+  {
+    return du_mng->handle_ntn_rnti_lease_pool_update_request(request);
+  }
+
+  async_task<f1ap_ntn_resource_audit_result>
+  request_ntn_resource_audit(const f1ap_ntn_resource_audit_request& request) override
+  {
+    return du_mng->handle_ntn_resource_audit_request(request);
+  }
+
+  async_task<f1ap_ntn_sib19_broadcast_result>
+  request_ntn_sib19_broadcast_update(const f1ap_ntn_sib19_broadcast_update& request) override
+  {
+    return du_mng->handle_ntn_sib19_broadcast_update_request(request);
+  }
+
+  async_task<f1ap_ntn_access_calendar_result>
+  request_ntn_access_calendar_update(const f1ap_ntn_access_calendar_update& request) override
+  {
+    return du_mng->handle_ntn_access_calendar_update_request(request);
+  }
+
   void notify_reestablishment_of_old_ue(du_ue_index_t new_ue_index, du_ue_index_t old_ue_index) override
   {
     du_mng->handle_ue_reestablishment(new_ue_index, old_ue_index);

@@ -19,6 +19,7 @@
 #
 
 add_executable(common_scheduler_test
+        ntn_access_calendar_gate_test.cpp
         ssb_scheduler_test.cpp
         sib1_scheduler_test.cpp
         si_scheduler_test.cpp

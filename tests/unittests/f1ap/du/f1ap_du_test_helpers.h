@@ -77,6 +77,14 @@ public:
   f1ap_ue_context_creation_response               next_ue_context_creation_response;
   std::optional<f1ap_ue_context_update_request>   last_ue_context_update_req;
   f1ap_ue_context_update_response                 next_ue_context_update_response;
+  std::optional<f1ap_ntn_rnti_lease_pool_update>  last_ntn_rnti_lease_pool_update;
+  f1ap_ntn_rnti_lease_pool_result                 next_ntn_rnti_lease_pool_result;
+  std::optional<f1ap_ntn_resource_audit_request>   last_ntn_resource_audit_request;
+  f1ap_ntn_resource_audit_result                   next_ntn_resource_audit_result;
+  std::optional<f1ap_ntn_sib19_broadcast_update>   last_ntn_sib19_broadcast_update;
+  f1ap_ntn_sib19_broadcast_result                  next_ntn_sib19_broadcast_result;
+  std::optional<f1ap_ntn_access_calendar_update>   last_ntn_access_calendar_update;
+  f1ap_ntn_access_calendar_result                  next_ntn_access_calendar_result;
   std::optional<f1ap_ue_delete_request>           last_ue_delete_req;
   std::optional<du_ue_index_t>                    last_ue_cfg_applied;
   std::optional<std::vector<du_ue_index_t>>       last_ues_to_reset;
@@ -104,6 +112,34 @@ public:
   {
     last_cu_upd_req = request;
     return launch_no_op_task(next_cu_upd_resp);
+  }
+
+  async_task<f1ap_ntn_rnti_lease_pool_result>
+  request_ntn_rnti_lease_pool_update(const f1ap_ntn_rnti_lease_pool_update& request) override
+  {
+    last_ntn_rnti_lease_pool_update = request;
+    return launch_no_op_task(next_ntn_rnti_lease_pool_result);
+  }
+
+  async_task<f1ap_ntn_resource_audit_result>
+  request_ntn_resource_audit(const f1ap_ntn_resource_audit_request& request) override
+  {
+    last_ntn_resource_audit_request = request;
+    return launch_no_op_task(next_ntn_resource_audit_result);
+  }
+
+  async_task<f1ap_ntn_sib19_broadcast_result>
+  request_ntn_sib19_broadcast_update(const f1ap_ntn_sib19_broadcast_update& request) override
+  {
+    last_ntn_sib19_broadcast_update = request;
+    return launch_no_op_task(next_ntn_sib19_broadcast_result);
+  }
+
+  async_task<f1ap_ntn_access_calendar_result>
+  request_ntn_access_calendar_update(const f1ap_ntn_access_calendar_update& request) override
+  {
+    last_ntn_access_calendar_update = request;
+    return launch_no_op_task(next_ntn_access_calendar_result);
   }
 
   du_ue_index_t find_free_ue_index() override { return next_ue_creation_req.ue_index; }

@@ -133,7 +133,7 @@ TEST_P(slot_time_point_mapper_test, get_last_mapping_only_sub_frame_stored)
 {
   slot_point      full_subframe_slot       = {numerology, 0, 0};
   slot_time_point full_subframe_time_point = std::chrono::system_clock::now();
-  const auto      slot_dur                 = std::chrono::microseconds{1000U >> numerology};
+  const auto      slot_dur                 = std::chrono::nanoseconds{1000000U >> numerology};
 
   slot_point      slot;
   slot_time_point time_point;
@@ -171,7 +171,7 @@ TEST_P(slot_time_point_mapper_test, get_slot_time_point_from_slot_point)
   srslog::basic_logger& logger            = srslog::fetch_basic_logger("TEST");
   const slot_point      report_slot       = {numerology, 0, 0};
   const slot_time_point report_time_point = std::chrono::system_clock::now();
-  const auto            slot_dur          = std::chrono::microseconds{1000U >> numerology};
+  const auto            slot_dur          = std::chrono::nanoseconds{1000000U >> numerology};
 
   ASSERT_FALSE(manager.get_last_mapping().has_value());
   logger.info(
@@ -204,7 +204,7 @@ TEST_P(slot_time_point_mapper_test, get_slot_point_from_time_point)
   srslog::basic_logger& logger            = srslog::fetch_basic_logger("TEST");
   const slot_point      report_slot       = {numerology, 0, 0};
   const slot_time_point report_time_point = std::chrono::system_clock::now();
-  const auto            slot_dur          = std::chrono::microseconds{1000U >> numerology};
+  const auto            slot_dur          = std::chrono::nanoseconds{1000000U >> numerology};
 
   ASSERT_FALSE(manager.get_last_mapping().has_value());
   logger.info(
@@ -230,6 +230,25 @@ TEST_P(slot_time_point_mapper_test, get_slot_point_from_time_point)
                 time_difference.count());
     ASSERT_EQ(slot.value(), expected_slot_point);
   }
+}
+
+TEST(mac_cell_time_mapper, numerology_four_preserves_exact_multi_second_mapping)
+{
+  constexpr unsigned       numerology = 4;
+  mac_cell_time_mapper_impl manager{numerology};
+  const slot_point          reference_slot{numerology, 0, 0};
+  const auto                reference_time = std::chrono::system_clock::now();
+  const auto                activation_time = reference_time + std::chrono::seconds{4};
+
+  manager.handle_slot_indication({reference_slot, reference_time});
+
+  const std::optional<slot_point> activation_slot = manager.get_slot_point(activation_time);
+  ASSERT_TRUE(activation_slot.has_value());
+  EXPECT_EQ(activation_slot.value(), reference_slot + 64000);
+
+  const auto mapped_time = manager.get_time_point(activation_slot.value());
+  ASSERT_TRUE(mapped_time.has_value());
+  EXPECT_EQ(mapped_time.value(), activation_time);
 }
 
 class atomic_sfn_time_mapper_test : public ::testing::TestWithParam<unsigned>

@@ -31,6 +31,7 @@
 #include "srsran/f1ap/common/interface_management.h"
 #include "srsran/f1ap/f1ap_message.h"
 #include "srsran/f1ap/f1ap_ue_id_types.h"
+#include "srsran/f1ap/ntn_ul_slot_resource_request.h"
 #include "srsran/ran/gnb_du_id.h"
 #include "srsran/ran/nr_band.h"
 #include "srsran/ran/nr_cgi.h"
@@ -41,6 +42,7 @@
 #include "srsran/ran/rnti.h"
 #include "srsran/ran/subcarrier_spacing.h"
 #include "srsran/ran/tac.h"
+#include <optional>
 
 namespace srsran {
 
@@ -167,7 +169,8 @@ generate_ue_context_modification_response(gnb_du_ue_f1ap_id_t          du_ue_id,
                                           rnti_t                       crnti               = to_rnti(0x4601),
                                           const std::vector<drb_id_t>& drbs_setup_mod_list = {drb_id_t::drb1},
                                           const std::vector<drb_id_t>& drbs_modified_list  = {},
-                                          byte_buffer cell_group_config = test_helpers::create_cell_group_config());
+                                          byte_buffer cell_group_config = test_helpers::create_cell_group_config(),
+                                          std::optional<f1ap_ntn_ul_slot_resource_result> ntn_slot_result = std::nullopt);
 
 /// \brief Generates dummy F1AP UE CONTEXT MODIFICATION FAILURE message, sent by the DU to the CU, as per TS 38.473
 /// section 8.3.4.3.
@@ -186,7 +189,8 @@ f1ap_message generate_init_ul_rrc_message_transfer(gnb_du_ue_f1ap_id_t du_ue_id,
                                                    rnti_t              crnti          = to_rnti(0x4601),
                                                    plmn_identity       plmn_id        = plmn_identity::test_value(),
                                                    byte_buffer         cell_group_cfg = {},
-                                                   byte_buffer         rrc_container  = {});
+                                                   byte_buffer         rrc_container  = {},
+                                                   std::optional<nr_cell_identity> serving_nci = std::nullopt);
 
 /// \brief Generates dummy F1AP DL RRC TRANSFER message with provided RRC container, sent by the CU to the DU, as per
 /// TS 38.473 section 8.4.2.1.
@@ -260,7 +264,9 @@ f1ap_message generate_positioning_measurement_response(lmf_meas_id_t            
 
 /// \brief Generates dummy F1AP POSITIONING MEASUREMENT FAILURE message, sent by the DU to the CU, as per
 /// TS 38.473 section 8.13.3.3.
-f1ap_message generate_positioning_measurement_failure(lmf_meas_id_t lmf_meas_id, ran_meas_id_t ran_meas_id);
+f1ap_message generate_positioning_measurement_failure(lmf_meas_id_t lmf_meas_id,
+                                                      ran_meas_id_t ran_meas_id,
+                                                      unsigned      transaction_id = 1);
 
 /// \brief Generates dummy F1AP TRP INFORMATION RESPONSE message, sent by the DU to the CU, as per
 /// TS 38.473 section 8.13.8.2.

@@ -33,6 +33,8 @@
 #include "srsran/ran/s_nssai.h"
 #include "srsran/ran/subcarrier_spacing.h"
 #include "srsran/ran/tac.h"
+#include "srsran/f1ap/ntn_access_calendar.h"
+#include "srsran/f1ap/ntn_rnti_lease_pool.h"
 #include "srsran/support/async/async_task.h"
 #include <optional>
 
@@ -172,6 +174,22 @@ public:
   /// \brief Notify the DU of an update requested initiated by the CU via F1AP, as per TS 38.473, Section 8.2.5.
   virtual async_task<gnbcu_config_update_response>
   request_cu_context_update(const gnbcu_config_update_request& request) = 0;
+
+  /// \brief Notify the DU of an NTN RNTI lease-pool update requested by CU-CP via F1AP resource coordination.
+  virtual async_task<f1ap_ntn_rnti_lease_pool_result>
+  request_ntn_rnti_lease_pool_update(const f1ap_ntn_rnti_lease_pool_update& request) = 0;
+
+  /// \brief Query the DU for its currently applied NTN resource state via F1AP resource coordination.
+  virtual async_task<f1ap_ntn_resource_audit_result>
+  request_ntn_resource_audit(const f1ap_ntn_resource_audit_request& request) = 0;
+
+  /// \brief Notify the DU of an NTN SIB19 broadcast payload update requested by CU-CP.
+  virtual async_task<f1ap_ntn_sib19_broadcast_result>
+  request_ntn_sib19_broadcast_update(const f1ap_ntn_sib19_broadcast_update& request) = 0;
+
+  /// \brief Forward a validated NTN access-calendar intent to the DU application boundary.
+  virtual async_task<f1ap_ntn_access_calendar_result>
+  request_ntn_access_calendar_update(const f1ap_ntn_access_calendar_update& request) = 0;
 };
 
 } // namespace srs_du

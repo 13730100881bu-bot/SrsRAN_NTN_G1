@@ -609,7 +609,9 @@ srsran::test_helpers::generate_ue_context_modification_response(gnb_du_ue_f1ap_i
                                                                 rnti_t                       crnti,
                                                                 const std::vector<drb_id_t>& drbs_setup_mod_list,
                                                                 const std::vector<drb_id_t>& drbs_modified_list,
-                                                                byte_buffer                  cell_group_config)
+                                                                byte_buffer                  cell_group_config,
+                                                                std::optional<f1ap_ntn_ul_slot_resource_result>
+                                                                    ntn_slot_result)
 {
   f1ap_message pdu = {};
 
@@ -640,6 +642,12 @@ srsran::test_helpers::generate_ue_context_modification_response(gnb_du_ue_f1ap_i
   if (!cell_group_config.empty()) {
     ue_context_mod_resp->du_to_cu_rrc_info_present        = true;
     ue_context_mod_resp->du_to_cu_rrc_info.cell_group_cfg = cell_group_config.copy();
+  }
+
+  if (ntn_slot_result.has_value()) {
+    ue_context_mod_resp->res_coordination_transfer_container_present = true;
+    ue_context_mod_resp->res_coordination_transfer_container =
+        encode_f1ap_ntn_ul_slot_resource_result(*ntn_slot_result);
   }
 
   return pdu;
@@ -678,7 +686,8 @@ f1ap_message srsran::test_helpers::generate_init_ul_rrc_message_transfer(gnb_du_
                                                                          rnti_t              crnti,
                                                                          plmn_identity       plmn_id,
                                                                          byte_buffer         cell_group_cfg,
-                                                                         byte_buffer         rrc_container)
+                                                                         byte_buffer         rrc_container,
+                                                                         std::optional<nr_cell_identity> serving_nci)
 {
   f1ap_message init_ul_rrc_msg;
 
@@ -688,7 +697,7 @@ f1ap_message srsran::test_helpers::generate_init_ul_rrc_message_transfer(gnb_du_
   init_ul_rrc_msg_transfer_s& init_ul_rrc = init_ul_rrc_msg.pdu.init_msg().value.init_ul_rrc_msg_transfer();
   init_ul_rrc->gnb_du_ue_f1ap_id          = (unsigned)du_ue_id;
 
-  nr_cell_identity nci = nr_cell_identity::create(gnb_id_t{411, 22}, 0).value();
+  nr_cell_identity nci = serving_nci.value_or(nr_cell_identity::create(gnb_id_t{411, 22}, 0).value());
   init_ul_rrc->nr_cgi.nr_cell_id.from_number(nci.value());
   init_ul_rrc->nr_cgi.plmn_id = plmn_id.to_bytes();
   init_ul_rrc->c_rnti         = to_value(crnti);
@@ -823,13 +832,35 @@ f1ap_message srsran::test_helpers::generate_positioning_measurement_response(lmf
                                                                              const std::vector<trp_id_t>& trp_ids,
                                                                              unsigned transaction_id)
 {
-  return {};
+  f1ap_message response;
+  response.pdu.set_successful_outcome().load_info_obj(ASN1_F1AP_ID_POSITIONING_MEAS_EXCHANGE);
+  auto& asn1_response          = response.pdu.successful_outcome().value.positioning_meas_resp();
+  asn1_response->transaction_id = transaction_id;
+  asn1_response->lmf_meas_id    = lmf_meas_id_to_uint(lmf_meas_id);
+  asn1_response->ran_meas_id    = ran_meas_id_to_uint(ran_meas_id);
+  if (!trp_ids.empty()) {
+    asn1_response->pos_meas_result_list_present = true;
+    for (trp_id_t trp_id : trp_ids) {
+      asn1::f1ap::pos_meas_result_list_item_s item;
+      item.trp_id = trp_id_to_uint(trp_id);
+      asn1_response->pos_meas_result_list.push_back(item);
+    }
+  }
+  return response;
 }
 
 f1ap_message srsran::test_helpers::generate_positioning_measurement_failure(lmf_meas_id_t lmf_meas_id,
-                                                                            ran_meas_id_t ran_meas_id)
+                                                                            ran_meas_id_t ran_meas_id,
+                                                                            unsigned      transaction_id)
 {
-  return {};
+  f1ap_message failure;
+  failure.pdu.set_unsuccessful_outcome().load_info_obj(ASN1_F1AP_ID_POSITIONING_MEAS_EXCHANGE);
+  auto& asn1_failure          = failure.pdu.unsuccessful_outcome().value.positioning_meas_fail();
+  asn1_failure->transaction_id = transaction_id;
+  asn1_failure->lmf_meas_id    = lmf_meas_id_to_uint(lmf_meas_id);
+  asn1_failure->ran_meas_id    = ran_meas_id_to_uint(ran_meas_id);
+  asn1_failure->cause.set_misc().value = asn1::f1ap::cause_misc_opts::unspecified;
+  return failure;
 }
 
 f1ap_message srsran::test_helpers::generate_trp_information_response(const trp_id_t& trp_id)
@@ -845,25 +876,47 @@ f1ap_message srsran::test_helpers::generate_trp_information_failure()
 f1ap_message srsran::test_helpers::generate_positioning_information_response(gnb_du_ue_f1ap_id_t du_ue_id,
                                                                              gnb_cu_ue_f1ap_id_t cu_ue_id)
 {
-  return {};
+  f1ap_message response;
+  response.pdu.set_successful_outcome().load_info_obj(ASN1_F1AP_ID_POSITIONING_INFO_EXCHANGE);
+  auto& asn1_response = response.pdu.successful_outcome().value.positioning_info_resp();
+  asn1_response->gnb_du_ue_f1ap_id = gnb_du_ue_f1ap_id_to_uint(du_ue_id);
+  asn1_response->gnb_cu_ue_f1ap_id = gnb_cu_ue_f1ap_id_to_uint(cu_ue_id);
+  return response;
 }
 
 f1ap_message srsran::test_helpers::generate_positioning_information_failure(gnb_du_ue_f1ap_id_t du_ue_id,
                                                                             gnb_cu_ue_f1ap_id_t cu_ue_id)
 {
-  return {};
+  f1ap_message failure;
+  failure.pdu.set_unsuccessful_outcome().load_info_obj(ASN1_F1AP_ID_POSITIONING_INFO_EXCHANGE);
+  auto& asn1_failure = failure.pdu.unsuccessful_outcome().value.positioning_info_fail();
+  asn1_failure->gnb_du_ue_f1ap_id = gnb_du_ue_f1ap_id_to_uint(du_ue_id);
+  asn1_failure->gnb_cu_ue_f1ap_id = gnb_cu_ue_f1ap_id_to_uint(cu_ue_id);
+  asn1_failure->cause.set_misc().value = asn1::f1ap::cause_misc_opts::unspecified;
+  return failure;
 }
 
 f1ap_message srsran::test_helpers::generate_positioning_activation_response(gnb_du_ue_f1ap_id_t du_ue_id,
                                                                             gnb_cu_ue_f1ap_id_t cu_ue_id)
 {
-  return {};
+  f1ap_message response;
+  response.pdu.set_successful_outcome().load_info_obj(ASN1_F1AP_ID_POSITIONING_ACTIVATION);
+  auto& asn1_response = response.pdu.successful_outcome().value.positioning_activation_resp();
+  asn1_response->gnb_du_ue_f1ap_id = gnb_du_ue_f1ap_id_to_uint(du_ue_id);
+  asn1_response->gnb_cu_ue_f1ap_id = gnb_cu_ue_f1ap_id_to_uint(cu_ue_id);
+  return response;
 }
 
 f1ap_message srsran::test_helpers::generate_positioning_activation_failure(gnb_du_ue_f1ap_id_t du_ue_id,
                                                                            gnb_cu_ue_f1ap_id_t cu_ue_id)
 {
-  return {};
+  f1ap_message failure;
+  failure.pdu.set_unsuccessful_outcome().load_info_obj(ASN1_F1AP_ID_POSITIONING_ACTIVATION);
+  auto& asn1_failure = failure.pdu.unsuccessful_outcome().value.positioning_activation_fail();
+  asn1_failure->gnb_du_ue_f1ap_id = gnb_du_ue_f1ap_id_to_uint(du_ue_id);
+  asn1_failure->gnb_cu_ue_f1ap_id = gnb_cu_ue_f1ap_id_to_uint(cu_ue_id);
+  asn1_failure->cause.set_misc().value = asn1::f1ap::cause_misc_opts::unspecified;
+  return failure;
 }
 
 #endif // SRSRAN_HAS_ENTERPRISE
