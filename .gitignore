@@ -18,6 +18,7 @@
 
 # Local validation workspaces and generated harness/runtime evidence.
 /outputs/
+/ai_harness/audit/
 /ai_harness/results/
 /run_artifacts/srsran_runtime_capture/split/log_exports/
 /run_artifacts/srsran_runtime_capture/cucp_ue_flow_summary_latest.md
