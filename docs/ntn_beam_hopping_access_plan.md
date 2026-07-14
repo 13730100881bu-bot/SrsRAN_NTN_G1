@@ -1,6 +1,6 @@
 # NTN 全球“跳波束”与初始接入设计
 
-> 跳波束是星载再生 gNB 按版本化日历，在获授权的全球地固 L1 之间周期切换模拟波束：模拟波束承载 SSB/PBCH、SIB1/SIB19、Paging 和初始接入窗口，数字波束按业务需求照射 L2。本轮只修改文档与 Web seed，不修改 C++、CU-CP、F1AP、DU、MAC、PHY、RU、API、协议容器或运行配置。
+> 跳波束是星载再生 gNB 按版本化日历，在获授权的全球地固 L1 之间周期切换模拟波束：模拟波束承载 SSB/PBCH、SIB1/SIB19、Paging 和初始接入窗口，数字波束按业务需求照射 L2。当前代码已实现 CU-CP 版本化双小区计划、完整 inventory、日历 dry-run、原子激活，以及默认关闭的 DU/MAC SSB/PRACH 软件 gate；真实 `position_id`/`port_id` 指向和 PHY/RU/RF 执行仍未实现。
 
 ## 1. 一句话定义
 
@@ -93,10 +93,10 @@ sequenceDiagram
     PHY->>DU: preamble index、TA估计和质量
     par 低时延关键路径
         DU->>UE: 使用预下发lease发送RAR
-    and CU-CP统一接入裁决
-        DU->>F1: structured initial access indication
-        F1->>CU: position/卫星/NCI/PCI/RO/preamble/TA/RNTI/质量
-        CU-->>DU: accept / quarantine / reject policy
+    and CU-CP活动计划审计（sideband仍为proposed）
+        DU-->>F1: proposed structured initial access metadata
+        F1-->>CU: proposed position/version/hash/RO/port evidence
+        CU-->>CU: accept / reject / audit_only
     end
     UE->>DU: Msg3 / RRCSetupRequest
     DU->>CU: Initial UL RRC Message
@@ -111,10 +111,10 @@ CU-CP 统一处理 PRACH 信息，不代表把采样、相关检测或 RAR 的�
 |---|---|
 | 卫星/RU/PHY | 对准 G 系列 L1、接收 PRACH、相关检测，输出 preamble index、TA 和质量估计 |
 | DU/MAC | 处理同一 RO 冲突、从 CU-CP 预下发 lease 取临时 RNTI、按时发送 RAR |
-| F1AP | 上报结构化接入事件，传递策略和 applied feedback |
+| F1AP | 当前传递标准 Initial UL 与既有 applied feedback；完整结构化接入事件仍是 proposed private sideband |
 | CU-CP | 管理日历、接入资格、RNTI lease、速率限制、异常审计和最终 RRC 接入 |
 
-CU-CP 应看到 `satellite_id`、`nci/pci`、全球 L1 `position_id`、`schedule_version`、`RO`、`preamble`、TA/质量和 RNTI lease；收到过期版本或 owner 不匹配事件时拒绝或隔离，而不是接管 PHY 检测。
+完整 sideband 方案应让 CU-CP 看到 `satellite_id`、`nci/pci`、全球 L1 `position_id`、catalog/schedule version、source/calendar hash、实际 RO/端口、preamble、TA/质量和 RNTI lease。当前标准 Initial UL 只提供 CGI/C-RNTI/RRC container，不能证明 `position_id` 或 PRACH RO。CUCP-037 已提供私有纯审计器，可对完整测试输入返回 `accept/reject/audit_only`，但未接入生产 F1AP，也不使用旧 beam-to-NCI 路径猜测 L1。
 
 ## 7. PRACH 参数起点
 
@@ -168,6 +168,9 @@ L2 只有存在 PDU/DRB demand 且 applied 后才调度；`control_only` UE 不�
 | 全球目录一致性 | 已有测试覆盖 | `catalog:check` 与 focused 目录测试 `6/6` 通过；`exactRegularSphericalHexagons=false`、`exactCoastlineClipping=false` |
 | 128/256 离散日历硬保证 | 已有测试覆盖 | 最差 80 ms 日历 168 次机会、配置取 128/小区；不是 PHY/RU/RF 证明 |
 | 全球 coarse audit CLI 与报告 | 已有测试覆盖 | [`audit-global-constellation.mjs`](../web_replicas/ntn_beam_planner/scripts/audit-global-constellation.mjs) focused tests [`2/2`](../web_replicas/ntn_beam_planner/tests/global-constellation-audit-cli.test.mjs)；F=0 失败，F=1 仍非连续证明 |
+| CU-CP 双小区版本化计划与日历 dry-run | 已有测试覆盖 | 保留完整 inventory、确定性划分、80/640 ms 审计、257 L1 显式 overflow、activation epoch 原子切换；不是全球覆盖证明 |
+| DU/MAC SSB/PRACH 软件 gate | 已有测试覆盖 | `applied` 仅表示匹配 version/hash/intents 的软件 snapshot；不含 position/port 或 RF evidence |
+| Initial UL active-plan audit | 已有测试覆盖 | 私有纯函数验证完整 sideband 测试输入；生产 F1AP transport、可信 provenance 与 RF evidence 均未实现 |
 | 轨道精确审计、PCI 冲突图和实际跳波束 | 规划中 | `selectedScenario=null`，7 天事件审计 `not_run` |
 
 需要重点观测：
@@ -192,4 +195,4 @@ L2 只有存在 PDU/DRB demand 且 applied 后才调度；`control_only` UE 不�
 4. 运行至少 7 天事件驱动、gateway 和 N-1 审计。
 5. 生成全球 PCI 冲突图；报告经评审后才填写 `selectedScenario`。
 
-`80/640 ms`、20 ms occasion、2.5 ms sub-visit、`16/64`、`n10` 和 `48/8/8` 都是规划参数。128/256 是当前 Web 离散日历的硬保证，但当前 srsRAN 运行代码尚未实现全球逐 L1 ownership、两个长期星载 NCI/PCI、版本化波位表或这套端口日历，运行态能力统一标为 `规划中`。
+`80/640 ms`、20 ms occasion、2.5 ms sub-visit、`16/64`、`n10` 和 `48/8/8` 都是规划参数。128/256 是当前离散日历模型和 CU-CP 执行包络，不是协议常量。srsRAN 当前已实现管理中心版本化输入、两个稳定星载 NCI/PCI、L1 分配与软件日历 gate；尚未实现全球连续覆盖证明、可信 Initial UL position sideband、模拟端口到硬件句柄映射或真实 PHY/RU/RF 跳变，因此这些能力仍不能标为运行态 RF 证据。

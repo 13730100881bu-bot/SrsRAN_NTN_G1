@@ -309,6 +309,22 @@ For a more detailed task-to-change lookup, use
   `app/onboard-cell-identity-registry.json`: 3528 satellites and 7056 explicit
   opaque 36-bit NCIs. Runtime Walker/ordinal NCI derivation is forbidden;
   non-baseline sweeps require an explicit matching registry.
+- CUCP-037 hardens this boundary without claiming a transport that does not
+  exist. RNTI lease ownership keys include `(DU, cell index, PCI, C-RNTI)`,
+  because the two stable onboard cells may reuse one PCI and still have
+  independent C-RNTI namespaces. Calendar deployment feedback is monotonic,
+  and prepare/query responses must preserve the complete accepted intent count
+  before activation.
+- CUCP-037 also adds a CU-CP-private pure Initial UL event auditor. Given
+  complete proposed sideband metadata, it matches satellite/catalog/schedule,
+  source/calendar hashes, stable NCI/PCI, `G######` ownership, PRACH occasion
+  phase and paired UL port against the current active plan. It returns
+  `accept`, `reject` or `audit_only` with a machine-readable reason. Standard
+  F1AP Initial UL does not carry that metadata today, so production access must
+  not infer `position_id` from the legacy beam-to-NCI table. An `accept` result
+  proves only a CU-CP active-plan/software-gate snapshot match, not trusted
+  sideband provenance, DU-reconnect reconciliation, position steering or RF
+  application.
 
 ## Protocol References
 

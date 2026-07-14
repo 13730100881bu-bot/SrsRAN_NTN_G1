@@ -208,6 +208,35 @@ profiles may enter NTN digital service, connected handover target reservation,
 and release/paging hints; GSO-only UEs remain signaling-only and are reported as
 profile-blocked. `ntn-Parameters-r17` is recorded for observability only.
 
+## CUCP-035 Versioned onboard position plan
+
+Add a default-disabled management-center input for one satellite's complete
+visible `G######` inventory, two explicit stable onboard NCI/PCI identities,
+catalog/schedule versions, hashes, validity and activation epoch. Validate the
+complete input, partition every L1 exactly once, dry-run the configurable
+SSB/PRACH calendar, and atomically promote only a fully checked plan. This
+profile is independent from the legacy per-beam NCI model and does not derive
+NCI from a position, satellite ordinal or coordinates.
+
+## CUCP-036 Access-calendar software execution gate
+
+Deploy the checked two-cell calendar through the private F1AP resource-
+coordination container and apply it as a default-off DU/MAC scheduler software
+gate. Require matching version/hash and accepted intent counts at prepare and
+query time, monotonic deployment feedback, and rollback that preserves the old
+active plan. `applied` proves only that the matching software gate snapshot was
+consumed; it is not position/port steering or PHY/RU/RF evidence.
+
+## CUCP-037 Initial UL active-plan audit contract
+
+Provide a CU-CP-private, side-effect-free auditor for complete proposed Initial
+UL sideband metadata. It compares satellite/catalog/schedule/hash, stable
+NCI/PCI, L1 owner, absolute occasion phase, paired PRACH/UL-beam window and
+cell-local port against the current active plan. The result is
+`accept/reject/audit_only` with a machine-readable reason and an explicit
+no-RF-evidence label. No production F1AP transport carries this metadata yet;
+standard Initial UL must not infer it from the legacy beam-to-NCI mapping.
+
 ## Global sequencing rule
 
 Do not begin a later task if it depends on terminology or runtime state that has

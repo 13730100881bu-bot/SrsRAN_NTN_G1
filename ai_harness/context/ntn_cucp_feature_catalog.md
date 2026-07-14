@@ -39,13 +39,28 @@ ownership. If it has no PDU/DRB, it is `control_only` and occupies no digital
 service beam. Digital service ownership begins only when PDU/DRB demand binds a
 digital beam.
 
+### 3a. Onboard two-cell position-plan profile
+
+The independent, default-disabled onboard profile models exactly two stable NR
+logical cells per satellite. Their opaque 36-bit NCI and PCI are supplied by
+the management center and remain attached to the moving satellite cells. Earth-
+fixed `G######` L1 positions carry geometry and schedule ownership only; they do
+not permanently own NCI/PCI and must never be inserted into the legacy one-beam-
+per-NCI repository.
+
+The two onboard cells may reuse one PCI. Cell-scoped runtime identities such as
+C-RNTI leases therefore use DU cell identity in addition to PCI. This profile
+must not derive NCI from satellite id, cell ordinal, coordinates or position id.
+
 ## 4. SIB19 and RRC assistance
 
 CU-CP may build an NTN assistance snapshot for RRC/SIB19 packaging:
 ephemeris, Common TA, Koffset, Kmac, UL sync validity, reference location,
 t-Service, and neighbour satellite assistance.
 
-CU-CP does not schedule or broadcast SIB19 when that work belongs to DU/RRC-DU.
+CUCP-032 can send a private dynamic SIB19 payload to an existing DU SI path and
+observe applied/rejected/cleared feedback. This does not make SIB19 UE-specific,
+and it does not create a new PHY broadcast scheduler.
 
 ## 5. Candidate beam inventory
 
@@ -55,6 +70,11 @@ supported by at least one DU capability record.
 
 Candidate inventory is not capped by loaded service resource limits.
 
+For the onboard profile, `candidate_inventory` instead means the complete
+management-center visible L1 input. It is retained before capacity validation:
+257 positions remain observable and produce `schedule_overflow`; they are not
+silently truncated to 256.
+
 ## 6. Loaded service calendar
 
 CU-CP only allocates antenna slot and SR/SRS request intent to beams with UE,
@@ -63,17 +83,25 @@ slot request.
 
 The calendar is a CU-CP contract, not DU scheduler behavior.
 
+Do not confuse the legacy demand-driven `loaded_service_calendar` with the
+onboard `access_calendar_intent`. The latter is a periodic network-access plan
+for SSB/SIB/Paging/RAR coalescing and paired PRACH/UL-beam windows, even when no
+UE has digital service demand. CUCP-036 can deploy its checked SSB/PRACH portion
+as a default-off software gate, but that feedback is not position/port or RF
+execution evidence.
+
 Analog access intent and digital service intent are separate CU-CP snapshots.
 Analog intent describes access ownership by analog beam and selected DU. Digital
 intent describes loaded service calendar and SR/SRS request state by digital
 beam. Neither snapshot claims that DU, RF, or antenna hardware has executed the
 intent.
 
-CUCP-024 centralizes the UE-facing resource contract in a CU-CP beam service
-resource manager. The manager records DU-reported C-RNTI ownership for analog
-access, releases per-UE analog ownership after Initial Context Setup, and owns
-digital service SR/SRS slot intent cache/clear decisions. It validates C-RNTI
-ownership but does not allocate real C-RNTIs.
+CUCP-024 through CUCP-031 centralize the UE-facing resource contract in a CU-CP
+beam service resource manager. The manager owns and distributes NTN C-RNTI
+lease pools, validates cell-scoped Initial UL ownership, releases per-UE analog
+ownership after Initial Context Setup, and owns digital service SR/SRS intent,
+application feedback, audit and repair state. Terrestrial allocation remains
+unchanged.
 
 ## 7. Admission
 
@@ -94,6 +122,14 @@ deployment. NGSO, both, or absent `ntn-ScenarioSupport-r17` with NTN support
 the base NTN capability level, but are profile-blocked from UE-specific NTN
 service, connected handover, and release/paging hints in this deployment.
 `ntn-Parameters-r17` is recorded for observability only in v1.
+
+CUCP-037 defines a private pure audit for complete proposed Initial UL sideband
+metadata. It can match the active satellite/catalog/schedule/hash, stable cell
+identity, L1 owner, PRACH occasion and paired UL port, returning
+`accept/reject/audit_only`. Standard F1AP Initial UL does not carry this complete
+metadata, so the auditor is not yet a production transport or admission hook.
+It must not infer `position_id` from the legacy beam-to-NCI mapping, and an
+accepted audit is not RF evidence.
 
 ## 7a. Resource-domain guard policy
 
@@ -141,6 +177,8 @@ contracts.
 
 ## 13. Strict exclusions
 
-The harness forbids implementation of DU/MAC scheduler behavior, HARQ timing,
-TA scheduler, PRACH, PHY, lower PHY, RU/RF/radio drivers, ZMQ channel behavior,
-O-DU/flexible_o_du behavior, and GIS-site behavior.
+Future work is CU-CP-only unless a task grants exact non-CU-CP paths. Completed
+task-scoped exceptions such as CUCP-036 do not authorize further DU/MAC changes.
+HARQ timing, TA scheduler, raw PRACH detection, PHY/lower PHY, RU/RF/radio
+drivers, ZMQ channel behavior, O-DU/flexible_o_du behavior, generated ASN.1 and
+GIS-site behavior remain excluded without explicit authorization.

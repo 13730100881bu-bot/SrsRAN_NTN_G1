@@ -11,6 +11,33 @@ Candidates are not capped by loaded service beam limits. A candidate without UE,
 DRB, or handover demand must not receive an antenna slot, SR request, or SRS
 request.
 
+In the independent onboard position-plan profile, `candidate_inventory` means
+the complete visible `G######` L1 list received from the management center. It
+is retained before schedule-capacity checks and is never truncated by the
+128-per-cell or 256-per-satellite execution envelope.
+
+## versioned_position_plan
+
+One satellite's management-center input: `satellite_id`, catalog/schedule
+versions, canonical content hash, validity, activation epoch, exactly two
+explicit stable onboard NCI/PCI identities, and the complete visible L1 list.
+NCI is opaque and is not derived from satellite id, coordinates, position id or
+cell ordinal.
+
+## onboard_cell_position_set
+
+One of the satellite's two stable NR logical cells plus the `G######` L1 ids
+assigned to it for one plan version. Every candidate L1 appears exactly once.
+The two NCI values are distinct; PCI may be reused.
+
+## access_calendar_intent
+
+A checked CU-CP planning item containing schedule version, stable cell NCI,
+L1 position, cycle offset, duration, direction, purpose and cell-local port.
+It is distinct from `loaded_service_calendar`. CUCP-036 can turn its SSB/PRACH
+portion into a software scheduler gate, but the intent itself is not RF or
+position-steering evidence.
+
 ## analog_access_beams
 
 CU-CP control-plane access groups over digital service beams. In the default
@@ -61,12 +88,38 @@ This is not a DU scheduler allocation.
 
 ## ntn_beam_service_resource_manager
 
-The CU-CP module that owns access C-RNTI ownership records and digital service
-slot-resource intent state. It observes DU-reported C-RNTIs, detects duplicate
-`(DU, PCI, C-RNTI)` ownership, releases analog access ownership after Initial
-Context Setup, and creates or clears digital SR/SRS intent for service-bound
-UEs. It does not allocate real C-RNTIs and does not implement DU scheduler
-behavior.
+The CU-CP module that owns NTN C-RNTI lease pools, access ownership records and
+digital service slot-resource intent state. It distributes leases, validates
+Initial UL ownership, releases analog access ownership after Initial Context
+Setup, and creates or clears digital SR/SRS intent for service-bound UEs. C-RNTI
+identity is keyed by `(DU, DU cell index, PCI, C-RNTI)` because separate onboard
+cells may reuse PCI. A lease update containing the same C-RNTI twice is rejected
+before any entry is inserted. It does not implement raw PRACH detection or the
+terrestrial allocator.
+
+## onboard_plan_deployment_stage
+
+The separate software-execution state for a checked pending calendar:
+`not_sent -> preparing -> ready -> applied`, with terminal
+`rejected/unsupported`. Matching feedback is monotonic and idempotent; a delayed
+response cannot regress `applied` to `ready` or `not_sent`. Prepare and query
+acceptance require matching catalog/schedule version, source/calendar hashes and
+the complete accepted intent count for both cells.
+
+## initial_access_plan_audit
+
+A CU-CP-private, side-effect-free comparison of complete proposed Initial UL
+sideband metadata with the current active plan. It checks satellite/version/
+hash, stable NCI/PCI, L1 owner, PRACH occasion phase, paired UL-beam window and
+cell-local port, returning `accept`, `reject` or `audit_only` plus a machine-
+readable reason.
+
+No production F1AP Initial UL transport carries all of this metadata today.
+Therefore this contract must not infer `position_id` from legacy beam-to-NCI
+state. `accept` means only that supplied metadata matches the CU-CP active-plan
+and current software-gate snapshot; it does not authenticate the sender or add
+receive-time freshness/anti-replay, is not durable across DU reconnect without
+reconciliation, and is not PHY/RU/RF proof.
 
 ## ntn_assistance_snapshot
 

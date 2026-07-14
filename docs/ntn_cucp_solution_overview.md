@@ -22,7 +22,7 @@
 
 ### 2.1 下一阶段目标规划
 
-目标架构面向南纬 `57°` 至北纬 `57°` 的全球陆地星载再生基站。本轮只修改中文方案和 Web 离线展示，不修改 C++、CU-CP、F1AP、DU、MAC、PHY、RU、公开 API、协议容器或运行配置。全球 Web 目录已经实现并有 focused 测试覆盖；星座选择、7 天精确审计和 CU-CP 运行实现仍为 `规划中`。
+目标架构面向南纬 `57°` 至北纬 `57°` 的全球陆地星载再生基站。全球 Web 目录已经实现并有 focused 测试覆盖；CUCP-035/036 已实现默认关闭的版本化双小区计划、完整 L1 inventory、接入日历 dry-run、原子激活和 SSB/PRACH 软件 gate。星座选择、7 天精确审计、可信 Initial UL position sideband，以及 PHY/RU/RF 真实跳波束仍为 `规划中`。
 
 | 项目 | 目标规划值 | 如何理解 |
 |---|---:|---|
@@ -253,7 +253,7 @@ SIB19 描述网络侧的卫星 assistance 和小区广播状态，应该随着 b
 
 规划器为每个 L1 保留所有达到 `45°` 的可见卫星，当前 owner 可滞回保持到 `42°`。这份完整 `visible inventory` 不受每星 256 或每小区 128 的服务容量裁剪；容量只参与 assignment proposal。管理中心审核后下发带版本和 activation epoch 的波位表，星载 gNB 再将本星获授权 L1 二分给两个长期 NCI/PCI；空间紧凑/连通只是 best-effort 目标。
 
-L1 跨星时不迁移 NCI：源、目标分别使用自己的星载 NCI/PCI。只有二者 NCI/PCI 不同，目标才可以为发现/测量做重叠广播；这仍不代表 serving 已切换。目标 ready、DU `applied` 且到达对齐 640 ms 的 activation epoch 后，proposal 才能提交为 serving。连接态 UE 通过 HO/CHO，空闲态 UE 通过重选；同星在两个 NCI 之间重新分组也属于小区关系变化。该流程目前只有 Web 离线规划，CU-CP 运行实现状态是 `规划中`。
+L1 跨星时不迁移 NCI：源、目标分别使用自己的星载 NCI/PCI。只有二者 NCI/PCI 不同，目标才可以为发现/测量做重叠广播；这仍不代表 serving 已切换。目标 ready、DU `applied` 且到达对齐 640 ms 的 activation epoch 后，proposal 才能提交为 serving。连接态 UE 通过 HO/CHO，空闲态 UE 通过重选；同星在两个 NCI 之间重新分组也属于小区关系变化。当前 CU-CP 已实现单星计划的原子切换和软件 gate；全球跨星 ownership producer、UE 跨星流程与 RF 执行仍未闭环。
 
 ## 9. 资源一致性和可观测性
 
@@ -296,13 +296,15 @@ CU-CP 是 NTN 资源权威，但分布式系统可能因为超时、重连或部
 | 资源 audit / repair 与 CLI | 已有测试覆盖 | query、compare、repair action 和命令测试存在 | 长时间掉线重连下的恢复稳定性 |
 | split attach、ICS、Capability、PDU Session、ping 基线 | 已有运行态证据 | 当前 srsUE/Open5GS/split 栈完成过基础业务链路 | 该基线本身不等于全部 NTN 功能通过 |
 | CUCP-075 系统测试编排 | 已实现 | live/sim 场景 registry 和统一入口已经存在 | 当前没有 `CUCP-075-*` suite summary，不能宣称整套已通过 |
-| 全球每星两个长期星载 NCI/PCI planning registry | 已有测试覆盖 | Web 生成 7,056 个唯一 36-bit NCI；59,976 条局部 Walker proxy 边以 8 个 PCI 着色且冲突为 0 | proxy 不是全球连续可见性/RF 冲突图，也不是 CU-CP 运行实现 |
+| 全球每星两个长期星载 NCI/PCI planning registry | 已有测试覆盖 | Web 生成 7,056 个唯一 36-bit NCI；CU-CP 接收显式 opaque identity，禁止运行时派生 | 局部 Walker proxy 不是全球连续可见性/RF 冲突图；registry 网络下发服务未实现 |
 | 全球目录生成器、asset 与 loader | 已实现 | Web 已生成并加载 36,411 L1 / 249,375 L2 | 不等于 CU-CP 运行态或正式运营 GIS 冻结 |
 | 全球目录确定性、land containment 与完整性 | 已有测试覆盖 | `catalog:check` 和 focused 目录测试 `6/6` 通过 | `exactRegularSphericalHexagons=false`、`exactCoastlineClipping=false` |
 | 全球 coarse visible inventory CLI 与报告 | 已有测试覆盖 | F=0 snapshot 失败；F=1 一天/120 s 为 720/720 离散 epoch | 固定步长采样不证明连续覆盖，不能 selected |
 | 全球 exact visible inventory 与 assignment | 规划中 | 目录和 coarse CLI 可作为输入 | 7 天事件驱动审计 `not_run`，`selectedScenario=null` |
 | `128 × 2 = 256` 日历硬保证 | 已有测试覆盖 | 最差 80 ms 日历 168 次机会，配置取 128/小区 | 尚无真实 guard/功率/带宽和 PHY/RU 证据 |
-| 全球位置接管、PCI 冲突图与版本化波位表 | 规划中 | 已明确唯一 primary、ready/applied 和 activation gate | 尚无全球连续时间/RF/运行实现证据 |
+| 版本化波位表、双小区划分与软件 activation gate | 已有测试覆盖 | CU-CP 完整 inventory、hash/version、80/640 ms 日历、原子切换与 DU/MAC software feedback | 尚无全球 producer、可信 Initial UL position 或 RF 证据 |
+| Initial UL active-plan audit | 已有测试覆盖 | 私有纯审计器可核对完整 sideband 测试输入 | 标准 F1AP Initial UL 不携带 position/version/hash/RO/port；production gate 未接入 |
+| 全球位置接管与 PCI 冲突图 | 规划中 | 已明确唯一 primary、ready/applied 和 activation gate | 尚无全球连续时间/RF 证据 |
 | 多星、SGP4、真实 RRC 位置、Rel-17 UE、PHY/RU 执行 | 规划中 | 已明确后续方向和边界 | 尚无完整实现或系统证据 |
 
 现有证据入口：
@@ -343,12 +345,12 @@ CU-CP 是 NTN 资源权威，但分布式系统可能因为超时、重连或部
 
 - 轨道、卫星、NCI/PCI、L1/L2、ownership 和端口日历共享时间与选择状态。
 - 显示搜索 seed、完整 visible inventory、当前获授权 L1、两套 `16/64` 资源泳道和位置接管 proposal 时间线。
-- 明确把 Web 离线模型与 CU-CP 运行能力分开：前者按测试证据标为 `已有测试覆盖`，后者仍为 `规划中`；不得借 Web 动画宣称 PHY/RU 或真实载荷已实现。
+- 明确把 Web 离线模型、CU-CP/DU 软件 gate 与真实 RF 执行分开：各自只按测试证据标注，不得借 Web 动画或 software `applied` 宣称 PHY/RU 或真实载荷已实现。
 
-### 阶段 C：运行实现前评审
+### 阶段 C：真实设备执行前评审
 
 - 评审 NGAP 位置、TAC、Paging、handover、RNTI、SR/SRS 和当前 beam-to-NCI 索引的重构影响。
-- 冻结 NCI/PCI registry、波位表版本、跨星 UE 上下文、故障恢复和 applied feedback 接口后，才能授权修改运行代码。
+- 冻结 NCI/PCI registry、可信 Initial UL sideband、跨星 UE 上下文、故障恢复、硬件 beam handle 与 device-applied telemetry 后，才能授权扩展 PHY/RU/RF 运行代码。
 - 在独立、明确授权的任务中对接 PHY/RU beamforming、Doppler、Koffset、TA、HARQ 和 RF。
 
 ## 13. 术语速查
@@ -389,5 +391,5 @@ CU-CP 是 NTN 资源权威，但分布式系统可能因为超时、重连或部
 - 本文整理当前工作区事实，不代表这些改动已经提交、合入上游或完成产品认证。
 - `已有测试覆盖` 表示存在对应测试资产或已有 focused 记录，不表示本次文档整理重新运行了 CTest。
 - `已有运行态证据` 只按链接摘要中的 PASS 范围表述，不扩大到 UE decode、PHY、RU 或跨厂家互通。
-- 本文没有新增或修改 API、类型、协议容器、配置语义或运行行为。
-- 全球 `G` 目录和 coarse audit CLI 在 Web 中已实现并有 focused 测试覆盖，但仍不是 CU-CP 运行态或正式运营 GIS 冻结成果。F=0 seed 已在 `t=0` 失败；F=1 一天/120 s 的 `720/720` 仅为离散 coarse 证据。每星两个星载小区、`32/128`、`80/640 ms`、2.5 ms retarget、逐 L1 proposal 和位置接管仍不是当前 CU-CP 运行能力；精确审计为 `not_run`，`selectedScenario=null`。
+- 本文同步当前类型、配置与软件运行边界；private contract 不等于公开协议字段或设备能力。
+- 全球 `G` 目录和 coarse audit CLI 在 Web 中已实现并有 focused 测试覆盖，但仍不是正式运营 GIS 或连续覆盖证明。F=0 seed 已在 `t=0` 失败；F=1 一天/120 s 的 `720/720` 仅为离散 coarse 证据。CU-CP 已实现每星两个稳定小区、`128/256` inventory/calendar 包络和 `80/640 ms` dry-run，DU/MAC 只实现软件 gate；2.5 ms 真实 retarget、全球逐 L1 producer/接管、可信 Initial UL position 和 PHY/RU/RF 仍未实现。精确审计为 `not_run`，`selectedScenario=null`。

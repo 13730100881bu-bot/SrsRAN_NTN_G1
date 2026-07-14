@@ -30,7 +30,7 @@ not_sent -> preparing -> ready -> applied
                          \-> rejected / unsupported
 ```
 
-`preparing` 表示 scheduler command 已入队但两个 cell 的 slot thread 尚未全部确认 armed；只有两侧都消费同一 version/hash 后才进入 `ready`。只有同一 catalog/schedule version、source/calendar hash 且 accepted intent 数完整匹配的 DU/MAC `applied` feedback 到达后，CU-CP 才允许 pending plan 在 `activation_epoch` 后变为 active。迟到、错版本/hash 或 silent-drop response 会 reject 并 clear，新计划失败不改变旧 active。
+`preparing` 表示 scheduler command 已入队但两个 cell 的 slot thread 尚未全部确认 armed；只有两侧都消费同一 version/hash 后才进入 `ready`。prepare 和 query 的 `preparing/ready/applied` 反馈都必须保持同一 catalog/schedule version、source/calendar hash，并完整回报两个小区的 accepted intent 数；只有匹配的 `applied` feedback 到达后，CU-CP 才允许 pending plan 在 `activation_epoch` 后变为 active。deployment 反馈只允许单调前进且同状态幂等：同一计划已被 query 推到 `ready/applied` 后，较早的 prepare completion 被忽略；guard 前暂时无 response 会回到 `not_sent` 重试。错版本/hash、intent 数不完整、明确终止失败或超过 guard/apply deadline 才 reject 并 clear，新计划失败不改变旧 active。
 
 `du_prepare_horizon_ms`、`du_prepare_guard_ms` 和 `du_apply_timeout_ms` 是可配置软件时限，不是协议常量。CU-CP 只在 plain-SFN 可无歧义映射的 prepare horizon 内下发；guard 前未 armed，或 activation 后 apply timeout 内未两侧 applied，都会回滚。prepare/query/clear 使用独立异步 lane，丢失的 F1 response 不会阻塞 clear。
 
@@ -92,6 +92,23 @@ SSB/PRACH 保持静态 future prefill，只在当前 `sched_result` 交 MAC/PHY 
 仓库级下沉审计也确认当前没有可复用的设备闭环：FAPI PRACH/SSB beamforming 尚未填充，OFH section type 1/type 3 的 `BeamId` 仍固定为 0，`ru_controller` 没有 beam bank、定时 arm/query 或 applied telemetry。MAC 在 software gate 编译时只保留 slot window 和 purpose mask，尚未把 `position_id`/`port_id` 转为硬件句柄。因此本阶段没有修改 generated ASN.1、PHY、OFH 或 RU/RF；在缺少设备映射时向这些层增加占位字段不能构成运行证据。
 
 这里的 `port_id` 是每小区 0..15 的可复用模拟资源槽；同一端口会在不同窗口服务不同 `position_id`。它不是 eAxC、OFH `BeamId` 或阵列权重索引，不能直接下沉。仓库内可以继续增加 `ru_ntn_beam_controller` 契约、FAPI/OFH `BeamId` plumbing 和 dummy/spy backend，并将证据提升到 `command_sent`；但在管理中心映射和设备回执缺失时，仍不得返回 `device_applied`。
+
+## Initial UL active-plan 审计边界
+
+CUCP-037 在 CU-CP 私有 position-plan controller 中增加了无副作用审计器。对完整的 proposed sideband 测试输入，它检查：
+
+- `satellite_id`、catalog/schedule version、source/calendar hash；
+- 两个长期星载小区之一的稳定 NCI/PCI；
+- `G######` 是否属于该小区；
+- absolute occasion 映射到配置的 PRACH cycle（当前 profile 为 640 ms）后是否落入该 L1 的 PRACH RO；
+- 同一窗口是否有配对 `prach_ul_beam`，且 cell-local `port_id` 匹配；
+- external-execution profile 是否保留当前 active plan 的 software-gate applied snapshot。
+
+结果使用 `accept/reject/audit_only` 和机器可读原因。`accept` 只说明“提供的 metadata 与当前 CU-CP active plan/software-gate snapshot 匹配”，不验证发送方身份，也没有接收时刻 freshness/anti-replay，不说明 position steering 或 RF 已执行。`active_has_external_apply_evidence` 目前还是 controller snapshot；DU 断连/重连后尚无 connection-epoch reconciliation，因此不能把它当作跨重连持久 telemetry。
+
+标准 F1AP Initial UL 目前只有 CGI、C-RNTI 和 RRC container，不携带上述 position/version/hash/RO/port 证据。生产 `handle_ue_setup_request()` 因而没有接入这个审计器，也绝不能通过 legacy beam-to-NCI table 推导 `G######`。下一步若要成为真实 admission gate，需要一个明确授权、版本化且可鉴别来源的最小 sideband；RAR 低时延路径仍留在 DU/MAC，原始 PRACH 检测仍留在 PHY/DU。
+
+相关的 C-RNTI lease key 已改为 `(DU, DU cell index, PCI, C-RNTI)`。这允许两个长期星载小区按规划复用 PCI，同时保持各自独立的 RNTI namespace；ICS 后释放模拟接入归属和 `control_only`/L2 规则不变。
 
 ## 管理中心 Web producer
 

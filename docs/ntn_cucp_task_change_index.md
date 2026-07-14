@@ -110,6 +110,7 @@ them casually.
 | CUCP-034 | UE capability profile policy for `leo_ngso`: NGSO/both/implicit-both match, GSO-only is supported but profile-blocked. | `include/srsran/cu_cp/ntn_ue_capability.h`, `lib/cu_cp/ntn_mobility/ntn_ue_capability_gate.cpp`, `lib/cu_cp/cu_cp_impl.cpp`, O-CU-CP status tests. |
 | CUCP-035 | Versioned management-center onboard L1 plan: complete inventory validation, explicit two-cell NCI/PCI profile, deterministic partition, configurable access-calendar dry-run, timer-safe atomic activation and synchronized read-only OAM. Independent opt-in profile; no RF application. | `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.*`, `lib/cu_cp/cu_cp_impl.*`, `include/srsran/cu_cp/cu_cp_configuration.h`, `include/srsran/cu_cp/cu_cp_command_handler.h`, O-CU-CP config/`ntn_state`, `tests/unittests/cu_cp/ntn_mobility/ntn_*position_plan*`, `ntn_access_calendar_audit_test.cpp`. |
 | CUCP-036 | Versioned access-calendar cross-layer deployment: private F1AP prepare/query/clear, same-DU two-cell validation, both-slot-thread armed barrier, configurable prepare/apply deadlines, persistent rollback cleanup, extended validity, `mu=4`-exact wall-clock mapping, execution-envelope startup validation, opt-in scheduler SSB/PRACH software gate, applied/clear feedback and Web candidate plan exporter backed by a versioned explicit identity registry. Default off. Evidence explicitly stops before position/port beam steering and RF application. | `include/srsran/f1ap/ntn_access_calendar.h`, F1AP resource-coordination procedures, `du_manager_impl.*`, `include/srsran/mac/mac_manager.h`, `lib/mac/mac_impl.h`, `lib/mac/mac_ntn_access_calendar_manager.h`, `lib/mac/mac_ntn_access_calendar_compiler.h`, `lib/mac/mac_dl/mac_cell_time_mapper_impl.*`, `include/srsran/scheduler/ntn_access_calendar.h`, `lib/scheduler/ntn_access_calendar_gate.h`, `cell_scheduler.*`, `lib/cu_cp/cu_cp_impl.*`, `web_replicas/ntn_beam_planner/app/position-plan-model.ts`, `app/onboard-cell-identity-registry.json`, `docs/ntn_access_calendar_cross_layer_execution.md`, focused F1AP/DU/MAC/scheduler/CU-CP/Web tests. |
+| CUCP-037 | Initial UL active-plan audit contract and activation-integrity hardening. RNTI lease ownership is cell-scoped even when onboard cells reuse PCI, and duplicate entries in one batch fail atomically; deployment feedback cannot regress; prepare/query feedback must preserve the complete intent count. A private pure auditor matches proposed satellite/version/hash, stable NCI/PCI, L1 owner, PRACH occasion and UL port against the current active plan. No production Initial UL transport or RF evidence is claimed. | `lib/cu_cp/ntn_mobility/ntn_beam_service_resource_manager.*`, `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.*`, `lib/cu_cp/cu_cp_impl.cpp`, CU-CP test environment, `ntn_beam_service_resource_manager_test.cpp`, `ntn_onboard_position_plan_test.cpp`, `cu_cp_ntn_mobility_test.cpp`, roadmap/catalog/runtime-contract and access-plan documentation. |
 
 ## Current Useful Validation Notes
 
@@ -174,3 +175,36 @@ reported as current runtime evidence. `srsran_cu_cp` was not rerun because it wo
 the same broad dependency rebuild without adding focused evidence.
 
 `applied` in CUCP-036 means the SSB/PRACH scheduler software gate consumed the matching snapshot. It is not position/port beam steering, PHY/OFH command evidence, or RU/RF telemetry.
+
+CUCP-037 closeout evidence (2026-07-15):
+
+```bash
+cmake --build build/ai-clean --target ntn_mobility_test -j2
+ctest --test-dir build/ai-clean -R '^(ntn_onboard_position_plan|ntn_beam_service_resource_manager|ntn_access_calendar_audit)\.' --output-on-failure
+cmake --build build/ai-clean --target cu_cp_test -j4
+build/ai-clean/tests/unittests/cu_cp/cu_cp_test --gtest_filter='<seven focused CU-CP NTN orchestration tests>'
+cmake --build build/ai-clean --target srsran_cu_cp -j1
+cmake --build build/ai-clean --target cu_cp_unit_config_test -j1
+build/ai-clean/tests/unittests/apps/units/o_cu_cp/cu_cp/cu_cp_unit_config_test --gtest_filter='<four focused NTN/default-terrestrial configuration tests>'
+```
+
+The NTN mobility target built successfully. The position-plan, cell-scoped RNTI
+resource-manager and access-calendar suites passed 59/59. The seven CU-CP orchestration
+tests passed 7/7, including incomplete DU intent feedback, non-regressing late prepare
+feedback, prepare-guard ordering, apply-deadline rollback/clear and default-disabled
+behavior. `srsran_cu_cp` and `cu_cp_unit_config_test` built successfully; the four focused
+configuration/default-terrestrial tests passed 4/4. The first config-target attempt hit a
+transient missing metrics-helper archive during WSL/NTFS relinking; an immediate serial
+retry rebuilt that same target successfully.
+
+A direct full `ntn_mobility_test` run passed 163/169. Its six failures are the same
+pre-existing placement/rebalance expectations outside CUCP-037: one
+`ntn_beam_placement_plan_helpers` case and five `ntn_beam_rebalance_policy` cases. Cold
+single-job builds exceeded bounded validation windows before the successful incremental
+builds and are not reported as test failures.
+
+No split demo was run for the private Initial UL auditor because no production Initial UL
+transport supplies its complete sideband metadata. The CU-CP mock integration proves
+control-plane ordering and rollback only. It does not prove sender authentication,
+freshness/anti-replay, position/port beam steering, PRACH detection, PHY/OFH execution or
+RU/RF telemetry.
