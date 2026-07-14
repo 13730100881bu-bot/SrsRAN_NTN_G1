@@ -36,7 +36,6 @@ std::unique_ptr<nrppa_interface> srsran::srs_cu_cp::create_nrppa(const cu_cp_con
                                                                  common_task_scheduler&     common_task_sched)
 {
   (void)&cfg;
-  (void)&cu_cp_notifier;
-  auto nrppa = std::make_unique<nrppa_dummy_impl>();
+  auto nrppa = std::make_unique<nrppa_dummy_impl>(cu_cp_notifier, common_task_sched);
   return nrppa;
 }

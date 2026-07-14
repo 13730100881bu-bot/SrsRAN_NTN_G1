@@ -27,6 +27,7 @@
 #include "srsran/rrc/meas_types.h"
 #include "srsran/support/async/async_task.h"
 #include <map>
+#include <string_view>
 
 namespace srsran {
 namespace srs_cu_cp {
@@ -77,6 +78,18 @@ public:
   virtual async_task<expected<positioning_activation_response_t, positioning_activation_failure_t>>
   on_positioning_activation_request(const positioning_activation_request_t& request) = 0;
 
+  /// \brief Notifies the F1AP about a positioning deactivation request.
+  /// \returns The local fire-and-forget outcome.
+  virtual async_task<expected<positioning_deactivation_response_t, positioning_deactivation_failure_t>>
+  on_positioning_deactivation_request(const positioning_deactivation_request_t& request) = 0;
+
+  /// \brief Notifies the F1AP about a positioning assistance information control request.
+  /// \returns The assistance information feedback outcome.
+  virtual async_task<expected<positioning_assistance_information_feedback_t,
+                              positioning_assistance_information_failure_t>>
+  on_positioning_assistance_information_control(
+      const positioning_assistance_information_control_request_t& request) = 0;
+
   /// \brief Notifies the F1AP about a measurement information request.
   /// \returns The outcome of the procedure.
   virtual async_task<expected<measurement_response_t, measurement_failure_t>>
@@ -85,8 +98,22 @@ public:
 
 // TRP information CU-CP response, containing information for all available TRPs at all DUs.
 struct trp_information_cu_cp_response_t {
+  uint16_t                                      transaction_id = 0;
   std::map<du_index_t, trp_information_response_t> trp_info_responses;
   std::map<du_index_t, nrppa_f1ap_notifier*>       f1ap_notifiers;
+};
+
+enum class nrppa_standard_codec_event_type {
+  decode_success,
+  decode_failure,
+  encode_response,
+  encode_failure,
+  minimal_fallback_decode
+};
+
+struct nrppa_standard_codec_event {
+  nrppa_standard_codec_event_type type;
+  std::string_view                reason;
 };
 
 /// Methods used by NRPPa to signal events to the CU-CP.
@@ -110,6 +137,44 @@ public:
   /// \returns The TRP information CU-CP response.
   virtual async_task<trp_information_cu_cp_response_t>
   on_trp_information_request(const trp_information_request_t& request) = 0;
+
+  /// \brief Notifies the CU-CP about a UE-associated Positioning Information request.
+  /// \param[in] request The Positioning Information request with the UE index resolved from transport association.
+  /// \returns The Positioning Information outcome.
+  virtual async_task<expected<positioning_information_response_t, positioning_information_failure_t>>
+  on_positioning_information_request(const positioning_information_request_t& request) = 0;
+
+  /// \brief Notifies the CU-CP about a UE-associated Positioning Activation request.
+  /// \param[in] request The Positioning Activation request with the UE index resolved from transport association.
+  /// \returns The Positioning Activation outcome.
+  virtual async_task<expected<positioning_activation_response_t, positioning_activation_failure_t>>
+  on_positioning_activation_request(const positioning_activation_request_t& request) = 0;
+
+  /// \brief Notifies the CU-CP about a UE-associated Positioning Deactivation request.
+  /// \param[in] request The Positioning Deactivation request with the UE index resolved from transport association.
+  /// \returns The local fire-and-forget outcome.
+  virtual async_task<expected<positioning_deactivation_response_t, positioning_deactivation_failure_t>>
+  on_positioning_deactivation_request(const positioning_deactivation_request_t& request) = 0;
+
+  /// \brief Notifies the CU-CP about a non-UE-associated Positioning Assistance Information Control request.
+  /// \param[in] request The Positioning Assistance Information Control request.
+  /// \returns The assistance information feedback outcome.
+  virtual async_task<expected<positioning_assistance_information_feedback_t,
+                              positioning_assistance_information_failure_t>>
+  on_positioning_assistance_information_control(
+      const positioning_assistance_information_control_request_t& request) = 0;
+
+  /// \brief Notifies the CU-CP about a UE-associated Measurement request.
+  /// \param[in] request The Measurement request with the UE index resolved from transport association.
+  /// \returns The Measurement outcome.
+  virtual async_task<expected<measurement_response_t, measurement_failure_t>>
+  on_measurement_information_request(const measurement_request_t& request) = 0;
+
+  /// \brief Notifies the CU-CP that a received NRPPa payload procedure is unsupported by the minimal endpoint.
+  virtual void on_unsupported_nrppa_pdu(std::string_view reason) = 0;
+
+  /// \brief Notifies the CU-CP about the standard NRPPa codec path used for a received or transmitted payload.
+  virtual void on_nrppa_standard_codec_event(const nrppa_standard_codec_event& event) = 0;
 };
 
 /// This interface is used to push NRPPA messages to the NRPPA interface.

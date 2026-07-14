@@ -104,6 +104,10 @@ protected:
     rrc_ue_create_msg.rrc_ue_cu_cp_notifier = &rrc_ue_cu_cp_notifier;
     rrc_ue_create_msg.measurement_notifier  = &rrc_ue_cu_cp_notifier;
     rrc_ue_create_msg.cu_cp_ue_notifier     = &ue_mng.find_ue(allocated_ue_index)->get_rrc_ue_cu_cp_ue_notifier();
+    rrc_ue_create_msg.cell.cgi = nr_cell_global_id_t{plmn_identity::test_value(),
+                                                     nr_cell_identity::create(gnb_id_t{411, 22}, 0).value()};
+    rrc_ue_create_msg.cell.tac = 7;
+    rrc_ue_create_msg.cell.pci = 0;
     rrc_ue_create_msg.cell.bands.push_back(nr_band::n78);
     rrc_ue_create_msg.cell.plmn_identity_list.push_back(plmn_identity::test_value());
 

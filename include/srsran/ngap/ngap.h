@@ -240,6 +240,12 @@ public:
   /// \brief Notifies the CU-CP about a Location Reporting Control request.
   virtual ngap_location_reporting_control_response
   on_location_reporting_control(const ngap_location_reporting_control& request) = 0;
+
+  /// \brief Notify the CU-CP about an AMF UE Context Suspend outcome.
+  virtual void on_ue_context_suspend_outcome(ue_index_t ue_index, bool success) = 0;
+
+  /// \brief Notify the CU-CP about an AMF UE Context Resume outcome.
+  virtual void on_ue_context_resume_outcome(ue_index_t ue_index, bool success) = 0;
 };
 
 /// Handle NGAP NAS Message procedures as defined in TS 38.413 section 8.6.
@@ -307,6 +313,13 @@ public:
   /// \brief Initiates the transmission of a RRC inactive transition report.
   virtual async_task<bool>
   handle_rrc_inactive_transition_report_required(const ngap_rrc_inactive_transition_report& report) = 0;
+
+  /// \brief Initiates a UE Context Suspend Request procedure.
+  virtual async_task<bool> handle_ue_context_suspend_request(ue_index_t ue_index) = 0;
+
+  /// \brief Initiates a UE Context Resume Request procedure.
+  virtual async_task<bool> handle_ue_context_resume_request(ue_index_t ue_index,
+                                                            establishment_cause_t rrc_resume_cause) = 0;
 
   /// \brief Initiates the transmission of a Location Report.
   virtual bool handle_location_report_required(const ngap_location_report& report) = 0;

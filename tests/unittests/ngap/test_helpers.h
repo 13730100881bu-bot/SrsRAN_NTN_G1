@@ -390,12 +390,14 @@ public:
 
   void on_dl_ue_associated_nrppa_transport_pdu(ue_index_t ue_index, const byte_buffer& nrppa_pdu) override
   {
-    logger.error("DL UE associated NRPPa transport failed. Cause: NRPPa transport PDUs not supported.");
+    last_dl_ue_associated_nrppa_ue  = ue_index;
+    last_dl_ue_associated_nrppa_pdu = nrppa_pdu.copy();
   }
 
   void on_dl_non_ue_associated_nrppa_transport_pdu(amf_index_t amf_index, const byte_buffer& nrppa_pdu) override
   {
-    logger.error("DL non UE associated NRPPa transport failed. Cause: NRPPa transport PDUs not supported.");
+    last_dl_non_ue_associated_nrppa_amf = amf_index;
+    last_dl_non_ue_associated_nrppa_pdu = nrppa_pdu.copy();
   }
 
   ngap_location_reporting_control_response
@@ -403,6 +405,18 @@ public:
   {
     last_location_reporting_control = request;
     return location_reporting_control_response;
+  }
+
+  void on_ue_context_suspend_outcome(ue_index_t ue_index, bool success) override
+  {
+    last_suspend_outcome_ue      = ue_index;
+    last_suspend_outcome_success = success;
+  }
+
+  void on_ue_context_resume_outcome(ue_index_t ue_index, bool success) override
+  {
+    last_resume_outcome_ue      = ue_index;
+    last_resume_outcome_success = success;
   }
 
   ue_index_t                                 last_ue = ue_index_t::invalid;
@@ -414,6 +428,14 @@ public:
   ngap_location_reporting_control_response   location_reporting_control_response;
   std::optional<ue_index_t>                  last_created_ue_index;
   cu_cp_paging_message                       last_paging_msg;
+  std::optional<ue_index_t>                  last_dl_ue_associated_nrppa_ue;
+  byte_buffer                                last_dl_ue_associated_nrppa_pdu;
+  std::optional<amf_index_t>                 last_dl_non_ue_associated_nrppa_amf;
+  byte_buffer                                last_dl_non_ue_associated_nrppa_pdu;
+  std::optional<ue_index_t>                  last_suspend_outcome_ue;
+  std::optional<bool>                        last_suspend_outcome_success;
+  std::optional<ue_index_t>                  last_resume_outcome_ue;
+  std::optional<bool>                        last_resume_outcome_success;
 
 private:
   ue_manager&           ue_mng;

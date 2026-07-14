@@ -31,6 +31,57 @@
 using namespace srsran;
 using namespace srs_cu_cp;
 
+namespace {
+
+void fill_dummy_measurement_results(asn1::rrc_nr::meas_results_s& meas_results)
+{
+  meas_results.meas_id = 1U;
+  asn1::rrc_nr::meas_result_serv_mo_s meas_result_serv_mo;
+  meas_result_serv_mo.serv_cell_id = 0U;
+  // pci
+  meas_result_serv_mo.meas_result_serving_cell.pci_present = true;
+  meas_result_serv_mo.meas_result_serving_cell.pci         = 0U;
+  // meas result
+  // cell results
+  meas_result_serv_mo.meas_result_serving_cell.meas_result.cell_results.results_ssb_cell_present      = true;
+  meas_result_serv_mo.meas_result_serving_cell.meas_result.cell_results.results_ssb_cell.rsrp_present = true;
+  meas_result_serv_mo.meas_result_serving_cell.meas_result.cell_results.results_ssb_cell.rsrp         = 113U;
+  meas_result_serv_mo.meas_result_serving_cell.meas_result.cell_results.results_ssb_cell.rsrq_present = true;
+  meas_result_serv_mo.meas_result_serving_cell.meas_result.cell_results.results_ssb_cell.rsrq         = 65U;
+  meas_result_serv_mo.meas_result_serving_cell.meas_result.cell_results.results_ssb_cell.sinr_present = true;
+  meas_result_serv_mo.meas_result_serving_cell.meas_result.cell_results.results_ssb_cell.sinr         = 92U;
+  // rs idx results
+  meas_result_serv_mo.meas_result_serving_cell.meas_result.rs_idx_results_present = true;
+
+  asn1::rrc_nr::results_per_ssb_idx_s results_per_ssb_idx;
+  results_per_ssb_idx.ssb_idx                  = 0U;
+  results_per_ssb_idx.ssb_results_present      = true;
+  results_per_ssb_idx.ssb_results.rsrp_present = true;
+  results_per_ssb_idx.ssb_results.rsrp         = 113U;
+  results_per_ssb_idx.ssb_results.rsrq_present = true;
+  results_per_ssb_idx.ssb_results.rsrq         = 66U;
+  results_per_ssb_idx.ssb_results.sinr_present = true;
+  results_per_ssb_idx.ssb_results.sinr         = 92U;
+
+  meas_result_serv_mo.meas_result_serving_cell.meas_result.rs_idx_results.results_ssb_idxes.push_back(
+      results_per_ssb_idx);
+
+  meas_results.meas_result_serving_mo_list.push_back(meas_result_serv_mo);
+}
+
+byte_buffer pack_measurement_report(asn1::rrc_nr::ul_dcch_msg_s& ul_dcch_msg)
+{
+  byte_buffer   pdu;
+  asn1::bit_ref bref{pdu};
+
+  const asn1::SRSASN_CODE ret = ul_dcch_msg.pack(bref);
+  srsran_assert(ret == asn1::SRSASN_SUCCESS, "Failed to pack RRC PDU.");
+
+  return pdu;
+}
+
+} // namespace
+
 security::sec_key srsran::srs_cu_cp::make_sec_key(std::string hex_str)
 {
   byte_buffer       key_buf = make_byte_buffer(hex_str).value();
@@ -254,47 +305,36 @@ byte_buffer srsran::srs_cu_cp::generate_rrc_reestablishment_complete_pdu()
 
 byte_buffer srsran::srs_cu_cp::generate_measurement_report_pdu()
 {
-  byte_buffer   pdu;
-  asn1::bit_ref bref{pdu};
-
   asn1::rrc_nr::ul_dcch_msg_s ul_dcch_msg{};
   auto& meas_results = ul_dcch_msg.msg.set_c1().set_meas_report().crit_exts.set_meas_report().meas_results;
+  fill_dummy_measurement_results(meas_results);
 
-  meas_results.meas_id = 1U;
-  asn1::rrc_nr::meas_result_serv_mo_s meas_result_serv_mo;
-  meas_result_serv_mo.serv_cell_id = 0U;
-  // pci
-  meas_result_serv_mo.meas_result_serving_cell.pci_present = true;
-  meas_result_serv_mo.meas_result_serving_cell.pci         = 0U;
-  // meas result
-  // cell results
-  meas_result_serv_mo.meas_result_serving_cell.meas_result.cell_results.results_ssb_cell_present      = true;
-  meas_result_serv_mo.meas_result_serving_cell.meas_result.cell_results.results_ssb_cell.rsrp_present = true;
-  meas_result_serv_mo.meas_result_serving_cell.meas_result.cell_results.results_ssb_cell.rsrp         = 113U;
-  meas_result_serv_mo.meas_result_serving_cell.meas_result.cell_results.results_ssb_cell.rsrq_present = true;
-  meas_result_serv_mo.meas_result_serving_cell.meas_result.cell_results.results_ssb_cell.rsrq         = 65U;
-  meas_result_serv_mo.meas_result_serving_cell.meas_result.cell_results.results_ssb_cell.sinr_present = true;
-  meas_result_serv_mo.meas_result_serving_cell.meas_result.cell_results.results_ssb_cell.sinr         = 92U;
-  // rs idx results
-  meas_result_serv_mo.meas_result_serving_cell.meas_result.rs_idx_results_present = true;
+  return pack_measurement_report(ul_dcch_msg);
+}
 
-  asn1::rrc_nr::results_per_ssb_idx_s results_per_ssb_idx;
-  results_per_ssb_idx.ssb_idx                  = 0U;
-  results_per_ssb_idx.ssb_results_present      = true;
-  results_per_ssb_idx.ssb_results.rsrp_present = true;
-  results_per_ssb_idx.ssb_results.rsrp         = 113U;
-  results_per_ssb_idx.ssb_results.rsrq_present = true;
-  results_per_ssb_idx.ssb_results.rsrq         = 66U;
-  results_per_ssb_idx.ssb_results.sinr_present = true;
-  results_per_ssb_idx.ssb_results.sinr         = 92U;
+byte_buffer
+srsran::srs_cu_cp::generate_measurement_report_with_location_coordinate_pdu(const std::string& location_coordinate_hex)
+{
+  asn1::rrc_nr::ul_dcch_msg_s ul_dcch_msg{};
+  auto& meas_results = ul_dcch_msg.msg.set_c1().set_meas_report().crit_exts.set_meas_report().meas_results;
+  fill_dummy_measurement_results(meas_results);
 
-  meas_result_serv_mo.meas_result_serving_cell.meas_result.rs_idx_results.results_ssb_idxes.push_back(
-      results_per_ssb_idx);
+  meas_results.ext = true;
+  meas_results.location_info_r16.set_present();
+  meas_results.location_info_r16->common_location_info_r16_present = true;
+  meas_results.location_info_r16->common_location_info_r16.location_coordinate_r16.from_string(location_coordinate_hex);
 
-  meas_results.meas_result_serving_mo_list.push_back(meas_result_serv_mo);
+  return pack_measurement_report(ul_dcch_msg);
+}
 
-  const asn1::SRSASN_CODE ret = ul_dcch_msg.pack(bref);
-  srsran_assert(ret == asn1::SRSASN_SUCCESS, "Failed to pack RRC PDU.");
+byte_buffer
+srsran::srs_cu_cp::generate_measurement_report_with_coarse_location_pdu(const std::string& coarse_location_hex)
+{
+  asn1::rrc_nr::ul_dcch_msg_s ul_dcch_msg{};
+  auto& meas_results = ul_dcch_msg.msg.set_c1().set_meas_report().crit_exts.set_meas_report().meas_results;
+  fill_dummy_measurement_results(meas_results);
+  meas_results.ext = true;
+  meas_results.coarse_location_info_r17.from_string(coarse_location_hex);
 
-  return pdu;
+  return pack_measurement_report(ul_dcch_msg);
 }

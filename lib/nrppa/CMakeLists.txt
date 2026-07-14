@@ -21,6 +21,7 @@
 set(SOURCES
         nrppa_dummy_factory.cpp
         nrppa_dummy_impl.cpp
+        nrppa_pdu.cpp
     )
 
 

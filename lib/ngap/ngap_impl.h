@@ -85,6 +85,9 @@ public:
   async_task<void> handle_ul_non_ue_associated_nrppa_transport(const byte_buffer& nrppa_pdu) override;
   async_task<bool>
   handle_rrc_inactive_transition_report_required(const ngap_rrc_inactive_transition_report& report) override;
+  async_task<bool> handle_ue_context_suspend_request(ue_index_t ue_index) override;
+  async_task<bool>
+  handle_ue_context_resume_request(ue_index_t ue_index, establishment_cause_t rrc_resume_cause) override;
   bool handle_location_report_required(const ngap_location_report& report) override;
 
   // ngap_metrics_handler.

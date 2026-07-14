@@ -131,6 +131,11 @@ private:
   /// complete end-to-end (MVP limitation, unknown I-RNTI, MAC mismatch, etc.).
   void fallback_resume_to_rrc_setup(std::optional<rrc_inactive_ue_context> stored,
                                     const std::string&                     reason);
+  bool restore_inactive_context_for_resume(const rrc_inactive_ue_context& stored);
+  bool send_rrc_resume(const rrc_inactive_ue_context& stored,
+                       asn1::rrc_nr::resume_cause_opts::options resume_cause);
+  bool refresh_inactive_context_for_rnau(const rrc_inactive_ue_context& stored);
+  void handle_rrc_resume_complete(const asn1::rrc_nr::rrc_resume_complete_s& msg);
 
   void handle_ul_info_transfer(const asn1::rrc_nr::ul_info_transfer_ies_s& ul_info_transfer);
   void handle_rrc_transaction_complete(const asn1::rrc_nr::ul_dcch_msg_s& msg, uint8_t transaction_id_);
@@ -161,6 +166,9 @@ private:
   rrc_ue_event_notifier&          metrics_notifier;     // metrics notifier
   byte_buffer                     du_to_cu_container;   // initial RRC message from DU to CU
   rrc_ue_logger                   logger;
+  std::optional<uint64_t>         pending_resume_full_i_rnti;
+  std::optional<ue_index_t>       pending_resume_old_ue_index;
+  std::optional<establishment_cause_t> pending_resume_cause;
 
   // RRC procedures handling
   std::unique_ptr<rrc_ue_event_manager> event_mng;

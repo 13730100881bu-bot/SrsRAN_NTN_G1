@@ -37,10 +37,19 @@ public:
   {
     last_rrc_pdu = pdu.copy();
     last_srb_id  = srb_id;
+    ++nof_rrc_pdus;
+  }
+
+  void reset()
+  {
+    last_rrc_pdu = {};
+    last_srb_id  = srb_id_t::nulltype;
+    nof_rrc_pdus = 0;
   }
 
   byte_buffer last_rrc_pdu;
   srb_id_t    last_srb_id;
+  unsigned    nof_rrc_pdus = 0;
 };
 
 class dummy_rrc_ue_ngap_adapter : public rrc_ue_ngap_notifier
@@ -152,9 +161,49 @@ public:
 
   void on_measurement_report(const rrc_meas_results& meas_results) override {}
 
+  void on_ue_location_report(const ntn_ue_location_report& location_report) override
+  {
+    ++nof_ue_location_reports;
+    last_ue_location_report = location_report;
+  }
+
+  void on_ue_location_report_outcome(ntn_rrc_ue_location_report_outcome outcome) override
+  {
+    switch (outcome) {
+      case ntn_rrc_ue_location_report_outcome::received:
+        ++nof_ue_location_reports_received;
+        break;
+      case ntn_rrc_ue_location_report_outcome::decoded:
+        ++nof_ue_location_reports_decoded;
+        break;
+      case ntn_rrc_ue_location_report_outcome::unsupported:
+        ++nof_ue_location_reports_unsupported;
+        break;
+      case ntn_rrc_ue_location_report_outcome::decode_failed:
+        ++nof_ue_location_reports_decode_failed;
+        break;
+    }
+  }
+
   virtual void on_rrc_reconfiguration_complete_indicator() override {}
 
+  void on_rrc_resume_request(ue_index_t old_ue_index, establishment_cause_t rrc_resume_cause) override
+  {
+    last_rrc_resume_old_ue_index = old_ue_index;
+    last_rrc_resume_cause        = rrc_resume_cause;
+    ++nof_rrc_resume_requests;
+  }
+
   cu_cp_ue_context_release_request last_cu_cp_ue_context_release_request;
+  unsigned                         nof_ue_location_reports = 0;
+  unsigned                         nof_ue_location_reports_received = 0;
+  unsigned                         nof_ue_location_reports_decoded = 0;
+  unsigned                         nof_ue_location_reports_unsupported = 0;
+  unsigned                         nof_ue_location_reports_decode_failed = 0;
+  unsigned                         nof_rrc_resume_requests = 0;
+  std::optional<ue_index_t>        last_rrc_resume_old_ue_index;
+  std::optional<establishment_cause_t> last_rrc_resume_cause;
+  std::optional<ntn_ue_location_report> last_ue_location_report;
 
 private:
   rrc_ue_reestablishment_context_response reest_context = {};

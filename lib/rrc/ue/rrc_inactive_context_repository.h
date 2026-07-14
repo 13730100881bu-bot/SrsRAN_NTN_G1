@@ -47,6 +47,7 @@ struct rrc_inactive_ue_context {
   ue_index_t              ue_index{ue_index_t::invalid};
   rnti_t                  old_c_rnti{rnti_t::INVALID_RNTI};
   nr_cell_global_id_t     cell{};
+  pci_t                   old_pci                 = INVALID_PCI;
   uint64_t                full_i_rnti             = 0; // 40-bit
   uint32_t                short_i_rnti            = 0; // 24-bit
   uint8_t                 next_hop_chaining_count = 0;

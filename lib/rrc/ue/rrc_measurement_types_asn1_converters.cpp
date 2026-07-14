@@ -795,6 +795,10 @@ srsran::srs_cu_cp::periodical_report_cfg_to_rrc_asn1(const rrc_periodical_report
   asn1_periodical_report_cfg.include_beam_meass = periodical_report_cfg.include_beam_meass;
   // use allowed cell list
   asn1_periodical_report_cfg.use_allowed_cell_list = periodical_report_cfg.use_allowed_cell_list;
+  if (periodical_report_cfg.include_common_location_info_r16) {
+    asn1_periodical_report_cfg.ext                                      = true;
+    asn1_periodical_report_cfg.include_common_location_info_r16_present = true;
+  }
 
   return asn1_periodical_report_cfg;
 }

@@ -57,7 +57,8 @@ ul_ccch_msg_s srsran::test_helpers::create_rrc_reestablishment_request(rnti_t   
   return msg;
 }
 
-ul_dcch_msg_s srsran::test_helpers::create_rrc_setup_complete(uint8_t sel_plmn_id)
+ul_dcch_msg_s srsran::test_helpers::create_rrc_setup_complete(
+    uint8_t sel_plmn_id, std::optional<srs_cu_cp::cu_cp_five_g_s_tmsi> five_g_s_tmsi)
 {
   ul_dcch_msg_s msg;
 
@@ -68,6 +69,10 @@ ul_dcch_msg_s srsran::test_helpers::create_rrc_setup_complete(uint8_t sel_plmn_i
 
   ies.sel_plmn_id = sel_plmn_id;
   ies.ded_nas_msg.from_string("7e004179000d0100f110f0ff000010325476092e02e0e0");
+  if (five_g_s_tmsi.has_value()) {
+    ies.ng_5_g_s_tmsi_value_present = true;
+    ies.ng_5_g_s_tmsi_value.set_ng_5_g_s_tmsi().from_number(five_g_s_tmsi->to_number());
+  }
 
   return msg;
 }

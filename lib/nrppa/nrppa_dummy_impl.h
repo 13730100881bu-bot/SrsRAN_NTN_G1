@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include "srsran/cu_cp/common_task_scheduler.h"
 #include "srsran/nrppa/nrppa.h"
 #include <memory>
 
@@ -31,7 +32,7 @@ namespace srs_cu_cp {
 class nrppa_dummy_impl : public nrppa_interface, public nrppa_message_handler, public nrppa_ue_context_removal_handler
 {
 public:
-  nrppa_dummy_impl();
+  nrppa_dummy_impl(nrppa_cu_cp_notifier& cu_cp_notifier_, common_task_scheduler& common_task_sched_);
   ~nrppa_dummy_impl();
 
   // See nrppa_message_handler for documentation.
@@ -46,6 +47,18 @@ public:
 
 private:
   srslog::basic_logger& logger;
+  nrppa_cu_cp_notifier& cu_cp_notifier;
+  common_task_scheduler& common_task_sched;
+
+  async_task<void> handle_trp_information_request(trp_information_request_t request,
+                                                  amf_index_t               amf_index,
+                                                  bool                      use_standard_codec);
+  async_task<void> handle_positioning_information_request(positioning_information_request_t request, ue_index_t ue_index);
+  async_task<void> handle_positioning_activation_request(positioning_activation_request_t request, ue_index_t ue_index);
+  async_task<void> handle_positioning_deactivation_request(positioning_deactivation_request_t request, ue_index_t ue_index);
+  async_task<void> handle_positioning_assistance_information_control(
+      positioning_assistance_information_control_request_t request, amf_index_t amf_index);
+  async_task<void> handle_measurement_request(measurement_request_t request, ue_index_t ue_index);
 };
 
 } // namespace srs_cu_cp

@@ -21,9 +21,11 @@
  */
 
 #include "ngap_test_helpers.h"
+#include "lib/ngap/ngap_asn1_converters.h"
 #include "srsran/asn1/ngap/ngap_pdu_contents.h"
 #include "srsran/support/async/async_test_utils.h"
 #include "srsran/support/test_utils.h"
+#include <array>
 #include <gtest/gtest.h>
 
 using namespace srsran;
@@ -115,6 +117,18 @@ protected:
            asn1::ngap::ngap_elem_procs_o::init_msg_c::types_opts::rrc_inactive_transition_report;
   }
 
+  bool was_ue_context_suspend_request_sent() const
+  {
+    return n2_gw.last_ngap_msgs.back().pdu.init_msg().value.type() ==
+           asn1::ngap::ngap_elem_procs_o::init_msg_c::types_opts::ue_context_suspend_request;
+  }
+
+  bool was_ue_context_resume_request_sent() const
+  {
+    return n2_gw.last_ngap_msgs.back().pdu.init_msg().value.type() ==
+           asn1::ngap::ngap_elem_procs_o::init_msg_c::types_opts::ue_context_resume_request;
+  }
+
   bool was_location_report_sent() const
   {
     return n2_gw.last_ngap_msgs.back().pdu.init_msg().value.type() ==
@@ -139,6 +153,89 @@ static ngap_message generate_location_reporting_control_message(amf_ue_id_t amf_
   ctrl->ran_ue_ngap_id = ran_ue_id_to_uint(ran_ue_id);
   ctrl->location_report_request_type.event_type.value = asn1::ngap::event_type_opts::direct;
   ctrl->location_report_request_type.report_area.value = asn1::ngap::report_area_opts::cell;
+  return msg;
+}
+
+static ngap_message
+generate_dl_ue_associated_nrppa_transport_message(amf_ue_id_t        amf_ue_id,
+                                                  ran_ue_id_t        ran_ue_id,
+                                                  span<const uint8_t> nrppa_pdu)
+{
+  ngap_message msg = {};
+  msg.pdu.set_init_msg();
+  msg.pdu.init_msg().load_info_obj(ASN1_NGAP_ID_DL_UE_ASSOCIATED_NRPPA_TRANSPORT);
+
+  auto& transport           = msg.pdu.init_msg().value.dl_ue_associated_nrppa_transport();
+  transport->amf_ue_ngap_id = amf_ue_id_to_uint(amf_ue_id);
+  transport->ran_ue_ngap_id = ran_ue_id_to_uint(ran_ue_id);
+  const std::array<uint8_t, 2> routing_id = {0x01, 0x02};
+  transport->routing_id.from_bytes(span<const uint8_t>{routing_id});
+  transport->nrppa_pdu.from_bytes(nrppa_pdu);
+  return msg;
+}
+
+static ngap_message generate_dl_non_ue_associated_nrppa_transport_message(span<const uint8_t> nrppa_pdu)
+{
+  ngap_message msg = {};
+  msg.pdu.set_init_msg();
+  msg.pdu.init_msg().load_info_obj(ASN1_NGAP_ID_DL_NON_UE_ASSOCIATED_NRPPA_TRANSPORT);
+
+  auto& transport                    = msg.pdu.init_msg().value.dl_non_ue_associated_nrppa_transport();
+  const std::array<uint8_t, 2> route = {0x03, 0x04};
+  transport->routing_id.from_bytes(span<const uint8_t>{route});
+  transport->nrppa_pdu.from_bytes(nrppa_pdu);
+  return msg;
+}
+
+static ngap_message generate_ue_context_suspend_response(amf_ue_id_t amf_ue_id, ran_ue_id_t ran_ue_id)
+{
+  ngap_message msg = {};
+  msg.pdu.set_successful_outcome();
+  msg.pdu.successful_outcome().load_info_obj(ASN1_NGAP_ID_UE_CONTEXT_SUSPEND);
+
+  auto& resp           = msg.pdu.successful_outcome().value.ue_context_suspend_resp();
+  resp->amf_ue_ngap_id = amf_ue_id_to_uint(amf_ue_id);
+  resp->ran_ue_ngap_id = ran_ue_id_to_uint(ran_ue_id);
+  return msg;
+}
+
+static ngap_message generate_ue_context_resume_response(amf_ue_id_t amf_ue_id, ran_ue_id_t ran_ue_id)
+{
+  ngap_message msg = {};
+  msg.pdu.set_successful_outcome();
+  msg.pdu.successful_outcome().load_info_obj(ASN1_NGAP_ID_UE_CONTEXT_RESUME);
+
+  auto& resp           = msg.pdu.successful_outcome().value.ue_context_resume_resp();
+  resp->amf_ue_ngap_id = amf_ue_id_to_uint(amf_ue_id);
+  resp->ran_ue_ngap_id = ran_ue_id_to_uint(ran_ue_id);
+  return msg;
+}
+
+static ngap_message generate_ue_context_suspend_failure(amf_ue_id_t amf_ue_id, ran_ue_id_t ran_ue_id)
+{
+  ngap_message msg = {};
+  msg.pdu.set_unsuccessful_outcome();
+  msg.pdu.unsuccessful_outcome().load_info_obj(ASN1_NGAP_ID_UE_CONTEXT_SUSPEND);
+
+  auto& fail           = msg.pdu.unsuccessful_outcome().value.ue_context_suspend_fail();
+  fail->amf_ue_ngap_id = amf_ue_id_to_uint(amf_ue_id);
+  fail->ran_ue_ngap_id = ran_ue_id_to_uint(ran_ue_id);
+  fail->cause.set_radio_network();
+  fail->cause.radio_network() = asn1::ngap::cause_radio_network_opts::unspecified;
+  return msg;
+}
+
+static ngap_message generate_ue_context_resume_failure(amf_ue_id_t amf_ue_id, ran_ue_id_t ran_ue_id)
+{
+  ngap_message msg = {};
+  msg.pdu.set_unsuccessful_outcome();
+  msg.pdu.unsuccessful_outcome().load_info_obj(ASN1_NGAP_ID_UE_CONTEXT_RESUME);
+
+  auto& fail           = msg.pdu.unsuccessful_outcome().value.ue_context_resume_fail();
+  fail->amf_ue_ngap_id = amf_ue_id_to_uint(amf_ue_id);
+  fail->ran_ue_ngap_id = ran_ue_id_to_uint(ran_ue_id);
+  fail->cause.set_radio_network();
+  fail->cause.radio_network() = asn1::ngap::cause_radio_network_opts::unspecified;
   return msg;
 }
 
@@ -562,6 +659,92 @@ TEST_F(ngap_ue_context_management_procedure_test,
   ASSERT_TRUE(was_rrc_inactive_transition_report_sent());
 }
 
+TEST_F(ngap_ue_context_management_procedure_test, ue_context_suspend_request_is_sent_to_amf)
+{
+  ue_index_t  ue_index = this->start_procedure();
+  const auto& ue       = test_ues.at(ue_index);
+
+  async_task<bool> task = ngap->get_ngap_control_message_handler().handle_ue_context_suspend_request(ue_index);
+  lazy_task_launcher<bool> launcher(task);
+
+  ASSERT_TRUE(task.ready());
+  ASSERT_TRUE(task.get());
+  ASSERT_TRUE(was_ue_context_suspend_request_sent());
+  const auto& suspend = n2_gw.last_ngap_msgs.back().pdu.init_msg().value.ue_context_suspend_request();
+  EXPECT_EQ(suspend->amf_ue_ngap_id, amf_ue_id_to_uint(ue.amf_ue_id.value()));
+  EXPECT_EQ(suspend->ran_ue_ngap_id, ran_ue_id_to_uint(ue.ran_ue_id.value()));
+}
+
+TEST_F(ngap_ue_context_management_procedure_test, ue_context_resume_request_is_sent_to_amf)
+{
+  ue_index_t  ue_index = this->start_procedure();
+  const auto& ue       = test_ues.at(ue_index);
+
+  async_task<bool> task = ngap->get_ngap_control_message_handler().handle_ue_context_resume_request(
+      ue_index, establishment_cause_t::mo_sig);
+  lazy_task_launcher<bool> launcher(task);
+
+  ASSERT_TRUE(task.ready());
+  ASSERT_TRUE(task.get());
+  ASSERT_TRUE(was_ue_context_resume_request_sent());
+  const auto& resume = n2_gw.last_ngap_msgs.back().pdu.init_msg().value.ue_context_resume_request();
+  EXPECT_EQ(resume->amf_ue_ngap_id, amf_ue_id_to_uint(ue.amf_ue_id.value()));
+  EXPECT_EQ(resume->ran_ue_ngap_id, ran_ue_id_to_uint(ue.ran_ue_id.value()));
+  EXPECT_EQ(resume->rrc_resume_cause.value, asn1::ngap::rrc_establishment_cause_opts::mo_sig);
+}
+
+TEST_F(ngap_ue_context_management_procedure_test, ue_context_suspend_response_notifies_cu_cp)
+{
+  ue_index_t  ue_index = this->start_procedure();
+  const auto& ue       = test_ues.at(ue_index);
+
+  ngap->handle_message(generate_ue_context_suspend_response(ue.amf_ue_id.value(), ue.ran_ue_id.value()));
+
+  ASSERT_TRUE(cu_cp_notifier.last_suspend_outcome_ue.has_value());
+  EXPECT_EQ(cu_cp_notifier.last_suspend_outcome_ue.value(), ue_index);
+  ASSERT_TRUE(cu_cp_notifier.last_suspend_outcome_success.has_value());
+  EXPECT_TRUE(cu_cp_notifier.last_suspend_outcome_success.value());
+}
+
+TEST_F(ngap_ue_context_management_procedure_test, ue_context_resume_response_notifies_cu_cp)
+{
+  ue_index_t  ue_index = this->start_procedure();
+  const auto& ue       = test_ues.at(ue_index);
+
+  ngap->handle_message(generate_ue_context_resume_response(ue.amf_ue_id.value(), ue.ran_ue_id.value()));
+
+  ASSERT_TRUE(cu_cp_notifier.last_resume_outcome_ue.has_value());
+  EXPECT_EQ(cu_cp_notifier.last_resume_outcome_ue.value(), ue_index);
+  ASSERT_TRUE(cu_cp_notifier.last_resume_outcome_success.has_value());
+  EXPECT_TRUE(cu_cp_notifier.last_resume_outcome_success.value());
+}
+
+TEST_F(ngap_ue_context_management_procedure_test, ue_context_suspend_failure_notifies_cu_cp)
+{
+  ue_index_t  ue_index = this->start_procedure();
+  const auto& ue       = test_ues.at(ue_index);
+
+  ngap->handle_message(generate_ue_context_suspend_failure(ue.amf_ue_id.value(), ue.ran_ue_id.value()));
+
+  ASSERT_TRUE(cu_cp_notifier.last_suspend_outcome_ue.has_value());
+  EXPECT_EQ(cu_cp_notifier.last_suspend_outcome_ue.value(), ue_index);
+  ASSERT_TRUE(cu_cp_notifier.last_suspend_outcome_success.has_value());
+  EXPECT_FALSE(cu_cp_notifier.last_suspend_outcome_success.value());
+}
+
+TEST_F(ngap_ue_context_management_procedure_test, ue_context_resume_failure_notifies_cu_cp)
+{
+  ue_index_t  ue_index = this->start_procedure();
+  const auto& ue       = test_ues.at(ue_index);
+
+  ngap->handle_message(generate_ue_context_resume_failure(ue.amf_ue_id.value(), ue.ran_ue_id.value()));
+
+  ASSERT_TRUE(cu_cp_notifier.last_resume_outcome_ue.has_value());
+  EXPECT_EQ(cu_cp_notifier.last_resume_outcome_ue.value(), ue_index);
+  ASSERT_TRUE(cu_cp_notifier.last_resume_outcome_success.has_value());
+  EXPECT_FALSE(cu_cp_notifier.last_resume_outcome_success.value());
+}
+
 TEST_F(ngap_ue_context_management_procedure_test, when_location_report_is_requested_then_report_is_sent)
 {
   ue_index_t ue_index = this->start_procedure();
@@ -670,4 +853,99 @@ TEST_F(ngap_ue_context_management_procedure_test,
   ASSERT_TRUE(was_location_reporting_failure_sent());
   ASSERT_EQ(n2_gw.last_ngap_msgs.back().pdu.init_msg().value.location_report_fail_ind()->cause.radio_network(),
             asn1::ngap::cause_radio_network_e::options::multiple_location_report_ref_id_instances);
+}
+
+TEST_F(ngap_ue_context_management_procedure_test, dl_ue_associated_nrppa_transport_is_forwarded_to_cu_cp)
+{
+  ue_index_t ue_index = start_procedure();
+  const auto& ue      = test_ues.at(ue_index);
+
+  const std::array<uint8_t, 4> expected_pdu = {0xde, 0xad, 0xbe, 0xef};
+  ngap->handle_message(generate_dl_ue_associated_nrppa_transport_message(
+      ue.amf_ue_id.value(), ue.ran_ue_id.value(), span<const uint8_t>{expected_pdu}));
+
+  ASSERT_TRUE(cu_cp_notifier.last_dl_ue_associated_nrppa_ue.has_value());
+  ASSERT_EQ(cu_cp_notifier.last_dl_ue_associated_nrppa_ue.value(), ue_index);
+  ASSERT_EQ(cu_cp_notifier.last_dl_ue_associated_nrppa_pdu, span<const uint8_t>{expected_pdu});
+}
+
+TEST_F(ngap_ue_context_management_procedure_test, dl_ue_associated_nrppa_transport_with_unknown_ue_is_not_forwarded)
+{
+  const std::array<uint8_t, 2> nrppa_pdu = {0xca, 0xfe};
+
+  ngap->handle_message(generate_dl_ue_associated_nrppa_transport_message(
+      uint_to_amf_ue_id(11), uint_to_ran_ue_id(10), span<const uint8_t>{nrppa_pdu}));
+
+  ASSERT_FALSE(cu_cp_notifier.last_dl_ue_associated_nrppa_ue.has_value());
+}
+
+TEST_F(ngap_ue_context_management_procedure_test, dl_non_ue_associated_nrppa_transport_is_forwarded_to_cu_cp)
+{
+  const std::array<uint8_t, 3> expected_pdu = {0x0a, 0x0b, 0x0c};
+
+  ngap->handle_message(generate_dl_non_ue_associated_nrppa_transport_message(span<const uint8_t>{expected_pdu}));
+
+  ASSERT_TRUE(cu_cp_notifier.last_dl_non_ue_associated_nrppa_amf.has_value());
+  ASSERT_EQ(cu_cp_notifier.last_dl_non_ue_associated_nrppa_amf.value(), amf_index_t::min);
+  ASSERT_EQ(cu_cp_notifier.last_dl_non_ue_associated_nrppa_pdu, span<const uint8_t>{expected_pdu});
+}
+
+TEST_F(ngap_ue_context_management_procedure_test, ul_ue_associated_nrppa_transport_is_sent_to_amf)
+{
+  ue_index_t ue_index = start_procedure();
+  const auto& ue      = test_ues.at(ue_index);
+
+  const std::array<uint8_t, 3> expected_pdu = {0x10, 0x20, 0x30};
+  ngap->get_ngap_control_message_handler().handle_ul_ue_associated_nrppa_transport(
+      ue_index, byte_buffer::create(span<const uint8_t>{expected_pdu}).value());
+
+  const ngap_message& msg = n2_gw.last_ngap_msgs.back();
+  ASSERT_EQ(msg.pdu.init_msg().value.type(),
+            asn1::ngap::ngap_elem_procs_o::init_msg_c::types_opts::ul_ue_associated_nrppa_transport);
+  const auto& transport = msg.pdu.init_msg().value.ul_ue_associated_nrppa_transport();
+  ASSERT_EQ(transport->amf_ue_ngap_id, amf_ue_id_to_uint(ue.amf_ue_id.value()));
+  ASSERT_EQ(transport->ran_ue_ngap_id, ran_ue_id_to_uint(ue.ran_ue_id.value()));
+  ASSERT_EQ(transport->nrppa_pdu, span<const uint8_t>{expected_pdu});
+}
+
+TEST_F(ngap_ue_context_management_procedure_test, ul_non_ue_associated_nrppa_transport_is_sent_to_amf)
+{
+  const std::array<uint8_t, 3> expected_pdu = {0x40, 0x50, 0x60};
+  async_task<void> task = ngap->get_ngap_control_message_handler().handle_ul_non_ue_associated_nrppa_transport(
+      byte_buffer::create(span<const uint8_t>{expected_pdu}).value());
+  lazy_task_launcher<void> launcher(task);
+
+  const ngap_message& msg = n2_gw.last_ngap_msgs.back();
+  ASSERT_EQ(msg.pdu.init_msg().value.type(),
+            asn1::ngap::ngap_elem_procs_o::init_msg_c::types_opts::ul_non_ue_associated_nrppa_transport);
+  const auto& transport = msg.pdu.init_msg().value.ul_non_ue_associated_nrppa_transport();
+  ASSERT_EQ(transport->nrppa_pdu, span<const uint8_t>{expected_pdu});
+}
+
+TEST(ngap_ntn_user_location_converter_test, packs_nr_ntn_tai_info_timestamp_and_derived_tac)
+{
+  cu_cp_user_location_info_nr location;
+  location.nr_cgi.plmn_id  = plmn_identity::test_value();
+  location.nr_cgi.nci      = nr_cell_identity::create(gnb_id_t{411, 22}, 3).value();
+  location.tai.plmn_id     = plmn_identity::test_value();
+  location.tai.tac         = 0x000abc;
+  location.time_stamp      = 0x01020304;
+  location.ntn_derived_tac = 0x000def;
+
+  asn1::ngap::user_location_info_nr_s asn1_location = cu_cp_user_location_info_to_asn1(location);
+
+  EXPECT_EQ(asn1_location.nr_cgi.nr_cell_id.to_number(), location.nr_cgi.nci.value());
+  EXPECT_EQ(plmn_identity::from_bytes(asn1_location.nr_cgi.plmn_id.to_bytes()).value(), location.nr_cgi.plmn_id);
+  EXPECT_EQ(asn1_location.tai.tac.to_number(), location.tai.tac);
+  ASSERT_TRUE(asn1_location.time_stamp_present);
+  EXPECT_EQ(asn1_location.time_stamp.to_number(), location.time_stamp.value());
+
+  ASSERT_TRUE(asn1_location.ie_exts_present);
+  ASSERT_TRUE(asn1_location.ie_exts.nr_ntn_tai_info_present);
+
+  const auto& ntn_tai_info = asn1_location.ie_exts.nr_ntn_tai_info;
+  ASSERT_EQ(ntn_tai_info.tac_list_in_nr_ntn.size(), 1);
+  EXPECT_EQ(ntn_tai_info.tac_list_in_nr_ntn[0].to_number(), location.tai.tac);
+  ASSERT_TRUE(ntn_tai_info.ue_location_derived_tac_in_nr_ntn_present);
+  EXPECT_EQ(ntn_tai_info.ue_location_derived_tac_in_nr_ntn.to_number(), location.ntn_derived_tac.value());
 }

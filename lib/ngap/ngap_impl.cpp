@@ -21,6 +21,7 @@
  */
 
 #include "ngap_impl.h"
+#include "ngap_asn1_converters.h"
 #include "log_helpers.h"
 #include "ngap_asn1_helpers.h"
 #include "ngap_asn1_utils.h"
@@ -36,6 +37,7 @@
 #include "procedures/ngap_pdu_session_resource_release_procedure.h"
 #include "procedures/ngap_pdu_session_resource_setup_procedure.h"
 #include "procedures/ngap_ue_context_release_procedure.h"
+#include "procedures/ngap_ue_context_suspend_resume_helper.h"
 #include "srsran/asn1/ngap/common.h"
 #include "srsran/ngap/ngap_setup.h"
 #include "srsran/ngap/ngap_types.h"
@@ -1018,13 +1020,38 @@ async_task<expected<ngap_dl_ran_status_transfer>> ngap_impl::handle_dl_ran_statu
 
 void ngap_impl::handle_dl_ue_associated_nrppa_transport(const asn1::ngap::dl_ue_associated_nrppa_transport_s& msg)
 {
-  logger.info("DL UE associated NRPPa messages are not supported");
+  const ran_ue_id_t ran_ue_id = uint_to_ran_ue_id(msg->ran_ue_ngap_id);
+  const amf_ue_id_t amf_ue_id = uint_to_amf_ue_id(msg->amf_ue_ngap_id);
+
+  if (!ue_ctxt_list.contains(ran_ue_id)) {
+    logger.warning("ran_ue={} amf_ue={}: Dropping DL UE associated NRPPa Transport. UE context does not exist",
+                   msg->ran_ue_ngap_id,
+                   msg->amf_ue_ngap_id);
+    return;
+  }
+
+  if (!validate_consistent_ue_id_pair(ran_ue_id, amf_ue_id)) {
+    handle_inconsistent_ue_id_pair(ran_ue_id, amf_ue_id);
+    return;
+  }
+
+  ngap_ue_context& ue_ctxt = ue_ctxt_list[ran_ue_id];
+  if (ue_ctxt.ue_ids.amf_ue_id == amf_ue_id_t::invalid) {
+    ue_ctxt_list.update_amf_ue_id(ran_ue_id, amf_ue_id);
+  }
+
+  if (ue_ctxt.release_requested || ue_ctxt.release_scheduled) {
+    ue_ctxt.logger.log_debug("Dropping DL UE associated NRPPa Transport. Cause: UE release is already pending");
+    return;
+  }
+
+  cu_cp_notifier.on_dl_ue_associated_nrppa_transport_pdu(ue_ctxt.ue_ids.ue_index, msg->nrppa_pdu.copy());
 }
 
 void ngap_impl::handle_dl_non_ue_associated_nrppa_transport(
     const asn1::ngap::dl_non_ue_associated_nrppa_transport_s& msg)
 {
-  logger.info("DL non UE associated NRPPa messages are not supported");
+  cu_cp_notifier.on_dl_non_ue_associated_nrppa_transport_pdu(context.amf_index, msg->nrppa_pdu.copy());
 }
 
 #endif // SRSRAN_HAS_ENTERPRISE
@@ -1210,6 +1237,16 @@ void ngap_impl::handle_successful_outcome(const successful_outcome_s& outcome)
         ue_ctxt->ev_mng.handover_cancel_outcome.set(outcome.value.ho_cancel_ack());
       }
     } break;
+    case ngap_elem_procs_o::successful_outcome_c::types_opts::ue_context_suspend_resp: {
+      if (auto* ue_ctxt = get_ue_ctxt_in_ue_assoc_msg(outcome)) {
+        cu_cp_notifier.on_ue_context_suspend_outcome(ue_ctxt->ue_ids.ue_index, true);
+      }
+    } break;
+    case ngap_elem_procs_o::successful_outcome_c::types_opts::ue_context_resume_resp: {
+      if (auto* ue_ctxt = get_ue_ctxt_in_ue_assoc_msg(outcome)) {
+        cu_cp_notifier.on_ue_context_resume_outcome(ue_ctxt->ue_ids.ue_index, true);
+      }
+    } break;
     default:
       logger.error("Successful outcome of type {} is not supported", outcome.value.type().to_string());
   }
@@ -1243,6 +1280,16 @@ void ngap_impl::handle_unsuccessful_outcome(const unsuccessful_outcome_s& outcom
     case ngap_elem_procs_o::unsuccessful_outcome_c::types_opts::ho_prep_fail: {
       if (auto* ue_ctxt = get_ue_ctxt_in_ue_assoc_msg(outcome)) {
         ue_ctxt->ev_mng.handover_preparation_outcome.set(outcome.value.ho_prep_fail());
+      }
+    } break;
+    case ngap_elem_procs_o::unsuccessful_outcome_c::types_opts::ue_context_suspend_fail: {
+      if (auto* ue_ctxt = get_ue_ctxt_in_ue_assoc_msg(outcome)) {
+        cu_cp_notifier.on_ue_context_suspend_outcome(ue_ctxt->ue_ids.ue_index, false);
+      }
+    } break;
+    case ngap_elem_procs_o::unsuccessful_outcome_c::types_opts::ue_context_resume_fail: {
+      if (auto* ue_ctxt = get_ue_ctxt_in_ue_assoc_msg(outcome)) {
+        cu_cp_notifier.on_ue_context_resume_outcome(ue_ctxt->ue_ids.ue_index, false);
       }
     } break;
     default:
@@ -1387,14 +1434,49 @@ void ngap_impl::handle_inter_cu_ho_rrc_recfg_complete(const ue_index_t          
 
 void ngap_impl::handle_ul_ue_associated_nrppa_transport(ue_index_t ue_index, const byte_buffer& nrppa_pdu)
 {
-  logger.info("UL UE associated NRPPa messages are not supported");
+  if (!ue_ctxt_list.contains(ue_index)) {
+    logger.warning("ue={}: Dropping UL UE associated NRPPa Transport. UE context does not exist", ue_index);
+    return;
+  }
+
+  ngap_ue_context& ue_ctxt = ue_ctxt_list[ue_index];
+  if (ue_ctxt.ue_ids.amf_ue_id == amf_ue_id_t::invalid) {
+    ue_ctxt.logger.log_debug("Dropping UL UE associated NRPPa Transport. UE does not have an AMF UE ID");
+    return;
+  }
+  if (ue_ctxt.release_requested || ue_ctxt.release_scheduled) {
+    ue_ctxt.logger.log_debug("Dropping UL UE associated NRPPa Transport. Cause: UE release is already pending");
+    return;
+  }
+
+  ngap_message ngap_msg = {};
+  ngap_msg.pdu.set_init_msg();
+  ngap_msg.pdu.init_msg().load_info_obj(ASN1_NGAP_ID_UL_UE_ASSOCIATED_NRPPA_TRANSPORT);
+
+  auto& transport           = ngap_msg.pdu.init_msg().value.ul_ue_associated_nrppa_transport();
+  transport->amf_ue_ngap_id = amf_ue_id_to_uint(ue_ctxt.ue_ids.amf_ue_id);
+  transport->ran_ue_ngap_id = ran_ue_id_to_uint(ue_ctxt.ue_ids.ran_ue_id);
+  transport->nrppa_pdu      = nrppa_pdu.copy();
+
+  if (!tx_pdu_notifier.on_new_message(ngap_msg)) {
+    ue_ctxt.logger.log_warning("AMF notifier is not set. Cannot send UL UE associated NRPPa Transport");
+  }
 }
 
 async_task<void> ngap_impl::handle_ul_non_ue_associated_nrppa_transport(const byte_buffer& nrppa_pdu)
 {
-  logger.info("UL non UE associated NRPPa messages are not supported");
-  return launch_async([](coro_context<async_task<void>>& ctx) {
+  ngap_message ngap_msg = {};
+  ngap_msg.pdu.set_init_msg();
+  ngap_msg.pdu.init_msg().load_info_obj(ASN1_NGAP_ID_UL_NON_UE_ASSOCIATED_NRPPA_TRANSPORT);
+
+  auto& transport      = ngap_msg.pdu.init_msg().value.ul_non_ue_associated_nrppa_transport();
+  transport->nrppa_pdu = nrppa_pdu.copy();
+
+  return launch_async([this, ngap_msg = std::move(ngap_msg)](coro_context<async_task<void>>& ctx) {
     CORO_BEGIN(ctx);
+    if (!tx_pdu_notifier.on_new_message(ngap_msg)) {
+      logger.warning("AMF notifier is not set. Cannot send UL non UE associated NRPPa Transport");
+    }
     CORO_RETURN();
   });
 }
@@ -1457,6 +1539,93 @@ ngap_impl::handle_rrc_inactive_transition_report_required(const ngap_rrc_inactiv
       CORO_EARLY_RETURN(false);
     }
 
+    CORO_RETURN(true);
+  });
+}
+
+async_task<bool> ngap_impl::handle_ue_context_suspend_request(ue_index_t ue_index)
+{
+  if (!ue_ctxt_list.contains(ue_index)) {
+    logger.warning("ue={}: Dropping UEContextSuspendRequest. UE context does not exist", ue_index);
+    return launch_async([](coro_context<async_task<bool>>& ctx) {
+      CORO_BEGIN(ctx);
+      CORO_RETURN(false);
+    });
+  }
+
+  ngap_ue_context& ue_ctxt = ue_ctxt_list[ue_index];
+  if (ue_ctxt.ue_ids.amf_ue_id == amf_ue_id_t::invalid) {
+    ue_ctxt.logger.log_debug("Dropping UEContextSuspendRequest. UE does not have an AMF UE ID");
+    return launch_async([](coro_context<async_task<bool>>& ctx) {
+      CORO_BEGIN(ctx);
+      CORO_RETURN(false);
+    });
+  }
+  if (ue_ctxt.release_requested || ue_ctxt.release_scheduled) {
+    ue_ctxt.logger.log_debug("Dropping UEContextSuspendRequest. Cause: UE release is already pending");
+    return launch_async([](coro_context<async_task<bool>>& ctx) {
+      CORO_BEGIN(ctx);
+      CORO_RETURN(false);
+    });
+  }
+
+  ngap_message ngap_msg = ngap_ue_context_suspend_resume_helper::build_ue_context_suspend_request(
+      ue_ctxt.ue_ids.amf_ue_id, ue_ctxt.ue_ids.ran_ue_id);
+
+  return launch_async([this, ue_index, ngap_msg = std::move(ngap_msg)](coro_context<async_task<bool>>& ctx) mutable {
+    CORO_BEGIN(ctx);
+    if (!ue_ctxt_list.contains(ue_index)) {
+      logger.warning("ue={}: Dropping scheduled UEContextSuspendRequest. UE context does not exist anymore", ue_index);
+      CORO_EARLY_RETURN(false);
+    }
+    if (!tx_pdu_notifier.on_new_message(ngap_msg)) {
+      logger.error("ue={}: AMF notifier is not set. Cannot send UEContextSuspendRequest", ue_index);
+      CORO_EARLY_RETURN(false);
+    }
+    CORO_RETURN(true);
+  });
+}
+
+async_task<bool>
+ngap_impl::handle_ue_context_resume_request(ue_index_t ue_index, establishment_cause_t rrc_resume_cause)
+{
+  if (!ue_ctxt_list.contains(ue_index)) {
+    logger.warning("ue={}: Dropping UEContextResumeRequest. UE context does not exist", ue_index);
+    return launch_async([](coro_context<async_task<bool>>& ctx) {
+      CORO_BEGIN(ctx);
+      CORO_RETURN(false);
+    });
+  }
+
+  ngap_ue_context& ue_ctxt = ue_ctxt_list[ue_index];
+  if (ue_ctxt.ue_ids.amf_ue_id == amf_ue_id_t::invalid) {
+    ue_ctxt.logger.log_debug("Dropping UEContextResumeRequest. UE does not have an AMF UE ID");
+    return launch_async([](coro_context<async_task<bool>>& ctx) {
+      CORO_BEGIN(ctx);
+      CORO_RETURN(false);
+    });
+  }
+  if (ue_ctxt.release_requested || ue_ctxt.release_scheduled) {
+    ue_ctxt.logger.log_debug("Dropping UEContextResumeRequest. Cause: UE release is already pending");
+    return launch_async([](coro_context<async_task<bool>>& ctx) {
+      CORO_BEGIN(ctx);
+      CORO_RETURN(false);
+    });
+  }
+
+  ngap_message ngap_msg = ngap_ue_context_suspend_resume_helper::build_ue_context_resume_request(
+      ue_ctxt.ue_ids.amf_ue_id, ue_ctxt.ue_ids.ran_ue_id, establishment_cause_to_asn1(rrc_resume_cause));
+
+  return launch_async([this, ue_index, ngap_msg = std::move(ngap_msg)](coro_context<async_task<bool>>& ctx) mutable {
+    CORO_BEGIN(ctx);
+    if (!ue_ctxt_list.contains(ue_index)) {
+      logger.warning("ue={}: Dropping scheduled UEContextResumeRequest. UE context does not exist anymore", ue_index);
+      CORO_EARLY_RETURN(false);
+    }
+    if (!tx_pdu_notifier.on_new_message(ngap_msg)) {
+      logger.error("ue={}: AMF notifier is not set. Cannot send UEContextResumeRequest", ue_index);
+      CORO_EARLY_RETURN(false);
+    }
     CORO_RETURN(true);
   });
 }

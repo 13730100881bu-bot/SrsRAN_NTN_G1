@@ -31,6 +31,7 @@ set(SOURCES
         rrc_ue_reconfig_proc_test.cpp
         rrc_ue_capability_transfer_proc_test.cpp
         rrc_ue_reest_proc_test.cpp
+        rrc_ue_resume_proc_test.cpp
         rrc_ue_meas_report_test.cpp)
 
 add_executable(rrc_ue_test ${SOURCES})

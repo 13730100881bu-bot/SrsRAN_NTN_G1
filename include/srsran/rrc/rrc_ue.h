@@ -214,6 +214,8 @@ struct rrc_ue_release_context {
   cu_cp_user_location_info_nr user_location_info;
   byte_buffer                 rrc_release_pdu;
   srb_id_t                    srb_id = srb_id_t::nulltype;
+  std::optional<uint64_t>     full_i_rnti;
+  std::optional<uint32_t>     short_i_rnti;
 };
 
 struct rrc_ue_handover_reconfiguration_context {
@@ -421,10 +423,18 @@ public:
   /// \param[in] old_ue_index The index of the old UE to remove.
   virtual void on_rrc_reestablishment_complete(ue_index_t old_ue_index) = 0;
 
+  /// \brief Notify the CU-CP that a valid RRC Resume Request matched a stored inactive UE.
+  /// \param[in] old_ue_index The index of the stored inactive UE.
+  /// \param[in] rrc_resume_cause The RRC resume cause mapped to the common establishment cause domain.
+  virtual void on_rrc_resume_request(ue_index_t old_ue_index, establishment_cause_t rrc_resume_cause) {}
+
   /// \brief Notify the CU-CP that RRC Reconfiguration has been received, so that the CU-CP can notify the DU if
   /// required.
   /// \param[in] ue_index The index of the UE that received the reconfiguration complete.
   virtual void on_rrc_reconfiguration_complete_indicator() = 0;
+
+  /// \brief Notify the CU-CP that the stored UE capability information has changed.
+  virtual void on_ue_capability_updated() {}
 
   /// \brief Notify the CU-CP to transfer and remove ue contexts.
   /// \param[in] old_ue_index The old UE index of the UE that sent the Reestablishment Request.
@@ -464,6 +474,9 @@ public:
 
   /// \brief Submit a decoded NTN UE location report for location-based mobility.
   virtual void on_ue_location_report(const ntn_ue_location_report& location_report) {}
+
+  /// \brief Report RRC-side NTN UE location payload processing outcome for observability.
+  virtual void on_ue_location_report_outcome(ntn_rrc_ue_location_report_outcome outcome) {}
 };
 
 class rrc_ue_context_handler

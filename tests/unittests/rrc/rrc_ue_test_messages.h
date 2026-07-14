@@ -58,5 +58,11 @@ byte_buffer generate_rrc_reestablishment_complete_pdu();
 /// \brief Generate RRC Container with Measurement Report
 byte_buffer generate_measurement_report_pdu();
 
+/// \brief Generate RRC Container with Measurement Report containing LocationInfo-r16 common coordinates.
+byte_buffer generate_measurement_report_with_location_coordinate_pdu(const std::string& location_coordinate_hex);
+
+/// \brief Generate RRC Container with Measurement Report containing unsupported coarseLocationInfo-r17.
+byte_buffer generate_measurement_report_with_coarse_location_pdu(const std::string& coarse_location_hex);
+
 } // namespace srs_cu_cp
 } // namespace srsran

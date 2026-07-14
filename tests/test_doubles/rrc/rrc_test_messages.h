@@ -27,9 +27,11 @@
 #include "srsran/asn1/rrc_nr/ul_ccch_msg_ies.h"
 #include "srsran/asn1/rrc_nr/ul_dcch_msg.h"
 #include "srsran/asn1/rrc_nr/ul_dcch_msg_ies.h"
+#include "srsran/cu_cp/cu_cp_types.h"
 #include "srsran/ran/pci.h"
 #include "srsran/ran/plmn_identity.h"
 #include "srsran/ran/rnti.h"
+#include <optional>
 
 namespace srsran {
 namespace test_helpers {
@@ -43,7 +45,8 @@ asn1::rrc_nr::ul_ccch_msg_s create_rrc_reestablishment_request(rnti_t           
                                                                const std::string& short_mac_i = "1100011101010100");
 
 /// \brief Generates a dummy RRC Setup Complete message.
-asn1::rrc_nr::ul_dcch_msg_s create_rrc_setup_complete(uint8_t sel_plmn_id = 1);
+asn1::rrc_nr::ul_dcch_msg_s create_rrc_setup_complete(
+    uint8_t sel_plmn_id = 1, std::optional<srs_cu_cp::cu_cp_five_g_s_tmsi> five_g_s_tmsi = std::nullopt);
 
 /// \brief Generates a dummy RRC Reestablishment Complete message.
 asn1::rrc_nr::ul_dcch_msg_s create_rrc_reestablishment_complete();

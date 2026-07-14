@@ -39,10 +39,107 @@
 #include "srsran/asn1/rrc_nr/ul_ccch_msg_ies.h"
 #include "srsran/ran/rb_id.h"
 #include <chrono>
+#include <cmath>
 
 using namespace srsran;
 using namespace srs_cu_cp;
 using namespace asn1::rrc_nr;
+
+namespace {
+
+struct decoded_ntn_location_coordinate {
+  double                latitude_deg  = 0.0;
+  double                longitude_deg = 0.0;
+  std::optional<double> horizontal_accuracy_m;
+};
+
+enum class ntn_location_coordinate_decode_status { decoded, unsupported, decode_failed };
+
+struct ntn_location_coordinate_decode_result {
+  ntn_location_coordinate_decode_status           status = ntn_location_coordinate_decode_status::decode_failed;
+  std::optional<decoded_ntn_location_coordinate> location;
+};
+
+int32_t sign_extend_24bit(uint32_t value)
+{
+  value &= 0x00ffffffU;
+  if ((value & 0x00800000U) != 0) {
+    return static_cast<int32_t>(value | 0xff000000U);
+  }
+  return static_cast<int32_t>(value);
+}
+
+std::optional<double> decode_horizontal_uncertainty_m(uint8_t uncertainty_code)
+{
+  return 10.0 * (std::pow(1.1, static_cast<double>(uncertainty_code)) - 1.0);
+}
+
+ntn_location_coordinate_decode_result decode_location_coordinate_r16(const asn1::dyn_octstring& coordinate)
+{
+  if (coordinate.size() == 0) {
+    return {ntn_location_coordinate_decode_status::decode_failed, std::nullopt};
+  }
+
+  const unsigned shape_type = coordinate[0] >> 4U;
+  const bool     is_ellipsoid_point = shape_type == 1U;
+  const bool     is_uncertainty_circle = shape_type == 2U;
+  if (!is_ellipsoid_point && !is_uncertainty_circle) {
+    return {ntn_location_coordinate_decode_status::unsupported, std::nullopt};
+  }
+  if ((is_ellipsoid_point && coordinate.size() != 7U) || (is_uncertainty_circle && coordinate.size() != 8U)) {
+    return {ntn_location_coordinate_decode_status::decode_failed, std::nullopt};
+  }
+
+  const bool     south = (coordinate[1] & 0x80U) != 0;
+  const uint32_t latitude_raw =
+      (static_cast<uint32_t>(coordinate[1] & 0x7fU) << 16U) | (static_cast<uint32_t>(coordinate[2]) << 8U) |
+      static_cast<uint32_t>(coordinate[3]);
+  const uint32_t longitude_raw = (static_cast<uint32_t>(coordinate[4]) << 16U) |
+                                 (static_cast<uint32_t>(coordinate[5]) << 8U) |
+                                 static_cast<uint32_t>(coordinate[6]);
+
+  decoded_ntn_location_coordinate decoded;
+  decoded.latitude_deg = static_cast<double>(latitude_raw) * 90.0 / 8388608.0;
+  if (south) {
+    decoded.latitude_deg = -decoded.latitude_deg;
+  }
+  decoded.longitude_deg = static_cast<double>(sign_extend_24bit(longitude_raw)) * 180.0 / 8388608.0;
+  if (is_uncertainty_circle) {
+    decoded.horizontal_accuracy_m = decode_horizontal_uncertainty_m(coordinate[7]);
+  }
+
+  return {ntn_location_coordinate_decode_status::decoded, decoded};
+}
+
+establishment_cause_t rrc_resume_cause_to_establishment_cause(resume_cause_opts::options cause)
+{
+  switch (cause) {
+    case resume_cause_opts::emergency:
+      return establishment_cause_t::emergency;
+    case resume_cause_opts::high_prio_access:
+      return establishment_cause_t::high_prio_access;
+    case resume_cause_opts::mt_access:
+      return establishment_cause_t::mt_access;
+    case resume_cause_opts::mo_sig:
+      return establishment_cause_t::mo_sig;
+    case resume_cause_opts::mo_data:
+      return establishment_cause_t::mo_data;
+    case resume_cause_opts::mo_voice_call:
+      return establishment_cause_t::mo_voice_call;
+    case resume_cause_opts::mo_video_call:
+      return establishment_cause_t::mo_video_call;
+    case resume_cause_opts::mo_sms:
+      return establishment_cause_t::mo_sms;
+    case resume_cause_opts::mps_prio_access:
+      return establishment_cause_t::mps_prio_access;
+    case resume_cause_opts::mcs_prio_access:
+      return establishment_cause_t::mcs_prio_access;
+    default:
+      return establishment_cause_t::unknown;
+  }
+}
+
+} // namespace
 
 void rrc_ue_impl::handle_ul_ccch_pdu(byte_buffer pdu)
 {
@@ -176,10 +273,7 @@ bool rrc_ue_impl::verify_resume_mac_i(const asn1::rrc_nr::rrc_resume_request_ies
   // (source_pci | target_cell_id | source_c_rnti). The MAC is computed with K_RRCint of the source
   // cell, using the stored algorithms. The 16-bit result is carried in resume_mac_i.
   asn1::rrc_nr::var_resume_mac_input_s var_input;
-  var_input.source_pci = stored.cell.nci.value() & 0xFFFFU; // Old PCI is not explicitly stored;
-                                                            // use a placeholder that makes UE-side
-                                                            // and gNB-side inputs match. Proper
-                                                            // fix would stash old_pci on suspend.
+  var_input.source_pci = stored.old_pci;
   var_input.target_cell_id.from_number(context.cell.cgi.nci.value());
   var_input.source_c_rnti = to_value(stored.old_c_rnti);
 
@@ -219,29 +313,132 @@ void rrc_ue_impl::fallback_resume_to_rrc_setup(std::optional<rrc_inactive_ue_con
   on_ue_release_required(ngap_cause_radio_network_t::unspecified);
 }
 
+bool rrc_ue_impl::restore_inactive_context_for_resume(const rrc_inactive_ue_context& stored)
+{
+  if (!stored.transfer_context.sec_context.sel_algos.algos_selected) {
+    logger.log_warning("Cannot resume inactive UE. Cause: stored security algorithms are missing");
+    return false;
+  }
+
+  if (!context.transfer_context.has_value()) {
+    context.transfer_context.emplace(stored.transfer_context);
+  }
+
+  cu_cp_ue_notifier.update_security_context(stored.transfer_context.sec_context);
+  cu_cp_ue_notifier.perform_horizontal_key_derivation(context.cell.pci, context.cell.ssb_arfcn);
+
+  for (const srb_id_t srb : stored.transfer_context.srbs) {
+    if (srb == srb_id_t::srb0) {
+      continue;
+    }
+    if (context.srbs.find(srb) == context.srbs.end()) {
+      srb_creation_message srb_msg{};
+      srb_msg.ue_index        = context.ue_index;
+      srb_msg.srb_id          = srb;
+      srb_msg.enable_security = true;
+      srb_msg.pdcp_cfg        = {};
+      create_srb(srb_msg);
+    }
+    context.srbs.at(srb).enable_full_security(cu_cp_ue_notifier.get_rrc_128_as_config());
+  }
+
+  if (context.srbs.find(srb_id_t::srb1) == context.srbs.end()) {
+    logger.log_warning("Cannot resume inactive UE. Cause: stored SRB1 context is missing");
+    return false;
+  }
+
+  return true;
+}
+
+bool rrc_ue_impl::send_rrc_resume(const rrc_inactive_ue_context&             stored,
+                                  asn1::rrc_nr::resume_cause_opts::options resume_cause)
+{
+  if (du_to_cu_container.empty()) {
+    logger.log_warning("Cannot send RRCResume. Cause: masterCellGroup container is missing");
+    return false;
+  }
+
+  rrc_transaction transaction = event_mng->transactions.create_transaction();
+
+  dl_dcch_msg_s dl_dcch_msg;
+  auto&         resume = dl_dcch_msg.msg.set_c1().set_rrc_resume();
+  resume.rrc_transaction_id = transaction.id();
+  auto& resume_ies = resume.crit_exts.set_rrc_resume();
+  resume_ies.master_cell_group = du_to_cu_container.copy();
+
+  pdcp_tx_result pdcp_packing_result =
+      context.srbs.at(srb_id_t::srb1).pack_rrc_pdu(pack_into_pdu(dl_dcch_msg, "RRCResume"));
+  if (!pdcp_packing_result.is_successful()) {
+    logger.log_warning("Cannot send RRCResume. Cause: PDCP packing failed with {}",
+                       pdcp_packing_result.get_failure_cause());
+    return false;
+  }
+
+  byte_buffer resume_pdu = pdcp_packing_result.pop_pdu();
+  f1ap_pdu_notifier.on_new_rrc_pdu(srb_id_t::srb1, resume_pdu);
+  log_rrc_message(logger, Tx, resume_pdu, dl_dcch_msg, srb_id_t::srb1, "DCCH DL");
+
+  pending_resume_full_i_rnti  = stored.full_i_rnti;
+  pending_resume_old_ue_index = stored.ue_index;
+  pending_resume_cause        = rrc_resume_cause_to_establishment_cause(resume_cause);
+  context.state               = rrc_state::connected;
+  return true;
+}
+
+bool rrc_ue_impl::refresh_inactive_context_for_rnau(const rrc_inactive_ue_context& stored)
+{
+  rrc_ue_release_context release_context = get_rrc_ue_inactive_release_context();
+  if (release_context.rrc_release_pdu.empty() || release_context.srb_id == srb_id_t::nulltype) {
+    logger.log_warning("Cannot refresh RRC_INACTIVE context after RNAU. Cause: RRCRelease(suspend) packing failed");
+    return false;
+  }
+
+  f1ap_pdu_notifier.on_new_rrc_pdu(release_context.srb_id, release_context.rrc_release_pdu);
+  rrc_inactive_context_repository::get_instance().remove(stored.full_i_rnti);
+  logger.log_info("RNAU refreshed RRC_INACTIVE context (old full I-RNTI=0x{:010x})", stored.full_i_rnti);
+  return true;
+}
+
+void rrc_ue_impl::handle_rrc_resume_complete(const asn1::rrc_nr::rrc_resume_complete_s& msg)
+{
+  if (!pending_resume_old_ue_index.has_value() || !pending_resume_cause.has_value()) {
+    logger.log_warning("Ignoring RRCResumeComplete. Cause: no pending RRCResume transaction");
+    return;
+  }
+
+  const auto& ies = msg.crit_exts.rrc_resume_complete();
+  context.state   = rrc_state::connected;
+  metrics_notifier.on_new_rrc_connection();
+
+  cu_cp_notifier.on_rrc_resume_request(pending_resume_old_ue_index.value(), pending_resume_cause.value());
+
+  if (!ies.ded_nas_msg.empty()) {
+    cu_cp_ul_nas_transport ul_nas_msg         = {};
+    ul_nas_msg.ue_index                       = context.ue_index;
+    ul_nas_msg.nas_pdu                        = ies.ded_nas_msg.copy();
+    ul_nas_msg.user_location_info.nr_cgi      = context.cell.cgi;
+    ul_nas_msg.user_location_info.tai.plmn_id = context.plmn_id;
+    ul_nas_msg.user_location_info.tai.tac     = context.cell.tac;
+    ngap_notifier.on_ul_nas_transport_message(ul_nas_msg);
+  }
+
+  if (pending_resume_full_i_rnti.has_value()) {
+    rrc_inactive_context_repository::get_instance().remove(pending_resume_full_i_rnti.value());
+  }
+  pending_resume_full_i_rnti.reset();
+  pending_resume_old_ue_index.reset();
+  pending_resume_cause.reset();
+}
+
 void rrc_ue_impl::handle_rrc_resume_request(const asn1::rrc_nr::rrc_resume_request_s& msg)
 {
   // TS 38.331 §5.3.13 RRCResumeRequest reception.
   //
-  // Full Resume steps:
-  //   1. Look up stored inactive context by short I-RNTI.
-  //   2. Verify ResumeMAC-I using the stored K_RRCint (prevents replay/spoofing).
-  //   3. Horizontal K_gNB derivation from stored K_gNB + NCC, regenerate AS keys
-  //      (K_RRCenc, K_RRCint, K_UPenc, K_UPint) — TS 33.501 §6.9.2.1.1.
-  //   4. Restore UP context so subsequent DRB setup can reuse existing PDU sessions.
-  //   5. Fallback to RRCSetup on any verification failure.
+  // Native same-CU RRC resume validates the stored inactive context, restores AS security/SRB1,
+  // sends RRCResume, and notifies CU-CP only after RRCResumeComplete. Verification or packing
+  // failures keep the existing RRCSetup fallback. RNAU refreshes the inactive context with a fresh
+  // suspend release.
   //
-  // RNAU path: TS 38.331 §5.3.13.8 allows the network to send a fresh RRCRelease(suspendConfig)
-  // to keep the UE in RRC_INACTIVE. This MVP still drops back to RRC Setup for RNAU but correctly
-  // tears down the stored context afterwards.
-  //
-  // What is intentionally NOT done yet in this MVP:
-  //   - Sending an actual RRCResume message on SRB1 (requires F1AP SRB1 setup before the PDU is
-  //     transmitted; current code path reuses the RRC Setup flow which brings SRB1 up naturally).
-  //   - NGAP UE Context Resume Request to the AMF (helper exists in
-  //     ngap_ue_context_suspend_resume_helper.h but the corresponding NGAP notifier method is not
-  //     yet wired; the UE continues working because the N3 tunnel is not torn down at suspend
-  //     time in the current suspend implementation).
 
   const auto& ies          = msg.rrc_resume_request;
   uint32_t    short_i_rnti = ies.resume_id.to_number() & 0xFFFFFFU;
@@ -274,24 +471,25 @@ void rrc_ue_impl::handle_rrc_resume_request(const asn1::rrc_nr::rrc_resume_reque
   // Step 3: restore the stored security context onto the new UE object and derive K_gNB* horizontally
   // using the current cell's PCI and SSB-ARFCN together with the stored NCC. This ensures the PDCP
   // keys on the gNB match what the UE independently derives during its own Resume handling.
-  cu_cp_ue_notifier.update_security_context(stored->transfer_context.sec_context);
-  cu_cp_ue_notifier.perform_horizontal_key_derivation(context.cell.pci, context.cell.ssb_arfcn);
+  if (!restore_inactive_context_for_resume(*stored)) {
+    fallback_resume_to_rrc_setup(std::move(stored), "stored inactive AS context cannot be restored");
+    return;
+  }
   logger.log_debug("Restored security context and performed horizontal key derivation (NCC={}, PCI={}, ARFCN={})",
                    stored->next_hop_chaining_count,
                    context.cell.pci,
                    context.cell.ssb_arfcn);
 
-  // Step 4: UP context will be restored by the subsequent RRC Setup flow via the transfer_context
-  // snapshot below (same mechanism as intra-CU mobility).
   if (is_rnau) {
-    logger.log_info("RNAU RRCResumeRequest (short I-RNTI=0x{:06x}): MVP reuses RRCSetup path; a future iteration"
-                    " can keep the UE in RRC_INACTIVE by emitting a fresh RRCRelease(suspendConfig)",
-                    short_i_rnti);
+    if (!refresh_inactive_context_for_rnau(*stored)) {
+      fallback_resume_to_rrc_setup(std::move(stored), "RNAU inactive context refresh failed");
+    }
+    return;
   }
 
-  // Step 5: hand the AS context off to the fresh RRC UE (keys, UP context, SRBs, capabilities) so
-  // the RRCSetup-based bearer restoration can resume without a fresh NAS authentication.
-  fallback_resume_to_rrc_setup(std::move(stored), "MVP bearer restoration via RRCSetup fallback");
+  if (!send_rrc_resume(*stored, ies.resume_cause.value)) {
+    fallback_resume_to_rrc_setup(std::move(stored), "native RRCResume preparation failed");
+  }
 }
 
 void rrc_ue_impl::stop()
@@ -337,6 +535,10 @@ void rrc_ue_impl::handle_pdu(const srb_id_t srb_id, byte_buffer rrc_pdu)
         context.transfer_context.value().is_inter_cu_handover = false;
         cu_cp_notifier.on_rrc_reconfiguration_complete_indicator();
       }
+      break;
+    case ul_dcch_msg_type_c::c1_c_::types_opts::rrc_resume_complete:
+      handle_rrc_transaction_complete(ul_dcch_msg, ul_dcch_msg.msg.c1().rrc_resume_complete().rrc_transaction_id);
+      handle_rrc_resume_complete(ul_dcch_msg.msg.c1().rrc_resume_complete());
       break;
     case ul_dcch_msg_type_c::c1_c_::types_opts::rrc_reest_complete:
       handle_rrc_transaction_complete(ul_dcch_msg, ul_dcch_msg.msg.c1().rrc_reest_complete().rrc_transaction_id);
@@ -414,9 +616,43 @@ void rrc_ue_impl::handle_measurement_report(const asn1::rrc_nr::meas_report_s& m
 {
   const auto& asn1_meas_results = msg.crit_exts.meas_report().meas_results;
   if (asn1_meas_results.location_info_r16.is_present()) {
-    logger.log_debug("MeasurementReport contains LocationInfo-r16; decoded coordinate extraction is not supported");
+    measurement_notifier.on_ue_location_report_outcome(ntn_rrc_ue_location_report_outcome::received);
+    const location_info_r16_s& location_info = *asn1_meas_results.location_info_r16;
+    if (location_info.common_location_info_r16_present &&
+        location_info.common_location_info_r16.location_coordinate_r16.size() > 0) {
+      const ntn_location_coordinate_decode_result decode_result =
+          decode_location_coordinate_r16(location_info.common_location_info_r16.location_coordinate_r16);
+      switch (decode_result.status) {
+        case ntn_location_coordinate_decode_status::decoded: {
+          measurement_notifier.on_ue_location_report_outcome(ntn_rrc_ue_location_report_outcome::decoded);
+          ntn_ue_location_report location_report;
+          location_report.ue_index      = context.ue_index;
+          location_report.serving_nci   = context.cell.cgi.nci;
+          location_report.latitude_deg  = decode_result.location->latitude_deg;
+          location_report.longitude_deg = decode_result.location->longitude_deg;
+          location_report.horizontal_accuracy_m = decode_result.location->horizontal_accuracy_m;
+          location_report.source        = ntn_ue_location_report_source::measurement_report;
+          location_report.received_time = std::chrono::steady_clock::now();
+          measurement_notifier.on_ue_location_report(location_report);
+          break;
+        }
+        case ntn_location_coordinate_decode_status::unsupported:
+          measurement_notifier.on_ue_location_report_outcome(ntn_rrc_ue_location_report_outcome::unsupported);
+          logger.log_debug("MeasurementReport LocationInfo-r16 uses an unsupported LocationCoordinates shape");
+          break;
+        case ntn_location_coordinate_decode_status::decode_failed:
+          measurement_notifier.on_ue_location_report_outcome(ntn_rrc_ue_location_report_outcome::decode_failed);
+          logger.log_debug("MeasurementReport LocationInfo-r16 coordinate payload is malformed");
+          break;
+      }
+    } else {
+      measurement_notifier.on_ue_location_report_outcome(ntn_rrc_ue_location_report_outcome::unsupported);
+      logger.log_debug("MeasurementReport contains LocationInfo-r16 without common location coordinates");
+    }
   }
   if (asn1_meas_results.coarse_location_info_r17.size() > 0) {
+    measurement_notifier.on_ue_location_report_outcome(ntn_rrc_ue_location_report_outcome::received);
+    measurement_notifier.on_ue_location_report_outcome(ntn_rrc_ue_location_report_outcome::unsupported);
     logger.log_debug("MeasurementReport contains coarseLocationInfo-r17 ({} bytes); decoded coordinate extraction is "
                      "not supported",
                      asn1_meas_results.coarse_location_info_r17.size());
@@ -442,6 +678,8 @@ void rrc_ue_impl::handle_location_measurement_indication(const asn1::rrc_nr::loc
     return;
   }
 
+  measurement_notifier.on_ue_location_report_outcome(ntn_rrc_ue_location_report_outcome::received);
+  measurement_notifier.on_ue_location_report_outcome(ntn_rrc_ue_location_report_outcome::unsupported);
   logger.log_debug("LocationMeasurementIndication received; measurement payload does not expose decoded UE "
                    "geographical coordinates");
 }
@@ -455,6 +693,8 @@ void rrc_ue_impl::handle_ue_assistance_information(const asn1::rrc_nr::ue_assist
 
   const auto& ies = msg.crit_exts.ue_assist_info();
   if (ies.late_non_crit_ext.size() > 0) {
+    measurement_notifier.on_ue_location_report_outcome(ntn_rrc_ue_location_report_outcome::received);
+    measurement_notifier.on_ue_location_report_outcome(ntn_rrc_ue_location_report_outcome::unsupported);
     logger.log_debug("UEAssistanceInformation contains lateNonCriticalExtension ({} bytes); decoded UE location is not "
                      "available",
                      ies.late_non_crit_ext.size());
@@ -739,8 +979,19 @@ bool rrc_ue_impl::store_ue_capabilities(byte_buffer ue_capabilities)
 
 async_task<bool> rrc_ue_impl::handle_rrc_ue_capability_transfer_request(const rrc_ue_capability_transfer_request& msg)
 {
+  static_cast<void>(msg);
   // Launch RRC UE capability transfer procedure.
-  return launch_async<rrc_ue_capability_transfer_procedure>(context, *this, *event_mng, logger);
+  async_task<bool> transfer_task = launch_async<rrc_ue_capability_transfer_procedure>(context, *this, *event_mng, logger);
+  return launch_async([this, transfer_task = std::move(transfer_task)](coro_context<async_task<bool>>& ctx) mutable {
+    bool procedure_result = false;
+
+    CORO_BEGIN(ctx);
+    CORO_AWAIT_VALUE(procedure_result, transfer_task);
+    if (procedure_result) {
+      cu_cp_notifier.on_ue_capability_updated();
+    }
+    CORO_RETURN(procedure_result);
+  });
 }
 
 rrc_ue_release_context rrc_ue_impl::get_rrc_ue_release_context(bool                                requires_rrc_message,
@@ -838,6 +1089,7 @@ rrc_ue_release_context rrc_ue_impl::get_rrc_ue_inactive_release_context()
   stored_ctx.ue_index     = context.ue_index;
   stored_ctx.old_c_rnti   = context.c_rnti;
   stored_ctx.cell         = context.cell.cgi;
+  stored_ctx.old_pci      = context.cell.pci;
   stored_ctx.full_i_rnti  = full_i_rnti;
   stored_ctx.short_i_rnti = short_i_rnti;
   // Snapshot the AS context (security, UP, SRBs, capabilities) so a future
@@ -873,6 +1125,8 @@ rrc_ue_release_context rrc_ue_impl::get_rrc_ue_inactive_release_context()
 
   release_context.rrc_release_pdu = pdcp_packing_result.pop_pdu();
   release_context.srb_id          = srb_id_t::srb1;
+  release_context.full_i_rnti     = full_i_rnti;
+  release_context.short_i_rnti    = short_i_rnti;
 
   // Transition the UE to RRC_INACTIVE.
   context.state = rrc_state::connected_inactive;
