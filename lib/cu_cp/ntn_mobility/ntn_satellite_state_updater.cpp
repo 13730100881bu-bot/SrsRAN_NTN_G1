@@ -27,18 +27,52 @@ using namespace srsran;
 using namespace srs_cu_cp;
 
 using orbit_propagator_variant = ntn_satellite_state_updater::orbit_propagator_variant;
+using orbit_propagator_entry   = ntn_satellite_state_updater::orbit_propagator_entry;
 
-static expected<orbit_propagator_variant, std::string>
-create_orbit_propagator(const ntn_satellite_state_update_config& cfg)
+static srs_ntn::circular_orbit_model_config
+make_circular_orbit_model_config(const ntn_circular_orbit_satellite_config& cfg)
+{
+  srs_ntn::circular_orbit_model_config orbit_cfg;
+  orbit_cfg.altitude_m               = cfg.altitude_m;
+  orbit_cfg.inclination_deg          = cfg.inclination_deg;
+  orbit_cfg.raan_deg                 = cfg.raan_deg;
+  orbit_cfg.argument_of_latitude_deg = cfg.argument_of_latitude_deg;
+  orbit_cfg.epoch                    = cfg.epoch;
+  return orbit_cfg;
+}
+
+static ntn_circular_orbit_satellite_config make_legacy_single_circular_satellite(
+    const ntn_satellite_state_update_config& cfg)
+{
+  ntn_circular_orbit_satellite_config satellite;
+  satellite.satellite_id             = "sat-0";
+  satellite.altitude_m               = cfg.circular_altitude_m;
+  satellite.inclination_deg          = cfg.circular_inclination_deg;
+  satellite.raan_deg                 = cfg.circular_raan_deg;
+  satellite.argument_of_latitude_deg = cfg.circular_argument_of_latitude_deg;
+  satellite.epoch                    = cfg.circular_epoch;
+  return satellite;
+}
+
+static expected<std::vector<orbit_propagator_entry>, std::string>
+create_orbit_propagators(const ntn_satellite_state_update_config& cfg)
 {
   if (cfg.source == ntn_satellite_state_source::circular_orbit) {
-    srs_ntn::circular_orbit_model_config orbit_cfg;
-    orbit_cfg.altitude_m               = cfg.circular_altitude_m;
-    orbit_cfg.inclination_deg          = cfg.circular_inclination_deg;
-    orbit_cfg.raan_deg                 = cfg.circular_raan_deg;
-    orbit_cfg.argument_of_latitude_deg = cfg.circular_argument_of_latitude_deg;
-    orbit_cfg.epoch                    = cfg.circular_epoch;
-    return orbit_propagator_variant{srs_ntn::circular_orbit_propagator{orbit_cfg}};
+    std::vector<ntn_circular_orbit_satellite_config> satellites = cfg.circular_orbit_satellites;
+    if (satellites.empty()) {
+      satellites.push_back(make_legacy_single_circular_satellite(cfg));
+    }
+    std::vector<orbit_propagator_entry> propagators;
+    propagators.reserve(satellites.size());
+    for (const ntn_circular_orbit_satellite_config& satellite : satellites) {
+      if (satellite.satellite_id.empty()) {
+        return make_unexpected("circular orbit satellite id must not be empty");
+      }
+      propagators.push_back({satellite.satellite_id,
+                             orbit_propagator_variant{srs_ntn::circular_orbit_propagator{
+                                 make_circular_orbit_model_config(satellite)}}});
+    }
+    return propagators;
   }
 
   if (cfg.source == ntn_satellite_state_source::tle) {
@@ -46,20 +80,20 @@ create_orbit_propagator(const ntn_satellite_state_update_config& cfg)
     if (!tle.has_value()) {
       return make_unexpected(tle.error());
     }
-    return orbit_propagator_variant{srs_ntn::tle_orbit_propagator{tle.value()}};
+    return std::vector<orbit_propagator_entry>{{"sat-0", orbit_propagator_variant{srs_ntn::tle_orbit_propagator{tle.value()}}}};
   }
 
   return make_unexpected("manual satellite state source has no orbit propagator");
 }
 
 ntn_satellite_state_updater::ntn_satellite_state_updater(ntn_satellite_state_update_config cfg_,
-                                                         orbit_propagator_variant          propagator_,
+                                                         std::vector<orbit_propagator_entry> propagators_,
                                                          cu_cp_ntn_command_handler&        command_handler_,
                                                          timer_manager&                    timers,
                                                          task_executor&                    executor,
                                                          srslog::basic_logger&             logger_) :
   cfg(std::move(cfg_)),
-  propagator(std::move(propagator_)),
+  propagators(std::move(propagators_)),
   command_handler(command_handler_),
   update_timer(timers.create_unique_timer(executor)),
   logger(logger_)
@@ -112,14 +146,35 @@ void ntn_satellite_state_updater::schedule_next_update()
 
 void ntn_satellite_state_updater::update_satellite_state()
 {
-  const auto now   = std::chrono::system_clock::now();
-  auto       state = std::visit([now](const auto& orbit) { return orbit.propagate(now); }, propagator);
+  const auto now = std::chrono::system_clock::now();
+  std::vector<ntn_satellite_state> current_satellites;
+  current_satellites.reserve(propagators.size());
+  for (const orbit_propagator_entry& entry : propagators) {
+    auto state = std::visit([now](const auto& orbit) { return orbit.propagate(now); }, entry.propagator);
+    current_satellites.push_back({entry.satellite_id, state.ecef});
+  }
 
-  const bool accepted = command_handler.handle_ntn_satellite_state_update(state.ecef);
-  logger.debug("NTN orbit state update sub_satellite_lat={}deg sub_satellite_lon={}deg altitude={}m accepted={}",
-               state.sub_satellite_point.latitude,
-               state.sub_satellite_point.longitude,
-               state.sub_satellite_point.altitude,
+  std::vector<ntn_satellite_prediction_step> future_steps;
+  const std::chrono::milliseconds horizon = cfg.predictive_service_window_horizon.count() > 0
+                                                ? cfg.predictive_service_window_horizon
+                                                : cfg.update_period;
+  for (std::chrono::milliseconds offset = cfg.update_period; offset <= horizon && future_steps.size() < 64U;
+       offset += cfg.update_period) {
+    ntn_satellite_prediction_step step;
+    step.offset = offset;
+    step.satellites.reserve(propagators.size());
+    const auto step_time = now + offset;
+    for (const orbit_propagator_entry& entry : propagators) {
+      auto state = std::visit([step_time](const auto& orbit) { return orbit.propagate(step_time); }, entry.propagator);
+      step.satellites.push_back({entry.satellite_id, state.ecef});
+    }
+    future_steps.push_back(std::move(step));
+  }
+
+  const bool accepted = command_handler.handle_ntn_satellite_state_update(current_satellites, future_steps);
+  logger.debug("NTN orbit state update nof_satellites={} timeline_steps={} accepted={}",
+               current_satellites.size(),
+               future_steps.size(),
                accepted);
 }
 
@@ -138,11 +193,11 @@ srsran::srs_cu_cp::create_ntn_satellite_state_updater(const ntn_satellite_state_
     return make_unexpected("satellite state update period must not be negative");
   }
 
-  auto propagator = create_orbit_propagator(cfg);
-  if (!propagator.has_value()) {
-    return make_unexpected(propagator.error());
+  auto propagators = create_orbit_propagators(cfg);
+  if (!propagators.has_value()) {
+    return make_unexpected(propagators.error());
   }
 
   return std::make_unique<ntn_satellite_state_updater>(
-      cfg, std::move(propagator.value()), command_handler, timers, executor, logger);
+      cfg, std::move(propagators.value()), command_handler, timers, executor, logger);
 }

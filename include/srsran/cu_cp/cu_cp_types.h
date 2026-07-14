@@ -25,6 +25,7 @@
 #include "srsran/adt/bounded_bitset.h"
 #include "srsran/adt/byte_buffer.h"
 #include "srsran/adt/slotted_vector.h"
+#include "srsran/f1ap/ntn_ul_slot_resource_request.h"
 #include "srsran/pdcp/pdcp_config.h"
 #include "srsran/ran/cause/e1ap_cause.h"
 #include "srsran/ran/cause/f1ap_cause.h"
@@ -656,10 +657,24 @@ struct cu_cp_inactivity_notification {
 struct ntn_handover_context {
   uint64_t                  handover_attempt_id = 0;
   std::string               target_beam_id;
+  std::string               source_beam_id;
+  std::string               source_analog_beam_id;
+  std::string               target_analog_beam_id;
+  std::string               handover_reason;
   nr_cell_identity          serving_nci = nr_cell_identity::min();
   nr_cell_identity          target_nci  = nr_cell_identity::min();
   unsigned                  consecutive_location_reports = 0;
   std::chrono::milliseconds candidate_age{0};
+  bool                      target_preloaded = false;
+  du_index_t                target_du_index  = du_index_t::invalid;
+  rnti_t                    target_c_rnti    = rnti_t::INVALID_RNTI;
+  std::string               target_uplink_resource_beam_id;
+  nr_cell_identity          target_uplink_resource_nci = nr_cell_identity::min();
+  du_index_t                target_uplink_resource_du_index = du_index_t::invalid;
+  std::string               target_service_pair_reason = "none";
+  std::optional<f1ap_ntn_ul_slot_resource_request> target_ul_slot_request;
+  std::string               target_resource_state = "none";
+  bool                      target_sr_srs_applied = false;
 };
 
 enum class ntn_handover_failure_cause {

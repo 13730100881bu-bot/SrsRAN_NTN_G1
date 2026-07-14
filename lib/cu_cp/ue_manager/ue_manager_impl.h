@@ -87,6 +87,7 @@ public:
 
   /// \brief Get all UE contexts currently known by the CU-CP.
   std::vector<cu_cp_ue*> get_ues();
+  std::vector<const cu_cp_ue*> get_ues() const;
 
   // common
 

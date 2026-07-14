@@ -134,6 +134,16 @@ struct cu_cp_unit_cell_config_item {
   // TODO: Add optional SSB parameters.
 };
 
+/// Circular-orbit satellite entry for NTN location-based mobility.
+struct cu_cp_unit_ntn_circular_orbit_satellite_config {
+  std::string satellite_id;
+  double      altitude_m               = 500000.0;
+  double      inclination_deg          = 53.0;
+  double      raan_deg                 = 0.0;
+  double      argument_of_latitude_deg = 0.0;
+  std::optional<double> epoch_unix_s;
+};
+
 /// NTN location-based mobility application configuration.
 struct cu_cp_unit_ntn_location_mobility_config {
   bool enabled = false;
@@ -144,8 +154,26 @@ struct cu_cp_unit_ntn_location_mobility_config {
   /// Minimum satellite elevation angle for runtime served beam selection.
   double served_beam_min_elevation_deg = 10.0;
 
-  /// Maximum number of beams simultaneously served by the hopping schedule.
+  /// Maximum number of beams in the runtime hopping window. A value of zero means no CU-CP cap.
   unsigned max_nof_served_beams = 1;
+
+  /// Maximum number of simultaneously active analog access beams. A value of zero means no CU-CP cap.
+  unsigned max_nof_active_analog_access_beams = 0;
+
+  /// Maximum number of simultaneously loaded digital service beams. A value of zero means no CU-CP cap.
+  unsigned max_nof_loaded_digital_service_beams = 0;
+
+  /// Idle hold time for preheated NTN analog/digital beams. A value of zero disables idle demotion.
+  unsigned preheated_beam_hold_time_ms = 5000;
+
+  /// Minimum ready guard after preheat application before using a cross-analog target. Zero disables.
+  unsigned preheated_beam_min_ready_time_ms = 1000;
+
+  /// Cooldown before reusing the same source/target analog pair for load rebalancing. Zero disables.
+  unsigned analog_rebalance_pair_cooldown_ms = 10000;
+
+  /// Hold time for target-aware digital capacity reservations. Zero disables expiry.
+  unsigned digital_target_reservation_hold_time_ms = 5000;
 
   /// Rotate the active CU-CP beam-set window across visible beams when more beams are visible than can be active.
   bool served_beam_hopping_enabled = false;
@@ -153,17 +181,42 @@ struct cu_cp_unit_ntn_location_mobility_config {
   /// Number of satellite-state update periods that one hopping window should hold before rotating.
   unsigned served_beam_hopping_dwell_updates = 1;
 
+  /// Enable CU-CP steering and controlled handover to balance load across eligible NTN digital service beams.
+  bool multi_beam_load_balancing_enabled = false;
+
+  /// Prefer beams with active CU-CP UE/DRB/QoS demand when selecting the served/hopping window.
+  bool demand_aware_beam_scheduling_enabled = false;
+
+  /// Reserve multi-beam headroom for NTN handover/rebalance target capacity before admitting low-priority demand.
+  bool multi_beam_headroom_admission_enabled = false;
+
+  /// Minimum source-target UE load delta before proactive load-balancing handover.
+  unsigned multi_beam_load_balancing_min_ue_delta = 2;
+
+  /// Maximum number of load-balancing handovers scheduled in one CU-CP evaluation.
+  unsigned multi_beam_load_balancing_max_handovers_per_eval = 1;
+
+  /// Cooldown before the same UE can be considered for another load-balancing handover.
+  unsigned multi_beam_load_balancing_handover_cooldown_ms = 30000;
+
   /// Satellite state source used for runtime served beam updates: manual, circular_orbit or tle.
   std::string satellite_state_source = "manual";
 
   /// Period of orbit-driven satellite state updates. Zero disables automatic updates.
   unsigned satellite_state_update_period_ms = 0;
 
+  /// Future service-window prediction horizon. Zero keeps legacy one-step prediction.
+  unsigned predictive_service_window_horizon_ms = 0;
+
+  /// Lead time before predicted beam exit when CU-CP prepares handover and blocks new service demand.
+  unsigned predictive_handover_lead_time_ms = 0;
+
   double circular_orbit_altitude_m               = 500000.0;
   double circular_orbit_inclination_deg          = 53.0;
   double circular_orbit_raan_deg                 = 0.0;
   double circular_orbit_argument_of_latitude_deg = 0.0;
   std::optional<double> circular_orbit_epoch_unix_s;
+  std::vector<cu_cp_unit_ntn_circular_orbit_satellite_config> circular_orbit_satellites;
 
   std::string tle_satellite_name;
   std::string tle_line1;
@@ -181,6 +234,12 @@ struct cu_cp_unit_ntn_location_mobility_config {
 
   /// Maximum accepted age of a location sample. Zero disables the age check.
   unsigned location_max_age_ms = 0;
+
+  /// Grace period after a service-bound UE location becomes missing/stale before release. Zero derives the default.
+  unsigned location_lost_release_grace_period_ms = 0;
+
+  /// Maximum age of cached NTN idle paging context. Zero disables context expiry.
+  unsigned idle_paging_context_max_age_ms = 300000;
 
   /// Retry timeout after an accepted NTN handover trigger. Zero disables automatic retry.
   unsigned handover_retry_timeout_ms = 0;
@@ -204,6 +263,29 @@ struct cu_cp_unit_ntn_location_mobility_config {
   unsigned core_network_reporting_min_report_interval_ms = 0;
 };
 
+/// Independent, opt-in management-center source for the two-cell onboard L1 position plan.
+struct cu_cp_unit_ntn_onboard_position_plan_config {
+  bool                  enabled = false;
+  bool                  du_execution_enabled = false;
+  std::string           satellite_id;
+  std::string           plan_json_file;
+  unsigned              reload_period_ms = 0;
+  unsigned              du_prepare_guard_ms = 1000;
+  unsigned              du_prepare_horizon_ms = 4000;
+  unsigned              du_apply_timeout_ms = 500;
+  std::vector<uint64_t> cell_ncis;
+  std::vector<unsigned> cell_pcis;
+  unsigned              max_l1_positions_per_cell      = 128;
+  unsigned              max_l1_positions_per_satellite = 256;
+  unsigned              max_analog_ports_per_cell      = 16;
+  unsigned              max_analog_ports_per_satellite = 32;
+  unsigned              access_slot_us                 = 10000;
+  unsigned              subvisit_duration_us           = 2500;
+  unsigned              max_ssb_interval_ms            = 80;
+  unsigned              max_prach_interval_ms          = 640;
+  unsigned              activation_alignment_ms        = 640;
+};
+
 /// All mobility related configuration parameters.
 struct cu_cp_unit_mobility_config {
   /// List of all cells known to the CU-CP.
@@ -216,6 +298,8 @@ struct cu_cp_unit_mobility_config {
   bool trigger_handover_from_measurements = false;
   /// Location-based NTN mobility configuration.
   cu_cp_unit_ntn_location_mobility_config ntn_location_mobility;
+  /// Versioned onboard position-plan input. Disabled by default and independent of legacy beam-to-NCI mobility.
+  cu_cp_unit_ntn_onboard_position_plan_config ntn_onboard_position_plan;
 };
 
 /// RRC specific configuration parameters.

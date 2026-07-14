@@ -32,13 +32,19 @@ ue_context_release_routine::ue_context_release_routine(const cu_cp_ue_context_re
                                                        f1ap_ue_context_manager&                f1ap_ue_ctxt_mng_,
                                                        cu_cp_ue_removal_handler&               ue_removal_handler_,
                                                        ue_manager&                             ue_mng_,
-                                                       srslog::basic_logger&                   logger_) :
+                                                       srslog::basic_logger&                   logger_,
+                                                       std::optional<cu_cp_user_location_info_nr> ntn_user_location_info_,
+                                                       std::optional<cu_cp_info_on_recommended_cells_and_ran_nodes_for_paging>
+                                                           info_on_recommended_cells_and_ran_nodes_for_paging_) :
   command(command_),
   e1ap_bearer_ctxt_mng(e1ap_bearer_ctxt_mng_),
   f1ap_ue_ctxt_mng(f1ap_ue_ctxt_mng_),
   ue_removal_handler(ue_removal_handler_),
   ue_mng(ue_mng_),
-  logger(logger_)
+  logger(logger_),
+  ntn_user_location_info(std::move(ntn_user_location_info_)),
+  info_on_recommended_cells_and_ran_nodes_for_paging(
+      std::move(info_on_recommended_cells_and_ran_nodes_for_paging_))
 {
   srsran_assert(!command.cause.valueless_by_exception(), "Release command needs to be set.");
 }
@@ -60,7 +66,9 @@ void ue_context_release_routine::operator()(coro_context<async_task<cu_cp_ue_con
     release_context = ue_mng.find_du_ue(command.ue_index)
                           ->get_rrc_ue()
                           ->get_rrc_ue_release_context(command.requires_rrc_release, command.release_wait_time);
-    release_complete.user_location_info = release_context.user_location_info;
+    release_complete.user_location_info = ntn_user_location_info.value_or(release_context.user_location_info);
+    release_complete.info_on_recommended_cells_and_ran_nodes_for_paging =
+        info_on_recommended_cells_and_ran_nodes_for_paging;
   }
 
   if (e1ap_bearer_ctxt_mng != nullptr and

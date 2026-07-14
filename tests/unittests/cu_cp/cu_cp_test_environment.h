@@ -79,6 +79,9 @@ struct cu_cp_test_env_params {
   std::map<unsigned, cu_cp_test_amf_config> amf_configs;
   bool                                      trigger_ho_from_measurements;
   std::optional<ntn_location_mobility_config> ntn_location_mobility;
+  std::optional<ntn_onboard_position_plan_source_config> ntn_onboard_position_plan;
+  bool                                                   ntn_calendar_query_stays_ready = false;
+  bool                                                   ntn_calendar_drop_query_responses = false;
 };
 
 class cu_cp_test_environment
@@ -130,13 +133,19 @@ public:
   [[nodiscard]] bool connect_new_ue(unsigned            du_idx,
                                     gnb_du_ue_f1ap_id_t du_ue_id,
                                     rnti_t              crnti,
-                                    plmn_identity       plmn = plmn_identity::test_value());
+                                    plmn_identity       plmn = plmn_identity::test_value(),
+                                    std::optional<cu_cp_five_g_s_tmsi> five_g_s_tmsi = std::nullopt,
+                                    std::optional<nr_cell_identity> serving_nci = std::nullopt);
   /// Runs the NAS Authentication for a given UE.
   [[nodiscard]] bool authenticate_ue(unsigned du_idx, gnb_du_ue_f1ap_id_t du_ue_id, amf_ue_id_t amf_ue_id);
   /// Runs the Security Mode procedure for a given UE.
-  [[nodiscard]] bool setup_ue_security(unsigned du_idx, gnb_du_ue_f1ap_id_t du_ue_id);
+  [[nodiscard]] bool
+  setup_ue_security(unsigned du_idx, gnb_du_ue_f1ap_id_t du_ue_id, byte_buffer ue_capability_info_pdu = {});
   /// Finishes the registration for a given UE.
-  [[nodiscard]] bool finish_ue_registration(unsigned du_idx, unsigned cu_up_idx, gnb_du_ue_f1ap_id_t du_ue_id);
+  [[nodiscard]] bool finish_ue_registration(unsigned            du_idx,
+                                            unsigned            cu_up_idx,
+                                            gnb_du_ue_f1ap_id_t du_ue_id,
+                                            byte_buffer         registration_complete = {});
   /// Requests PDU Session Resource Setup
   [[nodiscard]] bool
   request_pdu_session_resource_setup(unsigned du_idx, unsigned cu_up_idx, gnb_du_ue_f1ap_id_t du_ue_id);
@@ -191,6 +200,15 @@ public:
   bool wait_for_f1ap_tx_pdu(unsigned                  du_idx,
                             f1ap_message&             f1ap_pdu,
                             std::chrono::milliseconds timeout = std::chrono::milliseconds{500});
+
+  /// Pop an F1AP PDU without the test environment's automatic resource-coordination response.
+  bool wait_for_f1ap_tx_pdu_without_auto_response(
+      unsigned du_idx, f1ap_message& f1ap_pdu, std::chrono::milliseconds timeout = std::chrono::milliseconds{500});
+
+  /// Send the standard mock-DU response for a previously popped resource-coordination request.
+  void respond_to_f1ap_resource_coordination_request(unsigned du_idx, const f1ap_message& request);
+
+  void drain_f1ap_resource_coordination_requests(unsigned du_idx);
 
   const cu_cp_test_env_params& get_test_env_params() const { return params; }
 
@@ -254,6 +272,9 @@ public:
 private:
   class worker_manager;
 
+  void record_last_ntn_ul_slot_request(unsigned du_idx, const f1ap_message& f1ap_pdu);
+  std::optional<f1ap_ntn_ul_slot_resource_result> consume_last_ntn_ul_slot_result(unsigned du_idx);
+
   cu_cp_test_env_params params;
   cu_cp_configuration   cu_cp_cfg{};
 
@@ -277,6 +298,7 @@ private:
   // Attached UEs.
   std::unordered_map<ran_ue_id_t, ue_context>                              attached_ues;
   std::map<unsigned, std::unordered_map<gnb_du_ue_f1ap_id_t, ran_ue_id_t>> du_ue_id_to_ran_ue_id_map;
+  std::map<unsigned, std::optional<f1ap_ntn_ul_slot_resource_request>>      last_ntn_ul_slot_request_by_du;
 
   /// CU-CP instance.
   std::unique_ptr<cu_cp> cu_cp_inst;

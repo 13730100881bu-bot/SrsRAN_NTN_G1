@@ -23,10 +23,13 @@
 #include "cu_cp_unit_config_validator.h"
 #include "srsran/adt/span.h"
 #include "srsran/cu_cp/cell_meas_manager_config.h"
+#include "srsran/f1ap/ntn_access_calendar.h"
 #include "srsran/pdcp/pdcp_t_reordering.h"
 #include "srsran/ran/nr_cgi.h"
 #include "srsran/rlc/rlc_config.h"
+#include "srsran/scheduler/ntn_access_calendar.h"
 #include <cmath>
+#include <limits>
 #include <map>
 #include <set>
 #include <sstream>
@@ -50,13 +53,20 @@ static bool validate_mobility_appconfig(gnb_id_t gnb_id, const cu_cp_unit_mobili
       fmt::print("Invalid CU-CP configuration. NTN served_beam_min_elevation_deg must be within [-90, 90]\n");
       return false;
     }
-    if (ntn_cfg.max_nof_served_beams == 0) {
-      fmt::print("Invalid CU-CP configuration. NTN max_nof_served_beams must be greater than zero\n");
-      return false;
-    }
     if (ntn_cfg.served_beam_hopping_dwell_updates == 0) {
       fmt::print("Invalid CU-CP configuration. NTN served_beam_hopping_dwell_updates must be greater than zero\n");
       return false;
+    }
+    if (ntn_cfg.multi_beam_load_balancing_enabled) {
+      if (ntn_cfg.multi_beam_load_balancing_min_ue_delta == 0) {
+        fmt::print("Invalid CU-CP configuration. NTN multi_beam_load_balancing_min_ue_delta must be greater than zero\n");
+        return false;
+      }
+      if (ntn_cfg.multi_beam_load_balancing_max_handovers_per_eval == 0) {
+        fmt::print(
+            "Invalid CU-CP configuration. NTN multi_beam_load_balancing_max_handovers_per_eval must be greater than zero\n");
+        return false;
+      }
     }
     if (ntn_cfg.satellite_state_source != "manual" && ntn_cfg.satellite_state_source != "circular_orbit" &&
         ntn_cfg.satellite_state_source != "tle") {
@@ -65,18 +75,53 @@ static bool validate_mobility_appconfig(gnb_id_t gnb_id, const cu_cp_unit_mobili
                  ntn_cfg.satellite_state_source);
       return false;
     }
+    if (ntn_cfg.satellite_state_source != "circular_orbit" && !ntn_cfg.circular_orbit_satellites.empty()) {
+      fmt::print("Invalid CU-CP configuration. NTN circular_orbit_satellites requires satellite_state_source=circular_orbit\n");
+      return false;
+    }
+    if (ntn_cfg.predictive_service_window_horizon_ms > 0) {
+      if (ntn_cfg.satellite_state_source == "manual" || ntn_cfg.satellite_state_update_period_ms == 0) {
+        fmt::print("Invalid CU-CP configuration. NTN predictive_service_window_horizon_ms requires orbit-driven satellite updates\n");
+        return false;
+      }
+      if (ntn_cfg.predictive_handover_lead_time_ms > ntn_cfg.predictive_service_window_horizon_ms) {
+        fmt::print("Invalid CU-CP configuration. NTN predictive_handover_lead_time_ms must not exceed predictive_service_window_horizon_ms\n");
+        return false;
+      }
+      const unsigned nof_prediction_steps =
+          (ntn_cfg.predictive_service_window_horizon_ms + ntn_cfg.satellite_state_update_period_ms - 1) /
+          ntn_cfg.satellite_state_update_period_ms;
+      if (nof_prediction_steps > 64) {
+        fmt::print("Invalid CU-CP configuration. NTN predictive service window must not exceed 64 steps\n");
+        return false;
+      }
+    }
     if (ntn_cfg.satellite_state_source != "manual") {
       if (ntn_cfg.satellite_state_update_period_ms == 0) {
         fmt::print("Invalid CU-CP configuration. NTN satellite_state_update_period_ms must be greater than zero\n");
         return false;
       }
       if (ntn_cfg.satellite_state_source == "circular_orbit") {
-        if (!std::isfinite(ntn_cfg.circular_orbit_altitude_m) || ntn_cfg.circular_orbit_altitude_m <= 0.0 ||
-            !std::isfinite(ntn_cfg.circular_orbit_inclination_deg) ||
-            !std::isfinite(ntn_cfg.circular_orbit_raan_deg) ||
-            !std::isfinite(ntn_cfg.circular_orbit_argument_of_latitude_deg)) {
-          fmt::print("Invalid CU-CP configuration. NTN circular orbit configuration is invalid\n");
-          return false;
+        if (ntn_cfg.circular_orbit_satellites.empty()) {
+          if (!std::isfinite(ntn_cfg.circular_orbit_altitude_m) || ntn_cfg.circular_orbit_altitude_m <= 0.0 ||
+              !std::isfinite(ntn_cfg.circular_orbit_inclination_deg) ||
+              !std::isfinite(ntn_cfg.circular_orbit_raan_deg) ||
+              !std::isfinite(ntn_cfg.circular_orbit_argument_of_latitude_deg)) {
+            fmt::print("Invalid CU-CP configuration. NTN circular orbit configuration is invalid\n");
+            return false;
+          }
+        } else {
+          std::set<std::string> satellite_ids;
+          for (const cu_cp_unit_ntn_circular_orbit_satellite_config& satellite :
+               ntn_cfg.circular_orbit_satellites) {
+            if (satellite.satellite_id.empty() || !satellite_ids.insert(satellite.satellite_id).second ||
+                !std::isfinite(satellite.altitude_m) || satellite.altitude_m <= 0.0 ||
+                !std::isfinite(satellite.inclination_deg) || !std::isfinite(satellite.raan_deg) ||
+                !std::isfinite(satellite.argument_of_latitude_deg)) {
+              fmt::print("Invalid CU-CP configuration. NTN circular orbit satellite list is invalid\n");
+              return false;
+            }
+          }
         }
       }
       if (ntn_cfg.satellite_state_source == "tle" && (ntn_cfg.tle_line1.empty() || ntn_cfg.tle_line2.empty())) {
@@ -109,6 +154,112 @@ static bool validate_mobility_appconfig(gnb_id_t gnb_id, const cu_cp_unit_mobili
         fmt::print("Invalid CU-CP configuration. NTN beam '{}' nci={:#x} has no mobility cell config\n",
                    beam.beam_id,
                    beam.nci);
+        return false;
+      }
+    }
+  }
+
+  const auto& position_plan_cfg = config.ntn_onboard_position_plan;
+  if (position_plan_cfg.du_execution_enabled && !position_plan_cfg.enabled) {
+    fmt::print("Invalid CU-CP configuration. NTN DU calendar execution requires the onboard position plan\n");
+    return false;
+  }
+  if (position_plan_cfg.enabled) {
+    if (position_plan_cfg.satellite_id.empty() || position_plan_cfg.plan_json_file.empty()) {
+      fmt::print("Invalid CU-CP configuration. NTN onboard position plan requires satellite_id and plan_json_file\n");
+      return false;
+    }
+    if (position_plan_cfg.cell_ncis.size() != 2 || position_plan_cfg.cell_pcis.size() != 2) {
+      fmt::print("Invalid CU-CP configuration. NTN onboard position plan requires exactly two cell_ncis and cell_pcis\n");
+      return false;
+    }
+    for (uint64_t nci : position_plan_cfg.cell_ncis) {
+      if (!nr_cell_identity::create(nci).has_value()) {
+        fmt::print("Invalid CU-CP configuration. NTN onboard position plan NCI {:#x} exceeds 36 bits\n", nci);
+        return false;
+      }
+    }
+    if (position_plan_cfg.cell_ncis[0] == position_plan_cfg.cell_ncis[1]) {
+      fmt::print("Invalid CU-CP configuration. NTN onboard position plan cell NCIs must be distinct\n");
+      return false;
+    }
+    for (unsigned pci : position_plan_cfg.cell_pcis) {
+      if (pci > MAX_PCI) {
+        fmt::print("Invalid CU-CP configuration. NTN onboard position plan PCI {} exceeds {}\n", pci, MAX_PCI);
+        return false;
+      }
+    }
+
+    if (position_plan_cfg.max_l1_positions_per_cell == 0 ||
+        position_plan_cfg.max_l1_positions_per_satellite == 0 ||
+        position_plan_cfg.max_analog_ports_per_cell == 0 ||
+        position_plan_cfg.max_analog_ports_per_cell >= std::numeric_limits<uint16_t>::max() ||
+        position_plan_cfg.max_analog_ports_per_satellite == 0 || position_plan_cfg.access_slot_us == 0 ||
+        position_plan_cfg.subvisit_duration_us == 0 || position_plan_cfg.max_ssb_interval_ms == 0 ||
+        position_plan_cfg.max_prach_interval_ms == 0 || position_plan_cfg.activation_alignment_ms == 0) {
+      fmt::print("Invalid CU-CP configuration. NTN onboard position-plan capacities and timing values must be positive\n");
+      return false;
+    }
+    if (position_plan_cfg.du_execution_enabled) {
+      if (position_plan_cfg.du_prepare_guard_ms == 0 || position_plan_cfg.du_apply_timeout_ms == 0 ||
+          position_plan_cfg.du_prepare_horizon_ms <= position_plan_cfg.du_prepare_guard_ms ||
+          position_plan_cfg.du_prepare_horizon_ms > 5000) {
+        fmt::print("Invalid CU-CP configuration. NTN DU execution requires a positive apply timeout and a prepare "
+                   "horizon in (guard, 5000] ms\n");
+        return false;
+      }
+    }
+    if (static_cast<uint64_t>(position_plan_cfg.max_l1_positions_per_satellite) >
+        2ULL * position_plan_cfg.max_l1_positions_per_cell) {
+      fmt::print("Invalid CU-CP configuration. NTN satellite L1 capacity exceeds its two-cell capacity\n");
+      return false;
+    }
+    if (static_cast<uint64_t>(position_plan_cfg.max_analog_ports_per_satellite) >
+        2ULL * position_plan_cfg.max_analog_ports_per_cell) {
+      fmt::print("Invalid CU-CP configuration. NTN satellite analog-port capacity exceeds its two-cell capacity\n");
+      return false;
+    }
+
+    const uint64_t max_ssb_interval_us   = 1000ULL * position_plan_cfg.max_ssb_interval_ms;
+    const uint64_t max_prach_interval_us = 1000ULL * position_plan_cfg.max_prach_interval_ms;
+    if (max_ssb_interval_us % position_plan_cfg.access_slot_us != 0 ||
+        max_prach_interval_us % max_ssb_interval_us != 0 ||
+        2ULL * position_plan_cfg.subvisit_duration_us > position_plan_cfg.access_slot_us) {
+      fmt::print("Invalid CU-CP configuration. NTN access-calendar timing values are not exactly schedulable\n");
+      return false;
+    }
+    const uint64_t slots_per_ssb_period = max_ssb_interval_us / position_plan_cfg.access_slot_us;
+    if (static_cast<uint64_t>(position_plan_cfg.max_l1_positions_per_cell) >
+        static_cast<uint64_t>(position_plan_cfg.max_analog_ports_per_cell) * slots_per_ssb_period) {
+      fmt::print("Invalid CU-CP configuration. NTN per-cell L1 capacity cannot meet the configured SSB interval\n");
+      return false;
+    }
+    if (position_plan_cfg.du_execution_enabled) {
+      // Reject unsupported execution profiles at startup instead of accepting a plan that cannot fit the private F1
+      // envelope or the scheduler's fixed-size real-time gate. The inventory path remains independent and can still
+      // retain an oversized management-center candidate when DU execution is disabled.
+      const uint64_t nof_intents_per_position = max_prach_interval_us / max_ssb_interval_us + 2ULL;
+      const uint64_t max_total_intents =
+          static_cast<uint64_t>(position_plan_cfg.max_l1_positions_per_satellite) * nof_intents_per_position;
+      if (position_plan_cfg.max_l1_positions_per_satellite >
+              f1ap_ntn_access_calendar_detail::max_unique_positions ||
+          max_total_intents > f1ap_ntn_access_calendar_detail::max_total_intents) {
+        fmt::print("Invalid CU-CP configuration. NTN DU execution exceeds the F1 access-calendar envelope of {} "
+                   "positions and {} intents\n",
+                   f1ap_ntn_access_calendar_detail::max_unique_positions,
+                   f1ap_ntn_access_calendar_detail::max_total_intents);
+        return false;
+      }
+
+      // NR numerology mu=4 has the largest slot rate (16 slots/ms). A cycle accepted here must therefore fit the
+      // scheduler gate for every supported numerology; lower numerologies consume fewer slots for the same duration.
+      constexpr uint64_t max_nr_slots_per_ms = 16;
+      const uint64_t     max_cycle_slots = position_plan_cfg.max_prach_interval_ms * max_nr_slots_per_ms;
+      if (max_cycle_slots > MAX_NTN_ACCESS_CALENDAR_CYCLE_SLOTS) {
+        fmt::print("Invalid CU-CP configuration. NTN DU execution cycle can require {} slots, exceeding the scheduler "
+                   "access-calendar limit of {}\n",
+                   max_cycle_slots,
+                   MAX_NTN_ACCESS_CALENDAR_CYCLE_SLOTS);
         return false;
       }
     }

@@ -96,6 +96,31 @@ public:
     return true;
   }
 
+  [[nodiscard]] nr_cell_identity make_nci(unsigned sector_id) const
+  {
+    return nr_cell_identity::create(gnb_id_t{411, 22}, sector_id).value();
+  }
+
+  [[nodiscard]] ngap_message make_paging_message_with_recommended_cell(nr_cell_identity nci, unsigned tac = 7) const
+  {
+    ngap_message paging_msg = generate_valid_minimal_paging_message();
+    auto&        paging     = paging_msg.pdu.init_msg().value.paging();
+    paging->tai_list_for_paging[0].tai.tac.from_number(tac);
+
+    paging->assist_data_for_paging_present                                   = true;
+    paging->assist_data_for_paging.assist_data_for_recommended_cells_present = true;
+    auto& recommended_cells = paging->assist_data_for_paging.assist_data_for_recommended_cells
+                                  .recommended_cells_for_paging.recommended_cell_list;
+    recommended_cells.clear();
+
+    asn1::ngap::recommended_cell_item_s recommended_cell;
+    auto&                               nr_cgi = recommended_cell.ngran_cgi.set_nr_cgi();
+    nr_cgi.plmn_id.from_string("00f110");
+    nr_cgi.nr_cell_id.from_number(nci.value());
+    recommended_cells.push_back(recommended_cell);
+    return paging_msg;
+  }
+
   [[nodiscard]] bool is_valid_minimal_paging_result(const f1ap_message& msg)
   {
     const auto& paging_msg = msg.pdu.init_msg().value.paging();
@@ -316,4 +341,39 @@ TEST_F(cu_cp_paging_test, when_valid_paging_message_with_optional_values_receive
   // Make sure he paging request is in the metrics.
   auto report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
   ASSERT_EQ(report.ngaps[0].metrics.nof_cn_initiated_paging_requests, 1) << "Paging request should be in the metrics";
+}
+
+TEST_F(cu_cp_paging_test, when_recommended_cell_matches_one_du_then_paging_is_only_sent_to_that_du)
+{
+  // Connect DU and run F1Setup.
+  unsigned du_idx = setup_du(test_helpers::generate_f1_setup_request());
+
+  // Connect second DU with a different cell in the same TAC.
+  const nr_cell_identity recommended_nci = make_nci(1);
+  unsigned du_idx2 = setup_du(test_helpers::generate_f1_setup_request(
+      int_to_gnb_du_id(0x12), {{.nci = recommended_nci, .pci = 1, .tac = 7}}));
+
+  ASSERT_TRUE(send_ngap_paging(du_idx, make_paging_message_with_recommended_cell(recommended_nci)));
+
+  ASSERT_TRUE(this->wait_for_f1ap_tx_pdu(du_idx2, f1ap_pdu));
+  ASSERT_TRUE(test_helpers::is_valid_paging(f1ap_pdu));
+  const auto& paging_msg = f1ap_pdu.pdu.init_msg().value.paging();
+  ASSERT_EQ(paging_msg->paging_cell_list.size(), 1);
+  const auto& paging_cell_item = paging_msg->paging_cell_list[0].value().paging_cell_item();
+  EXPECT_EQ(paging_cell_item.nr_cgi.nr_cell_id.to_number(), recommended_nci.value());
+
+  ASSERT_FALSE(this->get_du(du_idx).try_pop_dl_pdu(f1ap_pdu));
+}
+
+TEST_F(cu_cp_paging_test, when_recommended_cell_is_unusable_then_paging_falls_back_to_matching_tac)
+{
+  // Connect DU and run F1Setup.
+  unsigned du_idx = setup_du(test_helpers::generate_f1_setup_request());
+
+  const nr_cell_identity unknown_nci = nr_cell_identity::create(gnb_id_t{411, 22}, 99).value();
+  ASSERT_TRUE(send_ngap_paging(du_idx, make_paging_message_with_recommended_cell(unknown_nci)));
+
+  ASSERT_TRUE(this->wait_for_f1ap_tx_pdu(du_idx, f1ap_pdu));
+  ASSERT_TRUE(test_helpers::is_valid_paging(f1ap_pdu));
+  ASSERT_TRUE(is_valid_minimal_paging_result(f1ap_pdu));
 }

@@ -19,9 +19,20 @@
 #
 
 add_executable(ntn_mobility_test
+  ntn_assistance_snapshot_test.cpp
+  ntn_access_calendar_audit_test.cpp
+  ntn_beam_tac_test.cpp
+  ntn_beam_service_resource_manager_test.cpp
   ntn_beam_placement_planner_test.cpp
+  ntn_beam_rebalance_policy_test.cpp
+  ntn_qos_policy_test.cpp
+  ntn_onboard_position_plan_test.cpp
   ntn_satellite_state_updater_test.cpp
+  ntn_service_switch_over_controller_test.cpp
   ntn_served_beam_scheduler_test.cpp
+  ntn_sib19_assistance_test.cpp
+  ntn_sib19_broadcast_controller_test.cpp
+  ntn_ue_capability_gate_test.cpp
 )
 target_include_directories(ntn_mobility_test PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(ntn_mobility_test srsran_cu_cp_ntn_mobility srsran_support srslog gtest gtest_main)

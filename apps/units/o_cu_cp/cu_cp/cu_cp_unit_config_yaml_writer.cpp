@@ -205,16 +205,44 @@ static YAML::Node build_cu_cp_ntn_location_mobility_section(const cu_cp_unit_ntn
   node["beam_table_json_file"]                   = config.beam_table_json_file;
   node["served_beam_min_elevation_deg"]          = config.served_beam_min_elevation_deg;
   node["max_nof_served_beams"]                   = config.max_nof_served_beams;
+  node["max_nof_active_analog_access_beams"]     = config.max_nof_active_analog_access_beams;
+  node["max_nof_loaded_digital_service_beams"]   = config.max_nof_loaded_digital_service_beams;
+  node["preheated_beam_hold_time_ms"]            = config.preheated_beam_hold_time_ms;
+  node["preheated_beam_min_ready_time_ms"]       = config.preheated_beam_min_ready_time_ms;
+  node["analog_rebalance_pair_cooldown_ms"]      = config.analog_rebalance_pair_cooldown_ms;
+  node["digital_target_reservation_hold_time_ms"] = config.digital_target_reservation_hold_time_ms;
   node["served_beam_hopping_enabled"]            = config.served_beam_hopping_enabled;
   node["served_beam_hopping_dwell_updates"]      = config.served_beam_hopping_dwell_updates;
+  node["multi_beam_load_balancing_enabled"]      = config.multi_beam_load_balancing_enabled;
+  node["demand_aware_beam_scheduling_enabled"]   = config.demand_aware_beam_scheduling_enabled;
+  node["multi_beam_headroom_admission_enabled"]  = config.multi_beam_headroom_admission_enabled;
+  node["multi_beam_load_balancing_min_ue_delta"] = config.multi_beam_load_balancing_min_ue_delta;
+  node["multi_beam_load_balancing_max_handovers_per_eval"] =
+      config.multi_beam_load_balancing_max_handovers_per_eval;
+  node["multi_beam_load_balancing_handover_cooldown_ms"] =
+      config.multi_beam_load_balancing_handover_cooldown_ms;
   node["satellite_state_source"]                 = config.satellite_state_source;
   node["satellite_state_update_period_ms"]       = config.satellite_state_update_period_ms;
+  node["predictive_service_window_horizon_ms"]   = config.predictive_service_window_horizon_ms;
+  node["predictive_handover_lead_time_ms"]       = config.predictive_handover_lead_time_ms;
   node["circular_orbit_altitude_m"]              = config.circular_orbit_altitude_m;
   node["circular_orbit_inclination_deg"]         = config.circular_orbit_inclination_deg;
   node["circular_orbit_raan_deg"]                = config.circular_orbit_raan_deg;
   node["circular_orbit_argument_of_latitude_deg"] = config.circular_orbit_argument_of_latitude_deg;
   if (config.circular_orbit_epoch_unix_s.has_value()) {
     node["circular_orbit_epoch_unix_s"] = config.circular_orbit_epoch_unix_s.value();
+  }
+  for (const cu_cp_unit_ntn_circular_orbit_satellite_config& satellite : config.circular_orbit_satellites) {
+    YAML::Node satellite_node;
+    satellite_node["satellite_id"]                     = satellite.satellite_id;
+    satellite_node["altitude_m"]                       = satellite.altitude_m;
+    satellite_node["inclination_deg"]                  = satellite.inclination_deg;
+    satellite_node["raan_deg"]                         = satellite.raan_deg;
+    satellite_node["argument_of_latitude_deg"]         = satellite.argument_of_latitude_deg;
+    if (satellite.epoch_unix_s.has_value()) {
+      satellite_node["epoch_unix_s"] = satellite.epoch_unix_s.value();
+    }
+    node["circular_orbit_satellites"].push_back(satellite_node);
   }
   node["tle_satellite_name"]                     = config.tle_satellite_name;
   node["tle_line1"]                              = config.tle_line1;
@@ -223,6 +251,8 @@ static YAML::Node build_cu_cp_ntn_location_mobility_section(const cu_cp_unit_ntn
   node["time_to_trigger_ms"]                     = config.time_to_trigger_ms;
   node["max_report_gap_ms"]                      = config.max_report_gap_ms;
   node["location_max_age_ms"]                    = config.location_max_age_ms;
+  node["location_lost_release_grace_period_ms"]  = config.location_lost_release_grace_period_ms;
+  node["idle_paging_context_max_age_ms"]          = config.idle_paging_context_max_age_ms;
   node["handover_retry_timeout_ms"]              = config.handover_retry_timeout_ms;
   node["required_consecutive_location_reports"]  = config.required_consecutive_location_reports;
   node["boundary_hysteresis_m"]                  = config.boundary_hysteresis_m;
@@ -235,6 +265,34 @@ static YAML::Node build_cu_cp_ntn_location_mobility_section(const cu_cp_unit_ntn
   node["core_network_reporting_min_report_interval_ms"] =
       config.core_network_reporting_min_report_interval_ms;
 
+  return node;
+}
+
+static YAML::Node
+build_cu_cp_ntn_onboard_position_plan_section(const cu_cp_unit_ntn_onboard_position_plan_config& config)
+{
+  YAML::Node node;
+  node["enabled"]          = config.enabled;
+  node["du_execution_enabled"] = config.du_execution_enabled;
+  node["satellite_id"]     = config.satellite_id;
+  node["plan_json_file"]   = config.plan_json_file;
+  node["reload_period_ms"] = config.reload_period_ms;
+  node["du_prepare_guard_ms"] = config.du_prepare_guard_ms;
+  node["du_prepare_horizon_ms"] = config.du_prepare_horizon_ms;
+  node["du_apply_timeout_ms"] = config.du_apply_timeout_ms;
+  node["cell_ncis"]        = config.cell_ncis;
+  node["cell_pcis"]        = config.cell_pcis;
+  node["cell_ncis"].SetStyle(YAML::EmitterStyle::Flow);
+  node["cell_pcis"].SetStyle(YAML::EmitterStyle::Flow);
+  node["max_l1_positions_per_cell"]      = config.max_l1_positions_per_cell;
+  node["max_l1_positions_per_satellite"] = config.max_l1_positions_per_satellite;
+  node["max_analog_ports_per_cell"]      = config.max_analog_ports_per_cell;
+  node["max_analog_ports_per_satellite"] = config.max_analog_ports_per_satellite;
+  node["access_slot_us"]                  = config.access_slot_us;
+  node["subvisit_duration_us"]            = config.subvisit_duration_us;
+  node["max_ssb_interval_ms"]             = config.max_ssb_interval_ms;
+  node["max_prach_interval_ms"]           = config.max_prach_interval_ms;
+  node["activation_alignment_ms"]          = config.activation_alignment_ms;
   return node;
 }
 
@@ -251,6 +309,8 @@ static YAML::Node build_cu_cp_mobility_section(const cu_cp_unit_mobility_config&
     node["report_configs"] = build_cu_cp_mobility_report_section(report);
   }
   node["ntn_location_mobility"] = build_cu_cp_ntn_location_mobility_section(config.ntn_location_mobility);
+  node["ntn_onboard_position_plan"] =
+      build_cu_cp_ntn_onboard_position_plan_section(config.ntn_onboard_position_plan);
 
   return node;
 }

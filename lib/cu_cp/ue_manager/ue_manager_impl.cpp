@@ -251,6 +251,16 @@ std::vector<cu_cp_ue*> ue_manager::get_ues()
   return result;
 }
 
+std::vector<const cu_cp_ue*> ue_manager::get_ues() const
+{
+  std::vector<const cu_cp_ue*> result;
+  result.reserve(ues.size());
+  for (const auto& ue : ues) {
+    result.push_back(&ue.second);
+  }
+  return result;
+}
+
 ue_task_scheduler* ue_manager::find_ue_task_scheduler(ue_index_t ue_index)
 {
   if (ues.find(ue_index) != ues.end() && ues.at(ue_index).du_ue_created()) {

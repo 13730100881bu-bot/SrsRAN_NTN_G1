@@ -31,10 +31,13 @@
 #include "srsran/e2/e2ap_configuration.h"
 #include "srsran/e2/gateways/e2_connection_client.h"
 #include "srsran/f1ap/cu_cp/f1ap_configuration.h"
+#include "srsran/ran/nr_cell_identity.h"
+#include "srsran/ran/pci.h"
 #include "srsran/ran/tac.h"
 #include "srsran/rrc/rrc_ue_config.h"
 #include "srsran/support/async/async_task.h"
 #include "srsran/support/executors/task_executor.h"
+#include <array>
 #include <chrono>
 
 namespace srsran {
@@ -63,9 +66,39 @@ struct ran_node_configuration {
   std::string ran_node_name = "gnb01";
 };
 
+/// Opt-in source for management-center versioned onboard L1 position plans.
+/// This is independent of the legacy per-beam NCI location-mobility profile.
+struct ntn_onboard_position_plan_source_config {
+  bool                      enabled = false;
+  /// Deploy checked calendars over F1AP and require matching DU/MAC applied feedback before CU-CP activation.
+  bool                      du_execution_enabled = false;
+  std::string               satellite_id;
+  std::string               plan_json_file;
+  std::chrono::milliseconds reload_period{0};
+  /// Conservative time reserved for F1/DU/MAC prepare, scheduler publication and downstream buffering.
+  std::chrono::milliseconds du_prepare_guard{1000};
+  /// Open the DU prepare window this long before activation; must stay inside the plain-SFN mapping horizon.
+  std::chrono::milliseconds du_prepare_horizon{4000};
+  /// Maximum post-epoch time allowed for both scheduler cells to report applied before rollback.
+  std::chrono::milliseconds du_apply_timeout{500};
+  /// Exactly two stable opaque onboard NR cell identities. Ordering has no protocol meaning.
+  std::array<nr_cell_identity, 2> cell_ncis{nr_cell_identity::min(), nr_cell_identity::min()};
+  std::array<pci_t, 2>            cell_pcis{INVALID_PCI, INVALID_PCI};
+  unsigned                        max_l1_positions_per_cell      = 128;
+  unsigned                        max_l1_positions_per_satellite = 256;
+  unsigned                        max_analog_ports_per_cell      = 16;
+  unsigned                        max_analog_ports_per_satellite = 32;
+  std::chrono::microseconds       access_slot{10000};
+  std::chrono::microseconds       subvisit_duration{2500};
+  std::chrono::microseconds       max_ssb_interval{80000};
+  std::chrono::microseconds       max_prach_interval{640000};
+  std::chrono::milliseconds       activation_alignment{640};
+};
+
 struct mobility_configuration {
   cell_meas_manager_cfg meas_manager_config;
   mobility_manager_cfg  mobility_manager_config;
+  ntn_onboard_position_plan_source_config onboard_position_plan;
 };
 
 /// Configuration passed to CU-CP.

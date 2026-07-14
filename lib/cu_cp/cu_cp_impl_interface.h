@@ -73,6 +73,12 @@ public:
   /// \returns Pointer to the NGAP UE notifier.
   virtual ngap_cu_cp_ue_notifier* handle_new_ngap_ue(ue_index_t ue_index) = 0;
 
+  /// \brief Observe the InitialUEMessage before it is forwarded to NGAP.
+  virtual void handle_rrc_initial_ue_message(const cu_cp_initial_ue_message& msg) = 0;
+
+  /// \brief Apply CU-CP paging policy before forwarding a Paging message to DUs.
+  virtual void handle_paging_message(cu_cp_paging_message& msg) = 0;
+
   /// \brief Handle a reeceived handover request.
   /// \param[in] ue_index Index of the UE.
   /// \param[in] selected_plmn The selected PLMN identity of the UE.
@@ -139,6 +145,12 @@ public:
   virtual ngap_location_reporting_control_response
   handle_location_reporting_control(const ngap_location_reporting_control& request) = 0;
 
+  /// \brief Handles an AMF UE Context Suspend response/failure.
+  virtual void handle_ue_context_suspend_outcome(ue_index_t ue_index, bool success) = 0;
+
+  /// \brief Handles an AMF UE Context Resume response/failure.
+  virtual void handle_ue_context_resume_outcome(ue_index_t ue_index, bool success) = 0;
+
   /// \brief Handle N2 AMF connection drop.
   /// \param[in] amf_index The index of the dropped AMF.
   virtual void handle_n2_disconnection(amf_index_t amf_index) = 0;
@@ -166,6 +178,44 @@ public:
   /// \returns The TRP information CU-CP response.
   virtual async_task<trp_information_cu_cp_response_t>
   handle_trp_information_request(const trp_information_request_t& request) = 0;
+
+  /// \brief Handle a UE-associated Positioning Information request.
+  /// \param[in] request The Positioning Information request.
+  /// \returns The Positioning Information outcome.
+  virtual async_task<expected<positioning_information_response_t, positioning_information_failure_t>>
+  handle_positioning_information_request(const positioning_information_request_t& request) = 0;
+
+  /// \brief Handle a UE-associated Positioning Activation request.
+  /// \param[in] request The Positioning Activation request.
+  /// \returns The Positioning Activation outcome.
+  virtual async_task<expected<positioning_activation_response_t, positioning_activation_failure_t>>
+  handle_positioning_activation_request(const positioning_activation_request_t& request) = 0;
+
+  /// \brief Handle a UE-associated Positioning Deactivation request.
+  /// \param[in] request The Positioning Deactivation request.
+  /// \returns The local fire-and-forget outcome.
+  virtual async_task<expected<positioning_deactivation_response_t, positioning_deactivation_failure_t>>
+  handle_positioning_deactivation_request(const positioning_deactivation_request_t& request) = 0;
+
+  /// \brief Handle a non-UE-associated Positioning Assistance Information Control request.
+  /// \param[in] request The Positioning Assistance Information Control request.
+  /// \returns The assistance information feedback outcome.
+  virtual async_task<expected<positioning_assistance_information_feedback_t,
+                              positioning_assistance_information_failure_t>>
+  handle_positioning_assistance_information_control(
+      const positioning_assistance_information_control_request_t& request) = 0;
+
+  /// \brief Handle a UE-associated Measurement request.
+  /// \param[in] request The Measurement request.
+  /// \returns The Measurement outcome.
+  virtual async_task<expected<measurement_response_t, measurement_failure_t>>
+  handle_positioning_measurement_request(const measurement_request_t& request) = 0;
+
+  /// \brief Handle an unsupported NRPPa payload procedure observed by the NRPPa endpoint.
+  virtual void handle_unsupported_nrppa_pdu(std::string_view reason) = 0;
+
+  /// \brief Handle standard NRPPa codec observability events observed by the NRPPa endpoint.
+  virtual void handle_nrppa_standard_codec_event(const nrppa_standard_codec_event& event) = 0;
 };
 
 /// Handler of E1AP-CU-CP events.
@@ -227,6 +277,11 @@ public:
   /// \return True if the UE connection is accepted, false otherwise.
   virtual bool handle_ue_plmn_selected(ue_index_t ue_index, const plmn_identity& plmn) = 0;
 
+  /// \brief Handles an RRC setup request before the selected PLMN is known.
+  /// \param[in] ue_index The index of the UE.
+  /// \return True if the UE setup request is accepted, false otherwise.
+  virtual bool handle_ue_setup_request(ue_index_t ue_index) = 0;
+
   /// \brief Handle the reception of an RRC Reestablishment Request by transfering UE Contexts at the RRC.
   /// \param[in] old_pci The old PCI contained in the RRC Reestablishment Request.
   /// \param[in] old_c_rnti The old C-RNTI contained in the RRC Reestablishment Request.
@@ -246,6 +301,14 @@ public:
   /// \brief Handle an successful reestablishment by removing the old UE.
   /// \param[in] ue_index The index of the old UE to remove.
   virtual void handle_rrc_reestablishment_complete(ue_index_t old_ue_index) = 0;
+
+  /// \brief Handle a valid RRC Resume Request for a stored inactive UE.
+  /// \param[in] ue_index The index of the UE that sent the resume request.
+  /// \param[in] old_ue_index The index of the stored inactive UE context.
+  /// \param[in] rrc_resume_cause The resume cause mapped to the common establishment cause domain.
+  virtual void handle_rrc_resume_request(ue_index_t          ue_index,
+                                         ue_index_t          old_ue_index,
+                                         establishment_cause_t rrc_resume_cause) = 0;
 
   /// \brief Handle a notification of the reception of the RRC Reconfiguration Complete, and notify the DU with the F1AP
   /// UE context modification procedure with the RRC Reconfiguration Complete Indicator IE present.
@@ -295,6 +358,15 @@ public:
   /// \brief Handle the outcome of an NTN location-triggered handover.
   virtual void handle_ntn_handover_result(const ntn_handover_result& result) {}
 
+  /// \brief Handle confirmation that the NTN handover target DU applied the requested target resources.
+  virtual void handle_ntn_handover_target_resources_applied(ue_index_t                   source_ue_index,
+                                                           ue_index_t                   target_ue_index,
+                                                           const ntn_handover_context&  context,
+                                                           rnti_t                       target_c_rnti,
+                                                           const f1ap_ntn_ul_slot_resource_result& slot_result)
+  {
+  }
+
   /// \brief Initialize a handover UE release timer. When the timeout is reached, a release request is sent to the AMF.
   /// \param[in] ue_index The index of the UE.
   /// \param[in] handover_ue_release_timeout The timeout for the release.
@@ -333,8 +405,14 @@ public:
   /// \brief Handle a measurement report for given UE.
   virtual void handle_measurement_report(const ue_index_t ue_index, const rrc_meas_results& meas_results) = 0;
 
+  /// \brief Handle a change in UE capability information relevant to measurement decisions.
+  virtual void handle_ue_capability_update(ue_index_t ue_index) = 0;
+
   /// \brief Handle a decoded NTN UE location report for location-based mobility.
   virtual void handle_ue_location_report(const ntn_ue_location_report& location_report) = 0;
+
+  /// \brief Handle an RRC-side NTN UE location payload processing outcome.
+  virtual void handle_rrc_ue_location_report_outcome(ue_index_t ue_index, ntn_rrc_ue_location_report_outcome outcome) = 0;
 };
 
 /// Interface to handle measurement config update requests.

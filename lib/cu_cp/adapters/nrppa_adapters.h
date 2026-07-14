@@ -57,6 +57,54 @@ public:
     return cu_cp_handler->handle_trp_information_request(request);
   }
 
+  async_task<expected<positioning_information_response_t, positioning_information_failure_t>>
+  on_positioning_information_request(const positioning_information_request_t& request) override
+  {
+    srsran_assert(cu_cp_handler != nullptr, "CU-CP NRPPA handler must not be nullptr");
+    return cu_cp_handler->handle_positioning_information_request(request);
+  }
+
+  async_task<expected<positioning_activation_response_t, positioning_activation_failure_t>>
+  on_positioning_activation_request(const positioning_activation_request_t& request) override
+  {
+    srsran_assert(cu_cp_handler != nullptr, "CU-CP NRPPA handler must not be nullptr");
+    return cu_cp_handler->handle_positioning_activation_request(request);
+  }
+
+  async_task<expected<positioning_deactivation_response_t, positioning_deactivation_failure_t>>
+  on_positioning_deactivation_request(const positioning_deactivation_request_t& request) override
+  {
+    srsran_assert(cu_cp_handler != nullptr, "CU-CP NRPPA handler must not be nullptr");
+    return cu_cp_handler->handle_positioning_deactivation_request(request);
+  }
+
+  async_task<expected<positioning_assistance_information_feedback_t, positioning_assistance_information_failure_t>>
+  on_positioning_assistance_information_control(
+      const positioning_assistance_information_control_request_t& request) override
+  {
+    srsran_assert(cu_cp_handler != nullptr, "CU-CP NRPPA handler must not be nullptr");
+    return cu_cp_handler->handle_positioning_assistance_information_control(request);
+  }
+
+  async_task<expected<measurement_response_t, measurement_failure_t>>
+  on_measurement_information_request(const measurement_request_t& request) override
+  {
+    srsran_assert(cu_cp_handler != nullptr, "CU-CP NRPPA handler must not be nullptr");
+    return cu_cp_handler->handle_positioning_measurement_request(request);
+  }
+
+  void on_unsupported_nrppa_pdu(std::string_view reason) override
+  {
+    srsran_assert(cu_cp_handler != nullptr, "CU-CP NRPPA handler must not be nullptr");
+    cu_cp_handler->handle_unsupported_nrppa_pdu(reason);
+  }
+
+  void on_nrppa_standard_codec_event(const nrppa_standard_codec_event& event) override
+  {
+    srsran_assert(cu_cp_handler != nullptr, "CU-CP NRPPA handler must not be nullptr");
+    cu_cp_handler->handle_nrppa_standard_codec_event(event);
+  }
+
 private:
   cu_cp_nrppa_handler* cu_cp_handler = nullptr;
 };
@@ -120,6 +168,21 @@ public:
   {
     srsran_assert(f1ap_handler != nullptr, "F1AP NRPPA handler must not be nullptr");
     return f1ap_handler->handle_positioning_activation_request(request);
+  }
+
+  async_task<expected<positioning_deactivation_response_t, positioning_deactivation_failure_t>>
+  on_positioning_deactivation_request(const positioning_deactivation_request_t& request) override
+  {
+    srsran_assert(f1ap_handler != nullptr, "F1AP NRPPA handler must not be nullptr");
+    return f1ap_handler->handle_positioning_deactivation_request(request);
+  }
+
+  async_task<expected<positioning_assistance_information_feedback_t, positioning_assistance_information_failure_t>>
+  on_positioning_assistance_information_control(
+      const positioning_assistance_information_control_request_t& request) override
+  {
+    srsran_assert(f1ap_handler != nullptr, "F1AP NRPPA handler must not be nullptr");
+    return f1ap_handler->handle_positioning_assistance_information_control(request);
   }
 
   async_task<expected<measurement_response_t, measurement_failure_t>>

@@ -86,15 +86,34 @@ bool srsran::srs_cu_cp::is_valid_configuration(
       srslog::fetch_basic_logger(LOG_CHAN).error("NTN served beam minimum elevation must be within [-90, 90] degrees");
       return false;
     }
-    if (ntn_cfg.max_nof_served_beams == 0) {
-      srslog::fetch_basic_logger(LOG_CHAN).error("NTN max number of served beams must be greater than zero");
-      return false;
-    }
     if (ntn_cfg.served_beam_hopping_dwell_updates == 0) {
       srslog::fetch_basic_logger(LOG_CHAN).error("NTN served beam hopping dwell updates must be greater than zero");
       return false;
     }
     const auto& sat_state_cfg = ntn_cfg.satellite_state_update;
+    if (sat_state_cfg.predictive_service_window_horizon.count() < 0 ||
+        sat_state_cfg.predictive_handover_lead_time.count() < 0) {
+      srslog::fetch_basic_logger(LOG_CHAN).error("NTN predictive service window timers must not be negative");
+      return false;
+    }
+    if (sat_state_cfg.predictive_service_window_horizon.count() > 0) {
+      if (sat_state_cfg.source == ntn_satellite_state_source::manual || sat_state_cfg.update_period.count() <= 0) {
+        srslog::fetch_basic_logger(LOG_CHAN).error("NTN predictive service window requires orbit-driven satellite updates");
+        return false;
+      }
+      if (sat_state_cfg.predictive_handover_lead_time > sat_state_cfg.predictive_service_window_horizon) {
+        srslog::fetch_basic_logger(LOG_CHAN).error("NTN predictive handover lead time must not exceed the prediction horizon");
+        return false;
+      }
+      const unsigned nof_prediction_steps =
+          static_cast<unsigned>((sat_state_cfg.predictive_service_window_horizon.count() +
+                                 sat_state_cfg.update_period.count() - 1) /
+                                sat_state_cfg.update_period.count());
+      if (nof_prediction_steps > 64) {
+        srslog::fetch_basic_logger(LOG_CHAN).error("NTN predictive service window must not exceed 64 steps");
+        return false;
+      }
+    }
     if (sat_state_cfg.source != ntn_satellite_state_source::manual) {
       if (sat_state_cfg.update_period.count() <= 0) {
         srslog::fetch_basic_logger(LOG_CHAN).error("NTN satellite state update period must be greater than zero");
@@ -125,6 +144,7 @@ bool srsran::srs_cu_cp::is_valid_configuration(
     }
     if (ntn_cfg.measurement_report_period.count() < 0 || ntn_cfg.time_to_trigger.count() < 0 ||
         ntn_cfg.max_report_gap.count() < 0 || ntn_cfg.location_max_age.count() < 0 ||
+        ntn_cfg.location_lost_release_grace_period.count() < 0 || ntn_cfg.idle_paging_context_max_age.count() < 0 ||
         ntn_cfg.handover_retry_timeout.count() < 0 ||
         ntn_cfg.core_network_reporting.min_report_interval.count() < 0) {
       srslog::fetch_basic_logger(LOG_CHAN).error("NTN location mobility timers must not be negative");

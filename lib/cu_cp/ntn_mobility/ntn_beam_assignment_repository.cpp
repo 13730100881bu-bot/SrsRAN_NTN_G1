@@ -60,13 +60,13 @@ std::optional<ntn_beam_du_assignment> ntn_beam_assignment_repository::find_by_nc
 bool ntn_beam_assignment_repository::is_beam_active(const std::string& beam_id) const
 {
   auto assignment = find_by_beam_id(beam_id);
-  return assignment.has_value() && assignment->state == ntn_beam_assignment_state::active;
+  return assignment.has_value() && assignment->state == ntn_beam_assignment_state::active_loaded;
 }
 
 std::optional<du_index_t> ntn_beam_assignment_repository::get_du_for_beam(const std::string& beam_id) const
 {
   auto assignment = find_by_beam_id(beam_id);
-  if (!assignment.has_value() || assignment->state != ntn_beam_assignment_state::active ||
+  if (!assignment.has_value() || assignment->state != ntn_beam_assignment_state::active_loaded ||
       assignment->du_index == du_index_t::invalid) {
     return std::nullopt;
   }
@@ -76,7 +76,7 @@ std::optional<du_index_t> ntn_beam_assignment_repository::get_du_for_beam(const 
 std::optional<du_index_t> ntn_beam_assignment_repository::get_du_for_nci(nr_cell_identity nci) const
 {
   auto assignment = find_by_nci(nci);
-  if (!assignment.has_value() || assignment->state != ntn_beam_assignment_state::active ||
+  if (!assignment.has_value() || assignment->state != ntn_beam_assignment_state::active_loaded ||
       assignment->du_index == du_index_t::invalid) {
     return std::nullopt;
   }

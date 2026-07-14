@@ -34,6 +34,7 @@
 namespace srsran::srs_cu_cp {
 
 struct trp_information_request_t {
+  uint16_t transaction_id = 0;
   // TRP list is optional.
   std::vector<trp_id_t>                    trp_list;
   std::vector<trp_information_type_item_t> trp_info_type_list_trp_req;
@@ -44,6 +45,7 @@ struct trp_information_response_t {
 };
 
 struct trp_information_failure_t {
+  uint16_t      transaction_id = 0;
   nrppa_cause_t cause;
 };
 
@@ -83,11 +85,50 @@ struct positioning_activation_failure_t {
   nrppa_cause_t cause;
 };
 
+struct positioning_deactivation_request_t {
+  ue_index_t ue_index = ue_index_t::invalid;
+
+  // Empty means AbortTransmission.releaseAll.
+  std::optional<uint8_t> srs_res_set_id;
+};
+
+struct positioning_deactivation_response_t {};
+
+struct positioning_deactivation_failure_t {
+  nrppa_cause_t cause;
+};
+
+enum class positioning_assistance_broadcast_action { start, stop };
+
+struct positioning_assistance_information_control_request_t {
+  uint16_t transaction_id = 0;
+
+  std::optional<byte_buffer> pos_assist_info;
+  std::optional<positioning_assistance_broadcast_action> pos_broadcast;
+  std::vector<nr_cell_global_id_t>                       positioning_broadcast_cells;
+  std::optional<byte_buffer>                             routing_id;
+};
+
+struct positioning_assistance_information_feedback_t {
+  uint16_t transaction_id = 0;
+
+  std::optional<byte_buffer>       pos_assist_info_fail_list;
+  std::vector<nr_cell_global_id_t> positioning_broadcast_cells;
+  std::optional<byte_buffer>       routing_id;
+};
+
+struct positioning_assistance_information_failure_t {
+  uint16_t      transaction_id = 0;
+  nrppa_cause_t cause;
+};
+
 struct measurement_request_t {
-  lmf_meas_id_t                                lmf_meas_id;
-  ran_meas_id_t                                ran_meas_id;
+  ue_index_t ue_index = ue_index_t::invalid;
+
+  lmf_meas_id_t                                lmf_meas_id = lmf_meas_id_t::min;
+  ran_meas_id_t                                ran_meas_id = ran_meas_id_t::min;
   std::vector<trp_meas_request_item_t>         trp_meas_request_list;
-  report_characteristics_t                     report_characteristics;
+  report_characteristics_t                     report_characteristics = report_characteristics_t::on_demand;
   std::optional<meas_periodicity_t>            meas_periodicity;
   std::vector<trp_meas_quantities_list_item_t> trp_meas_quantities;
   std::optional<uint64_t>                      sfn_initialization_time;
@@ -104,13 +145,14 @@ struct measurement_request_t {
 };
 
 struct measurement_response_t {
-  lmf_meas_id_t                                lmf_meas_id;
-  ran_meas_id_t                                ran_meas_id;
+  lmf_meas_id_t                                lmf_meas_id = lmf_meas_id_t::min;
+  ran_meas_id_t                                ran_meas_id = ran_meas_id_t::min;
   std::vector<trp_measurement_response_item_t> trp_meas_resp_list;
 };
 
 struct measurement_failure_t {
-  lmf_meas_id_t lmf_meas_id;
+  lmf_meas_id_t lmf_meas_id = lmf_meas_id_t::min;
+  ran_meas_id_t ran_meas_id = ran_meas_id_t::min;
   nrppa_cause_t cause;
 };
 

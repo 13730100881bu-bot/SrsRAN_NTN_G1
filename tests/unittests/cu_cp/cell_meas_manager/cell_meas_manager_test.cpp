@@ -159,9 +159,417 @@ TEST_F(cell_meas_manager_test, when_ntn_beam_table_json_is_parsed_then_static_be
   ASSERT_EQ(table->beams[0].beam_id, "CN-BEAM-0001");
   ASSERT_EQ(table->beams[0].nci, nr_cell_identity::create(0x19b0).value());
   ASSERT_DOUBLE_EQ(table->beams[0].coverage_radius_m, 230000.0);
+  ASSERT_TRUE(table->beams[0].downlink_enabled);
+  ASSERT_TRUE(table->beams[0].uplink_enabled);
   ASSERT_EQ(table->beams[1].beam_id, "CN-BEAM-0002");
   ASSERT_EQ(table->beams[1].nci, nr_cell_identity::create(0x19b1).value());
   ASSERT_FALSE(table->beams[1].enabled);
+  ASSERT_TRUE(table->beams[1].downlink_enabled);
+  ASSERT_TRUE(table->beams[1].uplink_enabled);
+}
+
+TEST_F(cell_meas_manager_test, when_ntn_beam_table_link_direction_is_parsed_then_flags_are_available)
+{
+  const std::string json = R"json(
+{
+  "version": 1,
+  "analog_beams": [
+    {
+      "analog_beam_id": "ANALOG-0001",
+      "center_hex_q": 0,
+      "center_hex_r": 0,
+      "center_digital_beam_id": "DL-ONLY",
+      "child_digital_beam_ids": ["DL-ONLY", "UL-ONLY"],
+      "is_edge_partial": true,
+      "downlink_enabled": true,
+      "uplink_enabled": true
+    }
+  ],
+  "beams": [
+    {
+      "beam_id": "DL-ONLY",
+      "analog_beam_id": "ANALOG-0001",
+      "hex_q": 0,
+      "hex_r": 0,
+      "nci": "0x19b0",
+      "center_latitude_deg": 31.2304,
+      "center_longitude_deg": 121.4737,
+      "coverage_radius_m": 15000,
+      "downlink_enabled": true,
+      "uplink_enabled": false
+    },
+    {
+      "beam_id": "UL-ONLY",
+      "analog_beam_id": "ANALOG-0001",
+      "hex_q": 1,
+      "hex_r": 0,
+      "nci": "0x19b1",
+      "center_latitude_deg": 31.2304,
+      "center_longitude_deg": 121.6337,
+      "coverage_radius_m": 15000,
+      "downlink_enabled": false,
+      "uplink_enabled": true
+    }
+  ]
+}
+)json";
+
+  auto table = parse_ntn_beam_table_json(json);
+  ASSERT_TRUE(table.has_value()) << table.error();
+  ASSERT_EQ(table->analog_beams.size(), 1);
+  ASSERT_TRUE(table->analog_beams.front().downlink_enabled);
+  ASSERT_TRUE(table->analog_beams.front().uplink_enabled);
+  ASSERT_EQ(table->beams.size(), 2);
+  ASSERT_TRUE(table->beams[0].downlink_enabled);
+  ASSERT_FALSE(table->beams[0].uplink_enabled);
+  ASSERT_FALSE(table->beams[1].downlink_enabled);
+  ASSERT_TRUE(table->beams[1].uplink_enabled);
+}
+
+TEST_F(cell_meas_manager_test, when_ntn_beam_table_disables_both_link_directions_then_parse_fails)
+{
+  const std::string json = R"json(
+{
+  "version": 1,
+  "beams": [
+    {
+      "beam_id": "DISABLED-LINK",
+      "nci": "0x19b0",
+      "center_latitude_deg": 31.2304,
+      "center_longitude_deg": 121.4737,
+      "coverage_radius_m": 15000,
+      "downlink_enabled": false,
+      "uplink_enabled": false
+    }
+  ]
+}
+)json";
+
+  auto table = parse_ntn_beam_table_json(json);
+  ASSERT_FALSE(table.has_value());
+  ASSERT_NE(table.error().find("at least one link direction"), std::string::npos);
+}
+
+TEST_F(cell_meas_manager_test, when_ntn_hierarchical_beam_table_json_is_parsed_then_analog_clusters_are_available)
+{
+  const std::string json = R"json(
+{
+  "version": 1,
+  "region": "leo-hex",
+  "satellite_height_m": 500000,
+  "analog_beams": [
+    {
+      "analog_beam_id": "LEO500-ANALOG-0001",
+      "center_hex_q": 0,
+      "center_hex_r": 0,
+      "center_digital_beam_id": "LEO500-DIGI-0001",
+      "child_digital_beam_ids": [
+        "LEO500-DIGI-0001",
+        "LEO500-DIGI-0002",
+        "LEO500-DIGI-0003",
+        "LEO500-DIGI-0004",
+        "LEO500-DIGI-0005",
+        "LEO500-DIGI-0006",
+        "LEO500-DIGI-0007"
+      ],
+      "is_edge_partial": false
+    }
+  ],
+  "beams": [
+    {
+      "beam_id": "LEO500-DIGI-0001",
+      "analog_beam_id": "LEO500-ANALOG-0001",
+      "hex_q": 0,
+      "hex_r": 0,
+      "nci": "0x19b0",
+      "center_latitude_deg": 31.2304,
+      "center_longitude_deg": 121.4737,
+      "coverage_radius_m": 15000,
+      "enabled": true
+    },
+    {
+      "beam_id": "LEO500-DIGI-0002",
+      "analog_beam_id": "LEO500-ANALOG-0001",
+      "hex_q": 1,
+      "hex_r": 0,
+      "nci": "0x19b1",
+      "center_latitude_deg": 31.2304,
+      "center_longitude_deg": 121.6337,
+      "coverage_radius_m": 15000,
+      "enabled": true
+    },
+    {
+      "beam_id": "LEO500-DIGI-0003",
+      "analog_beam_id": "LEO500-ANALOG-0001",
+      "hex_q": 1,
+      "hex_r": -1,
+      "nci": "0x19b2",
+      "center_latitude_deg": 31.3653,
+      "center_longitude_deg": 121.5537,
+      "coverage_radius_m": 15000,
+      "enabled": true
+    },
+    {
+      "beam_id": "LEO500-DIGI-0004",
+      "analog_beam_id": "LEO500-ANALOG-0001",
+      "hex_q": 0,
+      "hex_r": -1,
+      "nci": "0x19b3",
+      "center_latitude_deg": 31.3653,
+      "center_longitude_deg": 121.3937,
+      "coverage_radius_m": 15000,
+      "enabled": true
+    },
+    {
+      "beam_id": "LEO500-DIGI-0005",
+      "analog_beam_id": "LEO500-ANALOG-0001",
+      "hex_q": -1,
+      "hex_r": 0,
+      "nci": "0x19b4",
+      "center_latitude_deg": 31.2304,
+      "center_longitude_deg": 121.3137,
+      "coverage_radius_m": 15000,
+      "enabled": true
+    },
+    {
+      "beam_id": "LEO500-DIGI-0006",
+      "analog_beam_id": "LEO500-ANALOG-0001",
+      "hex_q": -1,
+      "hex_r": 1,
+      "nci": "0x19b5",
+      "center_latitude_deg": 31.0955,
+      "center_longitude_deg": 121.3937,
+      "coverage_radius_m": 15000,
+      "enabled": true
+    },
+    {
+      "beam_id": "LEO500-DIGI-0007",
+      "analog_beam_id": "LEO500-ANALOG-0001",
+      "hex_q": 0,
+      "hex_r": 1,
+      "nci": "0x19b6",
+      "center_latitude_deg": 31.0955,
+      "center_longitude_deg": 121.5537,
+      "coverage_radius_m": 15000,
+      "enabled": true
+    }
+  ]
+}
+)json";
+
+  auto table = parse_ntn_beam_table_json(json);
+  ASSERT_TRUE(table.has_value()) << table.error();
+  ASSERT_EQ(table->analog_beams.size(), 1);
+  ASSERT_EQ(table->analog_beams.front().analog_beam_id, "LEO500-ANALOG-0001");
+  ASSERT_EQ(table->analog_beams.front().center_digital_beam_id, "LEO500-DIGI-0001");
+  ASSERT_FALSE(table->analog_beams.front().is_edge_partial);
+  ASSERT_EQ(table->analog_beams.front().child_digital_beam_ids.size(), 7);
+  ASSERT_EQ(table->beams.size(), 7);
+  ASSERT_EQ(table->beams.front().analog_beam_id, "LEO500-ANALOG-0001");
+  ASSERT_TRUE(table->beams.front().hex_q.has_value());
+  ASSERT_TRUE(table->beams.front().hex_r.has_value());
+  ASSERT_EQ(table->beams.front().hex_q.value(), 0);
+  ASSERT_EQ(table->beams.front().hex_r.value(), 0);
+}
+
+TEST_F(cell_meas_manager_test, when_ntn_beam_table_resource_policy_is_parsed_then_defaults_and_overrides_are_merged)
+{
+  const std::string json = R"json(
+{
+  "version": 1,
+  "resource_policy": {
+    "analog": {
+      "max_loaded_digital_children": 2,
+      "max_service_bound_ues": 9
+    },
+    "digital": {
+      "max_ues": 3,
+      "max_drbs": 4,
+      "reuse_group_id": "reuse-default",
+      "conflict_group_ids": ["conflict-default"]
+    }
+  },
+  "analog_beams": [
+    {
+      "analog_beam_id": "LEO500-ANALOG-0001",
+      "center_hex_q": 0,
+      "center_hex_r": 0,
+      "center_digital_beam_id": "LEO500-DIGI-0001",
+      "child_digital_beam_ids": ["LEO500-DIGI-0001"],
+      "is_edge_partial": true,
+      "resource_policy": {
+        "max_loaded_digital_children": 1,
+        "max_access_only_ues": 5
+      }
+    }
+  ],
+  "beams": [
+    {
+      "beam_id": "LEO500-DIGI-0001",
+      "analog_beam_id": "LEO500-ANALOG-0001",
+      "nci": "0x19b0",
+      "center_latitude_deg": 31.2304,
+      "center_longitude_deg": 121.4737,
+      "coverage_radius_m": 15000,
+      "resource_policy": {
+        "max_drbs": 2,
+        "reuse_group_id": "reuse-local",
+        "conflict_group_ids": ["conflict-local"]
+      }
+    }
+  ]
+}
+)json";
+
+  auto table = parse_ntn_beam_table_json(json);
+  ASSERT_TRUE(table.has_value()) << table.error();
+  ASSERT_TRUE(table->analog_beams.front().resource_policy.has_value());
+  EXPECT_EQ(table->analog_beams.front().resource_policy->max_access_only_ues, 5U);
+  EXPECT_EQ(table->analog_beams.front().resource_policy->max_service_bound_ues, 9U);
+  EXPECT_EQ(table->analog_beams.front().resource_policy->max_loaded_digital_children, 1U);
+  ASSERT_TRUE(table->beams.front().resource_policy.has_value());
+  EXPECT_EQ(table->beams.front().resource_policy->max_ues, 3U);
+  EXPECT_EQ(table->beams.front().resource_policy->max_drbs, 2U);
+  EXPECT_EQ(table->beams.front().resource_policy->reuse_group_id, "reuse-local");
+  EXPECT_EQ(table->beams.front().resource_policy->conflict_group_ids,
+            std::vector<std::string>({"conflict-local"}));
+}
+
+TEST_F(cell_meas_manager_test, when_ntn_beam_table_resource_policy_is_invalid_then_parsing_fails)
+{
+  const std::string negative_cap_json = R"json(
+{
+  "beams": [
+    {
+      "beam_id": "CN-BEAM-0001",
+      "nci": "0x19b0",
+      "center_latitude_deg": 39.9,
+      "center_longitude_deg": 116.4,
+      "coverage_radius_m": 230000,
+      "resource_policy": {
+        "max_ues": -1
+      }
+    }
+  ]
+}
+)json";
+  ASSERT_FALSE(parse_ntn_beam_table_json(negative_cap_json).has_value());
+
+  const std::string duplicate_conflict_json = R"json(
+{
+  "beams": [
+    {
+      "beam_id": "CN-BEAM-0001",
+      "nci": "0x19b0",
+      "center_latitude_deg": 39.9,
+      "center_longitude_deg": 116.4,
+      "coverage_radius_m": 230000,
+      "resource_policy": {
+        "conflict_group_ids": ["conflict-a", "conflict-a"]
+      }
+    }
+  ]
+}
+)json";
+  ASSERT_FALSE(parse_ntn_beam_table_json(duplicate_conflict_json).has_value());
+
+  const std::string empty_reuse_json = R"json(
+{
+  "beams": [
+    {
+      "beam_id": "CN-BEAM-0001",
+      "nci": "0x19b0",
+      "center_latitude_deg": 39.9,
+      "center_longitude_deg": 116.4,
+      "coverage_radius_m": 230000,
+      "resource_policy": {
+        "reuse_group_id": ""
+      }
+    }
+  ]
+}
+)json";
+  ASSERT_FALSE(parse_ntn_beam_table_json(empty_reuse_json).has_value());
+}
+
+TEST_F(cell_meas_manager_test, when_ntn_hierarchical_beam_table_has_invalid_cluster_then_parsing_fails)
+{
+  const std::string unknown_parent_json = R"json(
+{
+  "analog_beams": [],
+  "beams": [
+    {
+      "beam_id": "LEO500-DIGI-0001",
+      "analog_beam_id": "LEO500-ANALOG-MISSING",
+      "nci": "0x19b0",
+      "center_latitude_deg": 31.2304,
+      "center_longitude_deg": 121.4737,
+      "coverage_radius_m": 15000
+    }
+  ]
+}
+)json";
+  ASSERT_FALSE(parse_ntn_beam_table_json(unknown_parent_json).has_value());
+
+  const std::string non_edge_partial_json = R"json(
+{
+  "analog_beams": [
+    {
+      "analog_beam_id": "LEO500-ANALOG-0001",
+      "center_hex_q": 0,
+      "center_hex_r": 0,
+      "center_digital_beam_id": "LEO500-DIGI-0001",
+      "child_digital_beam_ids": ["LEO500-DIGI-0001"],
+      "is_edge_partial": false
+    }
+  ],
+  "beams": [
+    {
+      "beam_id": "LEO500-DIGI-0001",
+      "analog_beam_id": "LEO500-ANALOG-0001",
+      "nci": "0x19b0",
+      "center_latitude_deg": 31.2304,
+      "center_longitude_deg": 121.4737,
+      "coverage_radius_m": 15000
+    }
+  ]
+}
+)json";
+  ASSERT_FALSE(parse_ntn_beam_table_json(non_edge_partial_json).has_value());
+
+  const std::string duplicate_child_json = R"json(
+{
+  "analog_beams": [
+    {
+      "analog_beam_id": "LEO500-ANALOG-0001",
+      "center_hex_q": 0,
+      "center_hex_r": 0,
+      "center_digital_beam_id": "LEO500-DIGI-0001",
+      "child_digital_beam_ids": ["LEO500-DIGI-0001"],
+      "is_edge_partial": true
+    },
+    {
+      "analog_beam_id": "LEO500-ANALOG-0002",
+      "center_hex_q": 3,
+      "center_hex_r": -1,
+      "center_digital_beam_id": "LEO500-DIGI-0001",
+      "child_digital_beam_ids": ["LEO500-DIGI-0001"],
+      "is_edge_partial": true
+    }
+  ],
+  "beams": [
+    {
+      "beam_id": "LEO500-DIGI-0001",
+      "analog_beam_id": "LEO500-ANALOG-0001",
+      "nci": "0x19b0",
+      "center_latitude_deg": 31.2304,
+      "center_longitude_deg": 121.4737,
+      "coverage_radius_m": 15000
+    }
+  ]
+}
+)json";
+  ASSERT_FALSE(parse_ntn_beam_table_json(duplicate_child_json).has_value());
 }
 
 TEST_F(cell_meas_manager_test, when_ntn_beam_table_has_invalid_geometry_then_parsing_fails)

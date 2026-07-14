@@ -110,6 +110,7 @@ public:
 
   /// \brief Get the measurement context of the UE.
   cell_meas_manager_ue_context& get_meas_context() { return meas_context; }
+  const cell_meas_manager_ue_context& get_meas_context() const { return meas_context; }
 
   /// \brief Update a UE with PCI and/or C-RNTI.
   void update_du_ue(gnb_du_id_t     du_id_       = gnb_du_id_t::invalid,

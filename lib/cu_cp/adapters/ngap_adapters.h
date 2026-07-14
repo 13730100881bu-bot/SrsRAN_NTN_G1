@@ -46,8 +46,8 @@ public:
 
   void on_paging_message(cu_cp_paging_message& msg) override
   {
-    srsran_assert(paging_handler != nullptr, "CU-CP Paging handler must not be nullptr");
-    paging_handler->handle_paging_message(msg);
+    srsran_assert(cu_cp_handler != nullptr, "CU-CP NGAP handler must not be nullptr");
+    cu_cp_handler->handle_paging_message(msg);
   }
 
   async_task<ngap_handover_resource_allocation_response>
@@ -153,6 +153,18 @@ public:
   {
     srsran_assert(cu_cp_handler != nullptr, "CU-CP NGAP handler must not be nullptr");
     return cu_cp_handler->handle_location_reporting_control(request);
+  }
+
+  void on_ue_context_suspend_outcome(ue_index_t ue_index, bool success) override
+  {
+    srsran_assert(cu_cp_handler != nullptr, "CU-CP NGAP handler must not be nullptr");
+    cu_cp_handler->handle_ue_context_suspend_outcome(ue_index, success);
+  }
+
+  void on_ue_context_resume_outcome(ue_index_t ue_index, bool success) override
+  {
+    srsran_assert(cu_cp_handler != nullptr, "CU-CP NGAP handler must not be nullptr");
+    cu_cp_handler->handle_ue_context_resume_outcome(ue_index, success);
   }
 
   void on_n2_disconnection(amf_index_t amf_index) override

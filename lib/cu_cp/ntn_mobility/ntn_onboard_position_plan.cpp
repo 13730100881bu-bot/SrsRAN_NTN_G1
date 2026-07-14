@@ -1,0 +1,1107 @@
+/*
+ *
+ * Copyright 2021-2026 Software Radio Systems Limited
+ *
+ * This file is part of srsRAN.
+ *
+ * srsRAN is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of
+ * the License, or (at your option) any later version.
+ *
+ * srsRAN is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * A copy of the GNU Affero General Public License can be found in
+ * the LICENSE file in the top-level directory of this distribution
+ * and at http://www.gnu.org/licenses/.
+ *
+ */
+
+#include "ntn_onboard_position_plan.h"
+#include "fmt/format.h"
+#include "nlohmann/json.hpp"
+#include <mbedtls/md.h>
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <cmath>
+#include <fstream>
+#include <iomanip>
+#include <locale>
+#include <map>
+#include <set>
+#include <sstream>
+#include <tuple>
+#include <unordered_map>
+
+using namespace srsran;
+using namespace srs_cu_cp;
+
+namespace {
+
+constexpr double pi = 3.14159265358979323846;
+
+int64_t to_unix_milliseconds(std::chrono::system_clock::time_point value)
+{
+  return std::chrono::duration_cast<std::chrono::milliseconds>(value.time_since_epoch()).count();
+}
+
+std::chrono::system_clock::time_point from_unix_milliseconds(int64_t value)
+{
+  return std::chrono::system_clock::time_point{std::chrono::milliseconds{value}};
+}
+
+std::string lower_ascii(std::string value)
+{
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return std::tolower(c); });
+  return value;
+}
+
+std::string normalize_hash(std::string value)
+{
+  value = lower_ascii(std::move(value));
+  if (value.rfind("sha256:", 0) != 0) {
+    value.insert(0, "sha256:");
+  }
+  return value;
+}
+
+std::string sha256_with_prefix(const std::string& payload)
+{
+  std::array<unsigned char, 32> digest{};
+  const mbedtls_md_info_t*      info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+  if (info == nullptr || mbedtls_md(info,
+                                    reinterpret_cast<const unsigned char*>(payload.data()),
+                                    payload.size(),
+                                    digest.data()) != 0) {
+    return {};
+  }
+  std::ostringstream hash;
+  hash << "sha256:" << std::hex << std::setfill('0');
+  for (unsigned char byte : digest) {
+    hash << std::setw(2) << static_cast<unsigned>(byte);
+  }
+  return hash.str();
+}
+
+bool is_valid_l1_id(const std::string& value)
+{
+  return value.size() == 7 && value[0] == 'G' &&
+         std::all_of(value.begin() + 1, value.end(), [](unsigned char c) { return std::isdigit(c); });
+}
+
+bool cell_identity_less(const ntn_onboard_cell_identity& lhs, const ntn_onboard_cell_identity& rhs)
+{
+  if (lhs.nci != rhs.nci) {
+    return lhs.nci < rhs.nci;
+  }
+  return lhs.pci < rhs.pci;
+}
+
+bool cell_identity_equal(const ntn_onboard_cell_identity& lhs, const ntn_onboard_cell_identity& rhs)
+{
+  return lhs.nci == rhs.nci && lhs.pci == rhs.pci;
+}
+
+std::array<ntn_onboard_cell_identity, 2>
+sorted_cell_identities(std::array<ntn_onboard_cell_identity, 2> identities)
+{
+  if (cell_identity_less(identities[1], identities[0])) {
+    std::swap(identities[0], identities[1]);
+  }
+  return identities;
+}
+
+struct projected_position {
+  const ntn_l1_position* source = nullptr;
+  double                 x      = 0.0;
+  double                 y      = 0.0;
+};
+
+std::vector<projected_position> project_positions(const std::vector<ntn_l1_position>& positions)
+{
+  if (positions.empty()) {
+    return {};
+  }
+
+  std::vector<const ntn_l1_position*> canonical_positions;
+  canonical_positions.reserve(positions.size());
+  for (const ntn_l1_position& position : positions) {
+    canonical_positions.push_back(&position);
+  }
+  std::sort(canonical_positions.begin(), canonical_positions.end(), [](const auto* lhs, const auto* rhs) {
+    if (lhs->position_id != rhs->position_id) {
+      return lhs->position_id < rhs->position_id;
+    }
+    if (lhs->latitude_deg != rhs->latitude_deg) {
+      return lhs->latitude_deg < rhs->latitude_deg;
+    }
+    return lhs->longitude_deg < rhs->longitude_deg;
+  });
+
+  double sin_sum = 0.0;
+  double cos_sum = 0.0;
+  double mean_latitude = 0.0;
+  for (const ntn_l1_position* position : canonical_positions) {
+    const double longitude_rad = position->longitude_deg * pi / 180.0;
+    sin_sum += std::sin(longitude_rad);
+    cos_sum += std::cos(longitude_rad);
+    mean_latitude += position->latitude_deg;
+  }
+  mean_latitude /= static_cast<double>(positions.size());
+  const double reference_longitude = std::atan2(sin_sum, cos_sum) * 180.0 / pi;
+  const double longitude_scale = std::max(0.01, std::cos(mean_latitude * pi / 180.0));
+
+  std::vector<projected_position> result;
+  result.reserve(positions.size());
+  for (const ntn_l1_position* position : canonical_positions) {
+    double longitude_delta = position->longitude_deg - reference_longitude;
+    while (longitude_delta > 180.0) {
+      longitude_delta -= 360.0;
+    }
+    while (longitude_delta < -180.0) {
+      longitude_delta += 360.0;
+    }
+    result.push_back({position, longitude_delta * longitude_scale, position->latitude_deg - mean_latitude});
+  }
+  return result;
+}
+
+std::vector<projected_position> spatially_sorted_positions(const std::vector<ntn_l1_position>& positions)
+{
+  std::vector<projected_position> result = project_positions(positions);
+  if (result.empty()) {
+    return result;
+  }
+
+  double mean_x = 0.0;
+  double mean_y = 0.0;
+  for (const projected_position& position : result) {
+    mean_x += position.x;
+    mean_y += position.y;
+  }
+  mean_x /= static_cast<double>(result.size());
+  mean_y /= static_cast<double>(result.size());
+
+  double variance_x = 0.0;
+  double variance_y = 0.0;
+  for (const projected_position& position : result) {
+    variance_x += (position.x - mean_x) * (position.x - mean_x);
+    variance_y += (position.y - mean_y) * (position.y - mean_y);
+  }
+  const bool split_on_x = variance_x >= variance_y;
+  std::sort(result.begin(), result.end(), [split_on_x](const projected_position& lhs,
+                                                       const projected_position& rhs) {
+    const double lhs_primary = split_on_x ? lhs.x : lhs.y;
+    const double rhs_primary = split_on_x ? rhs.x : rhs.y;
+    if (lhs_primary != rhs_primary) {
+      return lhs_primary < rhs_primary;
+    }
+    const double lhs_secondary = split_on_x ? lhs.y : lhs.x;
+    const double rhs_secondary = split_on_x ? rhs.y : rhs.x;
+    if (lhs_secondary != rhs_secondary) {
+      return lhs_secondary < rhs_secondary;
+    }
+    return lhs.source->position_id < rhs.source->position_id;
+  });
+  return result;
+}
+
+std::pair<double, double> centroid_for_owner(const std::map<std::string, unsigned>& owners,
+                                             unsigned                              owner,
+                                             const std::map<std::string, projected_position>& projected)
+{
+  double   x     = 0.0;
+  double   y     = 0.0;
+  unsigned count = 0;
+  for (const auto& entry : owners) {
+    if (entry.second != owner) {
+      continue;
+    }
+    const auto position_it = projected.find(entry.first);
+    if (position_it == projected.end()) {
+      continue;
+    }
+    x += position_it->second.x;
+    y += position_it->second.y;
+    ++count;
+  }
+  if (count == 0) {
+    return {0.0, 0.0};
+  }
+  return {x / static_cast<double>(count), y / static_cast<double>(count)};
+}
+
+double squared_distance(const projected_position& position, const std::pair<double, double>& centroid)
+{
+  const double x_delta = position.x - centroid.first;
+  const double y_delta = position.y - centroid.second;
+  return x_delta * x_delta + y_delta * y_delta;
+}
+
+std::chrono::microseconds max_cyclic_gap(std::vector<std::chrono::microseconds> offsets,
+                                         std::chrono::microseconds              period)
+{
+  if (offsets.empty()) {
+    return period + std::chrono::microseconds{1};
+  }
+  std::sort(offsets.begin(), offsets.end());
+  offsets.erase(std::unique(offsets.begin(), offsets.end()), offsets.end());
+  if (offsets.size() == 1) {
+    return period;
+  }
+
+  std::chrono::microseconds result{0};
+  for (size_t i = 1; i != offsets.size(); ++i) {
+    result = std::max(result, offsets[i] - offsets[i - 1]);
+  }
+  result = std::max(result, period - offsets.back() + offsets.front());
+  return result;
+}
+
+bool intervals_overlap(const ntn_access_calendar_intent& lhs, const ntn_access_calendar_intent& rhs)
+{
+  return lhs.start_time < rhs.start_time + rhs.duration && rhs.start_time < lhs.start_time + lhs.duration;
+}
+
+expected<nr_cell_identity, std::string> parse_nci(const nlohmann::json& value, const char* context)
+{
+  uint64_t parsed = 0;
+  try {
+    if (value.is_number_unsigned()) {
+      parsed = value.get<uint64_t>();
+    } else if (value.is_string()) {
+      std::string text = value.get<std::string>();
+      size_t      consumed = 0;
+      int         base     = 10;
+      if (text.rfind("0x", 0) == 0 || text.rfind("0X", 0) == 0) {
+        text = text.substr(2);
+        base = 16;
+      }
+      parsed = std::stoull(text, &consumed, base);
+      if (consumed != text.size()) {
+        return make_unexpected(fmt::format("{}.nci contains trailing characters", context));
+      }
+    } else {
+      return make_unexpected(fmt::format("{}.nci must be an unsigned integer or string", context));
+    }
+  } catch (const std::exception& error) {
+    return make_unexpected(fmt::format("{}.nci is invalid: {}", context, error.what()));
+  }
+  auto nci = nr_cell_identity::create(parsed);
+  if (!nci.has_value()) {
+    return make_unexpected(fmt::format("{}.nci exceeds the 36-bit NR cell identity range", context));
+  }
+  return nci.value();
+}
+
+} // namespace
+
+const char* srsran::srs_cu_cp::to_string(ntn_position_plan_stage stage)
+{
+  switch (stage) {
+    case ntn_position_plan_stage::disabled:
+      return "disabled";
+    case ntn_position_plan_stage::received:
+      return "received";
+    case ntn_position_plan_stage::validated:
+      return "validated";
+    case ntn_position_plan_stage::calendar_checked:
+      return "calendar_checked";
+    case ntn_position_plan_stage::pending:
+      return "pending";
+    case ntn_position_plan_stage::active:
+      return "active";
+    case ntn_position_plan_stage::rejected:
+      return "rejected";
+  }
+  return "unknown";
+}
+
+const char* srsran::srs_cu_cp::to_string(ntn_position_plan_deployment_stage stage)
+{
+  switch (stage) {
+    case ntn_position_plan_deployment_stage::disabled:
+      return "disabled";
+    case ntn_position_plan_deployment_stage::not_sent:
+      return "not_sent";
+    case ntn_position_plan_deployment_stage::preparing:
+      return "preparing";
+    case ntn_position_plan_deployment_stage::ready:
+      return "ready";
+    case ntn_position_plan_deployment_stage::applied:
+      return "applied";
+    case ntn_position_plan_deployment_stage::rejected:
+      return "rejected";
+    case ntn_position_plan_deployment_stage::unsupported:
+      return "unsupported";
+  }
+  return "unknown";
+}
+
+const char* srsran::srs_cu_cp::to_string(ntn_position_plan_reject_reason reason)
+{
+  switch (reason) {
+    case ntn_position_plan_reject_reason::none:
+      return "none";
+    case ntn_position_plan_reject_reason::feature_disabled:
+      return "feature_disabled";
+    case ntn_position_plan_reject_reason::parse_error:
+      return "parse_error";
+    case ntn_position_plan_reject_reason::invalid_satellite_id:
+      return "invalid_satellite_id";
+    case ntn_position_plan_reject_reason::non_monotonic_version:
+      return "non_monotonic_version";
+    case ntn_position_plan_reject_reason::invalid_hash:
+      return "invalid_hash";
+    case ntn_position_plan_reject_reason::expired:
+      return "expired";
+    case ntn_position_plan_reject_reason::invalid_validity_window:
+      return "invalid_validity_window";
+    case ntn_position_plan_reject_reason::invalid_activation_epoch:
+      return "invalid_activation_epoch";
+    case ntn_position_plan_reject_reason::invalid_l1_id:
+      return "invalid_l1_id";
+    case ntn_position_plan_reject_reason::duplicate_l1_id:
+      return "duplicate_l1_id";
+    case ntn_position_plan_reject_reason::invalid_l1_position:
+      return "invalid_l1_position";
+    case ntn_position_plan_reject_reason::identity_mismatch:
+      return "identity_mismatch";
+    case ntn_position_plan_reject_reason::schedule_overflow:
+      return "schedule_overflow";
+    case ntn_position_plan_reject_reason::invalid_calendar_position:
+      return "invalid_calendar_position";
+    case ntn_position_plan_reject_reason::invalid_resource_port:
+      return "invalid_resource_port";
+    case ntn_position_plan_reject_reason::ssb_deadline_miss:
+      return "ssb_deadline_miss";
+    case ntn_position_plan_reject_reason::prach_deadline_miss:
+      return "prach_deadline_miss";
+    case ntn_position_plan_reject_reason::prach_ro_without_beam:
+      return "prach_ro_without_beam";
+    case ntn_position_plan_reject_reason::resource_conflict:
+      return "resource_conflict";
+    case ntn_position_plan_reject_reason::du_unavailable:
+      return "du_unavailable";
+    case ntn_position_plan_reject_reason::cross_du_calendar_not_supported:
+      return "cross_du_calendar_not_supported";
+    case ntn_position_plan_reject_reason::du_prepare_rejected:
+      return "du_prepare_rejected";
+    case ntn_position_plan_reject_reason::du_prepare_timeout:
+      return "du_prepare_timeout";
+    case ntn_position_plan_reject_reason::du_activation_not_applied:
+      return "du_activation_not_applied";
+    case ntn_position_plan_reject_reason::calendar_hash_mismatch:
+      return "calendar_hash_mismatch";
+    case ntn_position_plan_reject_reason::execution_unsupported:
+      return "execution_unsupported";
+  }
+  return "unknown";
+}
+
+const char* srsran::srs_cu_cp::to_string(ntn_access_calendar_direction direction)
+{
+  return direction == ntn_access_calendar_direction::downlink ? "downlink" : "uplink";
+}
+
+const char* srsran::srs_cu_cp::to_string(ntn_access_calendar_purpose purpose)
+{
+  switch (purpose) {
+    case ntn_access_calendar_purpose::ssb_sib_paging:
+      return "ssb_sib_paging";
+    case ntn_access_calendar_purpose::ssb_sib_paging_rar:
+      return "ssb_sib_paging_rar";
+    case ntn_access_calendar_purpose::prach_ro:
+      return "prach_ro";
+    case ntn_access_calendar_purpose::prach_ul_beam:
+      return "prach_ul_beam";
+  }
+  return "unknown";
+}
+
+const char* srsran::srs_cu_cp::to_string(ntn_access_calendar_state state)
+{
+  return state == ntn_access_calendar_state::proposed ? "proposed" : "checked";
+}
+
+std::chrono::milliseconds
+srsran::srs_cu_cp::limit_ntn_position_plan_timer_delay(std::chrono::milliseconds requested_delay)
+{
+  // unique_timer reserves half of its uint32_t range for wrap-safe comparisons. A 24-hour slice stays well below it.
+  static constexpr std::chrono::milliseconds max_timer_slice = std::chrono::hours{24};
+  return std::min(requested_delay, max_timer_slice);
+}
+
+ntn_onboard_position_plan_controller::ntn_onboard_position_plan_controller(ntn_onboard_position_plan_config config_) :
+  cfg(std::move(config_))
+{
+  cfg.onboard_cells = sorted_cell_identities(cfg.onboard_cells);
+  current_stage     = cfg.enabled ? ntn_position_plan_stage::received : ntn_position_plan_stage::disabled;
+  deployment       = cfg.enabled && cfg.require_external_apply ? ntn_position_plan_deployment_stage::not_sent
+                                                                : ntn_position_plan_deployment_stage::disabled;
+  deployment_reason = cfg.require_external_apply ? "awaiting_checked_plan" : "external_execution_disabled";
+}
+
+ntn_position_plan_reject_reason ntn_onboard_position_plan_controller::validate_plan(
+    const ntn_versioned_position_plan& plan, std::chrono::system_clock::time_point now) const
+{
+  if (!cfg.enabled) {
+    return ntn_position_plan_reject_reason::feature_disabled;
+  }
+  if (cfg.satellite_id.empty() || plan.satellite_id != cfg.satellite_id) {
+    return ntn_position_plan_reject_reason::invalid_satellite_id;
+  }
+  if (plan.content_hash.empty() || normalize_hash(plan.content_hash) != compute_ntn_position_plan_content_hash(plan)) {
+    return ntn_position_plan_reject_reason::invalid_hash;
+  }
+  if (plan.catalog_version == 0 || plan.schedule_version == 0) {
+    return ntn_position_plan_reject_reason::non_monotonic_version;
+  }
+
+  if (plan.catalog_version < highest_catalog_version || plan.schedule_version <= highest_schedule_version) {
+    return ntn_position_plan_reject_reason::non_monotonic_version;
+  }
+
+  if (plan.valid_from >= plan.valid_until) {
+    return ntn_position_plan_reject_reason::invalid_validity_window;
+  }
+  if (now >= plan.valid_until) {
+    return ntn_position_plan_reject_reason::expired;
+  }
+  if (plan.activation_epoch < plan.valid_from || plan.activation_epoch >= plan.valid_until) {
+    return ntn_position_plan_reject_reason::invalid_activation_epoch;
+  }
+  const int64_t activation_ms = to_unix_milliseconds(plan.activation_epoch);
+  if (cfg.activation_alignment.count() <= 0 || activation_ms < 0 ||
+      activation_ms % cfg.activation_alignment.count() != 0) {
+    return ntn_position_plan_reject_reason::invalid_activation_epoch;
+  }
+
+  const auto configured_identities = sorted_cell_identities(cfg.onboard_cells);
+  const auto supplied_identities   = sorted_cell_identities(plan.onboard_cells);
+  if (!is_valid(configured_identities[0].pci) || !is_valid(configured_identities[1].pci) ||
+      configured_identities[0].nci == configured_identities[1].nci ||
+      !cell_identity_equal(configured_identities[0], supplied_identities[0]) ||
+      !cell_identity_equal(configured_identities[1], supplied_identities[1])) {
+    return ntn_position_plan_reject_reason::identity_mismatch;
+  }
+
+  std::set<std::string> l1_ids;
+  for (const ntn_l1_position& position : plan.visible_l1_positions) {
+    if (!is_valid_l1_id(position.position_id)) {
+      return ntn_position_plan_reject_reason::invalid_l1_id;
+    }
+    if (!l1_ids.insert(position.position_id).second) {
+      return ntn_position_plan_reject_reason::duplicate_l1_id;
+    }
+    if (!std::isfinite(position.latitude_deg) || !std::isfinite(position.longitude_deg) ||
+        position.latitude_deg < -90.0 || position.latitude_deg > 90.0 || position.longitude_deg < -180.0 ||
+        position.longitude_deg > 180.0) {
+      return ntn_position_plan_reject_reason::invalid_l1_position;
+    }
+  }
+
+  const size_t position_count = plan.visible_l1_positions.size();
+  if (position_count > cfg.max_l1_positions_per_satellite ||
+      (position_count + 1) / 2 > cfg.max_l1_positions_per_cell) {
+    return ntn_position_plan_reject_reason::schedule_overflow;
+  }
+  return ntn_position_plan_reject_reason::none;
+}
+
+std::array<ntn_onboard_cell_position_set, 2>
+ntn_onboard_position_plan_controller::partition_positions(const std::vector<ntn_l1_position>& positions) const
+{
+  std::array<ntn_onboard_cell_position_set, 2> result{};
+  result[0].identity = cfg.onboard_cells[0];
+  result[1].identity = cfg.onboard_cells[1];
+  if (positions.empty()) {
+    return result;
+  }
+
+  const std::vector<projected_position> ordered = spatially_sorted_positions(positions);
+  std::map<std::string, projected_position> projected;
+  for (const projected_position& position : ordered) {
+    projected.emplace(position.source->position_id, position);
+  }
+
+  const std::array<size_t, 2> targets{(positions.size() + 1) / 2, positions.size() / 2};
+  std::map<std::string, unsigned> owners;
+  if (active.has_value()) {
+    std::set<std::string> current_ids;
+    for (const ntn_l1_position& position : positions) {
+      current_ids.insert(position.position_id);
+    }
+    for (unsigned cell_index = 0; cell_index != active->cell_positions.size(); ++cell_index) {
+      for (const std::string& position_id : active->cell_positions[cell_index].assigned_l1_ids) {
+        if (current_ids.count(position_id) != 0) {
+          owners.emplace(position_id, cell_index);
+        }
+      }
+    }
+  }
+
+  if (owners.empty()) {
+    for (size_t i = 0; i != ordered.size(); ++i) {
+      owners.emplace(ordered[i].source->position_id, i < targets[0] ? 0U : 1U);
+    }
+  } else {
+    std::array<size_t, 2> counts{};
+    for (const auto& entry : owners) {
+      ++counts[entry.second];
+    }
+
+    for (unsigned source = 0; source != 2; ++source) {
+      const unsigned target = 1U - source;
+      while (counts[source] > targets[source]) {
+        const auto source_centroid = centroid_for_owner(owners, source, projected);
+        const auto target_centroid = centroid_for_owner(owners, target, projected);
+        auto       best            = owners.end();
+        double     best_cost       = std::numeric_limits<double>::infinity();
+        for (auto it = owners.begin(); it != owners.end(); ++it) {
+          if (it->second != source) {
+            continue;
+          }
+          const projected_position& position = projected.at(it->first);
+          const double cost = squared_distance(position, target_centroid) - squared_distance(position, source_centroid);
+          if (cost < best_cost || (cost == best_cost && (best == owners.end() || it->first < best->first))) {
+            best      = it;
+            best_cost = cost;
+          }
+        }
+        if (best == owners.end()) {
+          break;
+        }
+        best->second = target;
+        --counts[source];
+        ++counts[target];
+      }
+    }
+
+    for (const projected_position& position : ordered) {
+      if (owners.count(position.source->position_id) != 0) {
+        continue;
+      }
+      unsigned selected = 0;
+      if (counts[0] >= targets[0]) {
+        selected = 1;
+      } else if (counts[1] >= targets[1]) {
+        selected = 0;
+      } else if (!owners.empty()) {
+        const auto centroid0 = centroid_for_owner(owners, 0, projected);
+        const auto centroid1 = centroid_for_owner(owners, 1, projected);
+        const double distance0 = squared_distance(position, centroid0);
+        const double distance1 = squared_distance(position, centroid1);
+        if (distance1 < distance0 || (distance1 == distance0 && counts[1] < counts[0])) {
+          selected = 1;
+        }
+      }
+      owners.emplace(position.source->position_id, selected);
+      ++counts[selected];
+    }
+  }
+
+  for (const auto& entry : owners) {
+    result[entry.second].assigned_l1_ids.push_back(entry.first);
+  }
+  return result;
+}
+
+std::vector<ntn_access_calendar_intent> ntn_onboard_position_plan_controller::build_access_calendar(
+    uint64_t schedule_version, const std::array<ntn_onboard_cell_position_set, 2>& assignments) const
+{
+  std::vector<ntn_access_calendar_intent> result;
+  if (cfg.max_analog_ports_per_cell == 0 || cfg.access_slot.count() <= 0 || cfg.subvisit_duration.count() <= 0 ||
+      cfg.max_ssb_interval.count() <= 0 || cfg.max_prach_interval.count() <= 0 ||
+      cfg.max_prach_interval.count() % cfg.max_ssb_interval.count() != 0 ||
+      cfg.max_ssb_interval.count() % cfg.access_slot.count() != 0 ||
+      2 * cfg.subvisit_duration > cfg.access_slot) {
+    return result;
+  }
+
+  const unsigned ssb_cycles = cfg.max_prach_interval.count() / cfg.max_ssb_interval.count();
+  const unsigned slots_per_ssb_period = cfg.max_ssb_interval.count() / cfg.access_slot.count();
+  if (ssb_cycles == 0 || slots_per_ssb_period == 0) {
+    return result;
+  }
+
+  size_t nof_positions = assignments[0].assigned_l1_ids.size() + assignments[1].assigned_l1_ids.size();
+  result.reserve(nof_positions * (ssb_cycles + 2));
+  for (const ntn_onboard_cell_position_set& cell : assignments) {
+    for (size_t i = 0; i != cell.assigned_l1_ids.size(); ++i) {
+      const unsigned port = i % cfg.max_analog_ports_per_cell;
+      const unsigned slot = i / cfg.max_analog_ports_per_cell;
+      if (slot >= slots_per_ssb_period) {
+        continue;
+      }
+      const unsigned prach_cycle = slot % ssb_cycles;
+      const unsigned rar_cycle   = (prach_cycle + 1) % ssb_cycles;
+      for (unsigned cycle = 0; cycle != ssb_cycles; ++cycle) {
+        ntn_access_calendar_intent intent;
+        intent.schedule_version = schedule_version;
+        intent.nci              = cell.identity.nci;
+        intent.position_id      = cell.assigned_l1_ids[i];
+        intent.start_time       = cycle * cfg.max_ssb_interval + slot * cfg.access_slot;
+        intent.duration         = cfg.subvisit_duration;
+        intent.direction        = ntn_access_calendar_direction::downlink;
+        intent.purpose = cycle == rar_cycle ? ntn_access_calendar_purpose::ssb_sib_paging_rar
+                                             : ntn_access_calendar_purpose::ssb_sib_paging;
+        intent.port_id = static_cast<uint16_t>(port);
+        result.push_back(std::move(intent));
+      }
+
+      const std::chrono::microseconds prach_start =
+          prach_cycle * cfg.max_ssb_interval + slot * cfg.access_slot + cfg.subvisit_duration;
+      ntn_access_calendar_intent ro;
+      ro.schedule_version = schedule_version;
+      ro.nci              = cell.identity.nci;
+      ro.position_id      = cell.assigned_l1_ids[i];
+      ro.start_time       = prach_start;
+      ro.duration         = cfg.subvisit_duration;
+      ro.direction        = ntn_access_calendar_direction::uplink;
+      ro.purpose          = ntn_access_calendar_purpose::prach_ro;
+      ro.port_id          = ntn_access_calendar_intent::no_resource_port;
+      result.push_back(ro);
+
+      ro.purpose = ntn_access_calendar_purpose::prach_ul_beam;
+      ro.port_id = static_cast<uint16_t>(port);
+      result.push_back(std::move(ro));
+    }
+  }
+  return result;
+}
+
+ntn_access_calendar_audit ntn_onboard_position_plan_controller::audit_access_calendar(
+    uint64_t schedule_version,
+    const std::array<ntn_onboard_cell_position_set, 2>& assignments,
+    const std::vector<ntn_access_calendar_intent>&       intents) const
+{
+  ntn_access_calendar_audit audit;
+  audit.nof_calendar_intents = intents.size();
+
+  std::map<std::string, nr_cell_identity> expected_positions;
+  std::set<nr_cell_identity>               cell_ncis;
+  for (const ntn_onboard_cell_position_set& cell : assignments) {
+    cell_ncis.insert(cell.identity.nci);
+    for (const std::string& position_id : cell.assigned_l1_ids) {
+      if (!expected_positions.emplace(position_id, cell.identity.nci).second) {
+        audit.reason = ntn_position_plan_reject_reason::invalid_calendar_position;
+        return audit;
+      }
+    }
+  }
+  audit.nof_l1_positions = expected_positions.size();
+
+  std::map<std::string, std::vector<std::chrono::microseconds>> ssb_offsets;
+  std::map<std::string, std::vector<std::chrono::microseconds>> prach_offsets;
+  std::map<std::pair<nr_cell_identity, uint16_t>, std::vector<const ntn_access_calendar_intent*>> resources;
+  std::map<nr_cell_identity, std::set<uint16_t>> used_ports;
+  std::vector<const ntn_access_calendar_intent*> prach_ros;
+  std::vector<const ntn_access_calendar_intent*> prach_beams;
+
+  for (const ntn_access_calendar_intent& intent : intents) {
+    if (intent.schedule_version != schedule_version || intent.duration.count() <= 0 || intent.start_time.count() < 0 ||
+        intent.start_time + intent.duration > cfg.max_prach_interval ||
+        cell_ncis.count(intent.nci) == 0) {
+      audit.reason = ntn_position_plan_reject_reason::invalid_calendar_position;
+      return audit;
+    }
+    const auto expected_it = expected_positions.find(intent.position_id);
+    if (expected_it == expected_positions.end() || expected_it->second != intent.nci) {
+      audit.reason = ntn_position_plan_reject_reason::invalid_calendar_position;
+      return audit;
+    }
+
+    if (intent.purpose == ntn_access_calendar_purpose::ssb_sib_paging ||
+        intent.purpose == ntn_access_calendar_purpose::ssb_sib_paging_rar) {
+      if (intent.direction != ntn_access_calendar_direction::downlink) {
+        audit.reason = ntn_position_plan_reject_reason::invalid_calendar_position;
+        return audit;
+      }
+      ssb_offsets[intent.position_id].push_back(intent.start_time);
+    } else if (intent.purpose == ntn_access_calendar_purpose::prach_ro) {
+      if (intent.direction != ntn_access_calendar_direction::uplink ||
+          intent.port_id != ntn_access_calendar_intent::no_resource_port) {
+        audit.reason = ntn_position_plan_reject_reason::invalid_resource_port;
+        return audit;
+      }
+      prach_offsets[intent.position_id].push_back(intent.start_time);
+      prach_ros.push_back(&intent);
+      continue;
+    } else if (intent.purpose == ntn_access_calendar_purpose::prach_ul_beam) {
+      if (intent.direction != ntn_access_calendar_direction::uplink) {
+        audit.reason = ntn_position_plan_reject_reason::invalid_calendar_position;
+        return audit;
+      }
+      prach_beams.push_back(&intent);
+    }
+
+    if (intent.port_id == ntn_access_calendar_intent::no_resource_port ||
+        intent.port_id >= cfg.max_analog_ports_per_cell) {
+      audit.reason = ntn_position_plan_reject_reason::invalid_resource_port;
+      return audit;
+    }
+    resources[{intent.nci, intent.port_id}].push_back(&intent);
+    used_ports[intent.nci].insert(intent.port_id);
+  }
+
+  for (const auto& entry : used_ports) {
+    audit.max_used_analog_ports_per_cell =
+        std::max(audit.max_used_analog_ports_per_cell, static_cast<unsigned>(entry.second.size()));
+    audit.max_used_analog_ports_per_satellite += entry.second.size();
+  }
+  if (audit.max_used_analog_ports_per_cell > cfg.max_analog_ports_per_cell ||
+      audit.max_used_analog_ports_per_satellite > cfg.max_analog_ports_per_satellite) {
+    audit.reason = ntn_position_plan_reject_reason::invalid_resource_port;
+    return audit;
+  }
+
+  for (auto& entry : resources) {
+    auto& entries = entry.second;
+    std::sort(entries.begin(), entries.end(), [](const auto* lhs, const auto* rhs) {
+      if (lhs->start_time != rhs->start_time) {
+        return lhs->start_time < rhs->start_time;
+      }
+      return lhs->duration < rhs->duration;
+    });
+    for (size_t i = 1; i != entries.size(); ++i) {
+      if (intervals_overlap(*entries[i - 1], *entries[i])) {
+        ++audit.resource_conflicts;
+      }
+    }
+  }
+
+  for (const ntn_access_calendar_intent* ro : prach_ros) {
+    const bool paired = std::any_of(prach_beams.begin(), prach_beams.end(), [ro](const auto* beam) {
+      return beam->schedule_version == ro->schedule_version && beam->nci == ro->nci &&
+             beam->position_id == ro->position_id && beam->start_time == ro->start_time &&
+             beam->duration == ro->duration;
+    });
+    if (!paired) {
+      ++audit.prach_ro_without_beam;
+    }
+  }
+
+  for (const auto& entry : expected_positions) {
+    audit.max_ssb_interval =
+        std::max(audit.max_ssb_interval, max_cyclic_gap(ssb_offsets[entry.first], cfg.max_prach_interval));
+    audit.max_prach_interval =
+        std::max(audit.max_prach_interval, max_cyclic_gap(prach_offsets[entry.first], cfg.max_prach_interval));
+  }
+
+  if (audit.resource_conflicts != 0) {
+    audit.reason = ntn_position_plan_reject_reason::resource_conflict;
+  } else if (audit.prach_ro_without_beam != 0) {
+    audit.reason = ntn_position_plan_reject_reason::prach_ro_without_beam;
+  } else if (audit.max_ssb_interval > cfg.max_ssb_interval) {
+    audit.reason = ntn_position_plan_reject_reason::ssb_deadline_miss;
+  } else if (audit.max_prach_interval > cfg.max_prach_interval) {
+    audit.reason = ntn_position_plan_reject_reason::prach_deadline_miss;
+  } else {
+    audit.accepted = true;
+    audit.reason   = ntn_position_plan_reject_reason::none;
+  }
+  return audit;
+}
+
+ntn_position_plan_submit_result
+ntn_onboard_position_plan_controller::reject(ntn_position_plan_reject_reason reason, uint64_t schedule_version)
+{
+  current_stage         = reason == ntn_position_plan_reject_reason::feature_disabled
+                              ? ntn_position_plan_stage::disabled
+                              : ntn_position_plan_stage::rejected;
+  last_rejection        = reason;
+  last_rejected_version = schedule_version;
+  return {false, current_stage, reason};
+}
+
+ntn_position_plan_submit_result ntn_onboard_position_plan_controller::submit(
+    const ntn_versioned_position_plan& plan, std::chrono::system_clock::time_point now)
+{
+  current_stage              = cfg.enabled ? ntn_position_plan_stage::received : ntn_position_plan_stage::disabled;
+  received_plan_present      = true;
+  last_candidate_inventory   = plan.visible_l1_positions;
+  last_received_catalog      = plan.catalog_version;
+  last_received_schedule     = plan.schedule_version;
+  last_received_hash         = plan.content_hash;
+  last_received_activation   = plan.activation_epoch;
+  const auto validation_error = validate_plan(plan, now);
+  if (validation_error != ntn_position_plan_reject_reason::none) {
+    return reject(validation_error, plan.schedule_version);
+  }
+  current_stage = ntn_position_plan_stage::validated;
+
+  ntn_activated_position_plan candidate;
+  candidate.source         = plan;
+  candidate.cell_positions = partition_positions(plan.visible_l1_positions);
+  candidate.access_calendar = build_access_calendar(plan.schedule_version, candidate.cell_positions);
+  candidate.calendar_audit  = audit_access_calendar(plan.schedule_version,
+                                                    candidate.cell_positions,
+                                                    candidate.access_calendar);
+  if (!candidate.calendar_audit.accepted) {
+    return reject(candidate.calendar_audit.reason, plan.schedule_version);
+  }
+  for (ntn_access_calendar_intent& intent : candidate.access_calendar) {
+    intent.state = ntn_access_calendar_state::checked;
+  }
+  candidate.calendar_hash = compute_ntn_access_calendar_hash(plan.schedule_version, candidate.access_calendar);
+  if (candidate.calendar_hash.empty()) {
+    return reject(ntn_position_plan_reject_reason::invalid_hash, plan.schedule_version);
+  }
+  current_stage = ntn_position_plan_stage::calendar_checked;
+
+  // Do not disturb an existing pending plan until the replacement has passed every check.
+  pending         = std::move(candidate);
+  highest_catalog_version  = std::max(highest_catalog_version, plan.catalog_version);
+  highest_schedule_version = std::max(highest_schedule_version, plan.schedule_version);
+  current_stage   = ntn_position_plan_stage::pending;
+  deployment      = cfg.require_external_apply ? ntn_position_plan_deployment_stage::not_sent
+                                                : ntn_position_plan_deployment_stage::disabled;
+  deployment_reason = cfg.require_external_apply ? "not_sent" : "external_execution_disabled";
+  advance_time(now);
+  return {true, current_stage, ntn_position_plan_reject_reason::none};
+}
+
+bool ntn_onboard_position_plan_controller::advance_time(std::chrono::system_clock::time_point now)
+{
+  if (active.has_value() && now >= active->source.valid_until) {
+    const uint64_t expired_version = active->source.schedule_version;
+    active.reset();
+    active_external_apply_evidence = false;
+    reject(ntn_position_plan_reject_reason::expired, expired_version);
+  }
+  if (!pending.has_value() || now < pending->source.activation_epoch) {
+    if (pending.has_value()) {
+      current_stage = ntn_position_plan_stage::pending;
+    }
+    return false;
+  }
+  if (now >= pending->source.valid_until) {
+    const uint64_t expired_version = pending->source.schedule_version;
+    pending.reset();
+    reject(ntn_position_plan_reject_reason::expired, expired_version);
+    return false;
+  }
+
+  if (cfg.require_external_apply && deployment != ntn_position_plan_deployment_stage::applied) {
+    current_stage = ntn_position_plan_stage::pending;
+    return false;
+  }
+
+  active        = std::move(pending);
+  pending.reset();
+  active_external_apply_evidence = cfg.require_external_apply;
+  current_stage = ntn_position_plan_stage::active;
+  return true;
+}
+
+bool ntn_onboard_position_plan_controller::mark_deployment_preparing(uint64_t           schedule_version,
+                                                                     const std::string& calendar_hash)
+{
+  if (!pending.has_value() || pending->source.schedule_version != schedule_version ||
+      normalize_hash(pending->calendar_hash) != normalize_hash(calendar_hash)) {
+    return false;
+  }
+  deployment        = ntn_position_plan_deployment_stage::preparing;
+  deployment_reason = "prepare_sent";
+  return true;
+}
+
+bool ntn_onboard_position_plan_controller::mark_deployment_retryable(uint64_t           schedule_version,
+                                                                     const std::string& calendar_hash,
+                                                                     std::string        detail)
+{
+  if (!pending.has_value() || pending->source.schedule_version != schedule_version ||
+      normalize_hash(pending->calendar_hash) != normalize_hash(calendar_hash)) {
+    return false;
+  }
+  deployment        = ntn_position_plan_deployment_stage::not_sent;
+  deployment_reason = detail.empty() ? "retry_pending" : std::move(detail);
+  return true;
+}
+
+bool ntn_onboard_position_plan_controller::mark_deployment_ready(uint64_t           schedule_version,
+                                                                 const std::string& calendar_hash)
+{
+  if (!pending.has_value() || pending->source.schedule_version != schedule_version ||
+      normalize_hash(pending->calendar_hash) != normalize_hash(calendar_hash)) {
+    return false;
+  }
+  deployment        = ntn_position_plan_deployment_stage::ready;
+  deployment_reason = "du_ready";
+  return true;
+}
+
+bool ntn_onboard_position_plan_controller::mark_deployment_applied(uint64_t           schedule_version,
+                                                                   const std::string& calendar_hash)
+{
+  if (!pending.has_value() || pending->source.schedule_version != schedule_version ||
+      normalize_hash(pending->calendar_hash) != normalize_hash(calendar_hash)) {
+    return false;
+  }
+  deployment        = ntn_position_plan_deployment_stage::applied;
+  deployment_reason = "ssb_prach_software_gate_applied_no_position_or_rf_evidence";
+  return true;
+}
+
+bool ntn_onboard_position_plan_controller::reject_pending_deployment(
+    uint64_t                        schedule_version,
+    const std::string&              calendar_hash,
+    ntn_position_plan_reject_reason reason,
+    std::string                     detail)
+{
+  if (!pending.has_value() || pending->source.schedule_version != schedule_version ||
+      normalize_hash(pending->calendar_hash) != normalize_hash(calendar_hash)) {
+    return false;
+  }
+  pending.reset();
+  deployment = reason == ntn_position_plan_reject_reason::execution_unsupported
+                   ? ntn_position_plan_deployment_stage::unsupported
+                   : ntn_position_plan_deployment_stage::rejected;
+  deployment_reason = detail.empty() ? to_string(reason) : std::move(detail);
+  reject(reason, schedule_version);
+  return true;
+}
+
+void ntn_onboard_position_plan_controller::record_external_rejection(ntn_position_plan_reject_reason reason,
+                                                                      uint64_t schedule_version)
+{
+  reject(reason, schedule_version);
+}
+
+std::string srsran::srs_cu_cp::compute_ntn_position_plan_content_hash(const ntn_versioned_position_plan& plan)
+{
+  std::ostringstream canonical;
+  canonical.imbue(std::locale::classic());
+  canonical << "satellite_id=" << plan.satellite_id << '\n';
+  canonical << "catalog_version=" << plan.catalog_version << '\n';
+  canonical << "schedule_version=" << plan.schedule_version << '\n';
+  canonical << "valid_from_unix_ms=" << to_unix_milliseconds(plan.valid_from) << '\n';
+  canonical << "valid_until_unix_ms=" << to_unix_milliseconds(plan.valid_until) << '\n';
+  canonical << "activation_epoch_unix_ms=" << to_unix_milliseconds(plan.activation_epoch) << '\n';
+
+  const auto cells = sorted_cell_identities(plan.onboard_cells);
+  for (const ntn_onboard_cell_identity& cell : cells) {
+    canonical << "cell=" << cell.nci.value() << ',' << cell.pci << '\n';
+  }
+
+  std::vector<ntn_l1_position> positions = plan.visible_l1_positions;
+  std::sort(positions.begin(), positions.end(), [](const ntn_l1_position& lhs, const ntn_l1_position& rhs) {
+    if (lhs.position_id != rhs.position_id) {
+      return lhs.position_id < rhs.position_id;
+    }
+    if (lhs.latitude_deg != rhs.latitude_deg) {
+      return lhs.latitude_deg < rhs.latitude_deg;
+    }
+    return lhs.longitude_deg < rhs.longitude_deg;
+  });
+  canonical << std::setprecision(std::numeric_limits<double>::max_digits10);
+  for (const ntn_l1_position& position : positions) {
+    canonical << "l1=" << position.position_id << ',' << position.latitude_deg << ',' << position.longitude_deg << '\n';
+  }
+
+  return sha256_with_prefix(canonical.str());
+}
+
+std::string srsran::srs_cu_cp::compute_ntn_access_calendar_hash(
+    uint64_t schedule_version, const std::vector<ntn_access_calendar_intent>& intents)
+{
+  std::vector<ntn_access_calendar_intent> canonical_intents = intents;
+  std::sort(canonical_intents.begin(), canonical_intents.end(), [](const auto& lhs, const auto& rhs) {
+    return std::tie(lhs.nci,
+                    lhs.position_id,
+                    lhs.start_time,
+                    lhs.duration,
+                    lhs.direction,
+                    lhs.purpose,
+                    lhs.port_id) <
+           std::tie(rhs.nci,
+                    rhs.position_id,
+                    rhs.start_time,
+                    rhs.duration,
+                    rhs.direction,
+                    rhs.purpose,
+                    rhs.port_id);
+  });
+
+  std::ostringstream canonical;
+  canonical << "schedule_version=" << schedule_version << '\n';
+  for (const ntn_access_calendar_intent& intent : canonical_intents) {
+    canonical << "intent=" << intent.nci.value() << ',' << intent.position_id << ',' << intent.start_time.count()
+              << ',' << intent.duration.count() << ',' << static_cast<unsigned>(intent.direction) << ','
+              << static_cast<unsigned>(intent.purpose) << ',' << intent.port_id << '\n';
+  }
+  return sha256_with_prefix(canonical.str());
+}
+
+expected<ntn_versioned_position_plan, std::string>
+srsran::srs_cu_cp::parse_ntn_position_plan_json(const std::string& json_text)
+{
+  try {
+    const nlohmann::json root = nlohmann::json::parse(json_text);
+    if (!root.is_object()) {
+      return make_unexpected(std::string{"root must be an object"});
+    }
+
+    ntn_versioned_position_plan result;
+    result.satellite_id      = root.at("satellite_id").get<std::string>();
+    result.catalog_version   = root.at("catalog_version").get<uint64_t>();
+    result.schedule_version  = root.at("schedule_version").get<uint64_t>();
+    result.content_hash      = root.at("content_hash").get<std::string>();
+    result.valid_from        = from_unix_milliseconds(root.at("valid_from_unix_ms").get<int64_t>());
+    result.valid_until       = from_unix_milliseconds(root.at("valid_until_unix_ms").get<int64_t>());
+    result.activation_epoch  = from_unix_milliseconds(root.at("activation_epoch_unix_ms").get<int64_t>());
+
+    const nlohmann::json& cells = root.at("onboard_cells");
+    if (!cells.is_array() || cells.size() != 2) {
+      return make_unexpected(std::string{"onboard_cells must contain exactly two identities"});
+    }
+    for (size_t i = 0; i != cells.size(); ++i) {
+      const std::string context = fmt::format("onboard_cells[{}]", i);
+      auto nci = parse_nci(cells[i].at("nci"), context.c_str());
+      if (!nci.has_value()) {
+        return make_unexpected(nci.error());
+      }
+      const uint64_t pci = cells[i].at("pci").get<uint64_t>();
+      if (pci > MAX_PCI) {
+        return make_unexpected(fmt::format("{}.pci is outside 0..{}", context, MAX_PCI));
+      }
+      result.onboard_cells[i] = {nci.value(), static_cast<pci_t>(pci)};
+    }
+
+    const nlohmann::json& positions = root.at("visible_l1_positions");
+    if (!positions.is_array()) {
+      return make_unexpected(std::string{"visible_l1_positions must be an array"});
+    }
+    result.visible_l1_positions.reserve(positions.size());
+    for (size_t i = 0; i != positions.size(); ++i) {
+      ntn_l1_position position;
+      position.position_id  = positions[i].at("position_id").get<std::string>();
+      position.latitude_deg = positions[i].at("latitude_deg").get<double>();
+      position.longitude_deg = positions[i].at("longitude_deg").get<double>();
+      result.visible_l1_positions.push_back(std::move(position));
+    }
+    return result;
+  } catch (const std::exception& error) {
+    return make_unexpected(fmt::format("invalid NTN position plan JSON: {}", error.what()));
+  }
+}
+
+expected<ntn_versioned_position_plan, std::string>
+srsran::srs_cu_cp::load_ntn_position_plan_json_file(const std::string& path)
+{
+  std::ifstream input(path);
+  if (!input.is_open()) {
+    return make_unexpected(fmt::format("cannot open '{}'", path));
+  }
+  std::ostringstream text;
+  text << input.rdbuf();
+  if (!input.good() && !input.eof()) {
+    return make_unexpected(fmt::format("cannot read '{}'", path));
+  }
+  return parse_ntn_position_plan_json(text.str());
+}

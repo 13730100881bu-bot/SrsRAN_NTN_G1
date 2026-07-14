@@ -27,6 +27,7 @@
 #include "srsran/ran/nr_cell_identity.h"
 #include "srsran/support/cli11_utils.h"
 #include "srsran/support/config_parsers.h"
+#include <limits>
 
 using namespace srsran;
 
@@ -252,6 +253,22 @@ static void configure_cli11_report_args(CLI::App& app, cu_cp_unit_report_config&
       ->check(CLI::IsMember({0, 40, 64, 80, 100, 128, 160, 256, 320, 480, 512, 640, 1024, 1280, 2560, 5120}));
 }
 
+static void configure_cli11_ntn_circular_orbit_satellite_args(CLI::App& app,
+                                                              cu_cp_unit_ntn_circular_orbit_satellite_config& config)
+{
+  add_option(app, "--satellite_id", config.satellite_id, "Stable NTN satellite identifier");
+  add_option(app, "--altitude_m", config.altitude_m, "Circular orbit altitude in meters")->capture_default_str();
+  add_option(app, "--inclination_deg", config.inclination_deg, "Circular orbit inclination in degrees")
+      ->capture_default_str();
+  add_option(app, "--raan_deg", config.raan_deg, "Circular orbit RAAN in degrees")->capture_default_str();
+  add_option(app,
+             "--argument_of_latitude_deg",
+             config.argument_of_latitude_deg,
+             "Circular orbit argument of latitude at epoch in degrees")
+      ->capture_default_str();
+  add_option(app, "--epoch_unix_s", config.epoch_unix_s, "Circular orbit epoch as Unix seconds");
+}
+
 static void configure_cli11_ncell_args(CLI::App& app, cu_cp_unit_neighbor_cell_config_item& config)
 {
   add_option(app, "--nr_cell_id", config.nr_cell_id, "Neighbor cell id")
@@ -372,9 +389,41 @@ static void configure_cli11_mobility_args(CLI::App& app, cu_cp_unit_mobility_con
   add_option(*ntn_location_subcmd,
              "--max_nof_served_beams",
              config.ntn_location_mobility.max_nof_served_beams,
-             "Maximum number of NTN beams simultaneously served by the hopping schedule")
+             "Maximum number of NTN beams watched in the hopping window; 0 keeps the full visible inventory")
       ->capture_default_str()
-      ->check(CLI::Range(1U, 1024U));
+      ->check(CLI::Range(0U, 1024U));
+  add_option(*ntn_location_subcmd,
+             "--max_nof_active_analog_access_beams",
+             config.ntn_location_mobility.max_nof_active_analog_access_beams,
+             "Maximum number of active NTN access beam groups; 0 means no CU-CP cap")
+      ->capture_default_str()
+      ->check(CLI::Range(0U, 1024U));
+  add_option(*ntn_location_subcmd,
+             "--max_nof_loaded_digital_service_beams",
+             config.ntn_location_mobility.max_nof_loaded_digital_service_beams,
+             "Maximum number of NTN service beams ready to carry UE traffic; 0 means no CU-CP cap")
+      ->capture_default_str()
+      ->check(CLI::Range(0U, 4096U));
+  add_option(*ntn_location_subcmd,
+             "--preheated_beam_hold_time_ms",
+             config.ntn_location_mobility.preheated_beam_hold_time_ms,
+             "How long to keep a prepared target beam ready when no UE move uses it; 0 disables idle demotion")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--preheated_beam_min_ready_time_ms",
+             config.ntn_location_mobility.preheated_beam_min_ready_time_ms,
+             "Minimum wait after preparing a target beam before cross-group UE moves may use it; 0 disables")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--analog_rebalance_pair_cooldown_ms",
+             config.ntn_location_mobility.analog_rebalance_pair_cooldown_ms,
+             "Cooldown before moving more UEs between the same source and target access beam groups; 0 disables")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--digital_target_reservation_hold_time_ms",
+             config.ntn_location_mobility.digital_target_reservation_hold_time_ms,
+             "How long to reserve service-beam capacity for a planned UE move; 0 disables expiry")
+      ->capture_default_str();
   add_option(*ntn_location_subcmd,
              "--served_beam_hopping_enabled",
              config.ntn_location_mobility.served_beam_hopping_enabled,
@@ -387,6 +436,38 @@ static void configure_cli11_mobility_args(CLI::App& app, cu_cp_unit_mobility_con
       ->capture_default_str()
       ->check(CLI::Range(1U, 1024U));
   add_option(*ntn_location_subcmd,
+             "--multi_beam_load_balancing_enabled",
+             config.ntn_location_mobility.multi_beam_load_balancing_enabled,
+             "Move service-bound UEs away from overloaded NTN service beams when a ready target exists")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--demand_aware_beam_scheduling_enabled",
+             config.ntn_location_mobility.demand_aware_beam_scheduling_enabled,
+             "Prefer NTN beams that already have UE, bearer, or QoS demand when choosing the service window")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--multi_beam_headroom_admission_enabled",
+             config.ntn_location_mobility.multi_beam_headroom_admission_enabled,
+             "Keep capacity free for UE moves before admitting low-priority new service demand")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--multi_beam_load_balancing_min_ue_delta",
+             config.ntn_location_mobility.multi_beam_load_balancing_min_ue_delta,
+             "Minimum source-target UE load delta before NTN load-balancing handover")
+      ->capture_default_str()
+      ->check(CLI::Range(1U, 1024U));
+  add_option(*ntn_location_subcmd,
+             "--multi_beam_load_balancing_max_handovers_per_eval",
+             config.ntn_location_mobility.multi_beam_load_balancing_max_handovers_per_eval,
+             "Maximum number of NTN load-balancing handovers scheduled in one evaluation")
+      ->capture_default_str()
+      ->check(CLI::Range(1U, 1024U));
+  add_option(*ntn_location_subcmd,
+             "--multi_beam_load_balancing_handover_cooldown_ms",
+             config.ntn_location_mobility.multi_beam_load_balancing_handover_cooldown_ms,
+             "Cooldown before the same UE can be considered for another NTN load-balancing handover")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
              "--satellite_state_source",
              config.ntn_location_mobility.satellite_state_source,
              "Satellite state source used for runtime served beam updates")
@@ -396,6 +477,16 @@ static void configure_cli11_mobility_args(CLI::App& app, cu_cp_unit_mobility_con
              "--satellite_state_update_period_ms",
              config.ntn_location_mobility.satellite_state_update_period_ms,
              "Period of orbit-driven satellite state updates")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--predictive_service_window_horizon_ms",
+             config.ntn_location_mobility.predictive_service_window_horizon_ms,
+             "Future NTN service-window prediction horizon; 0 keeps legacy one-step prediction")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--predictive_handover_lead_time_ms",
+             config.ntn_location_mobility.predictive_handover_lead_time_ms,
+             "Lead time before predicted beam exit to prepare NTN handover and block new demand")
       ->capture_default_str();
   add_option(*ntn_location_subcmd,
              "--circular_orbit_altitude_m",
@@ -421,6 +512,22 @@ static void configure_cli11_mobility_args(CLI::App& app, cu_cp_unit_mobility_con
              "--circular_orbit_epoch_unix_s",
              config.ntn_location_mobility.circular_orbit_epoch_unix_s,
              "Circular orbit epoch as Unix seconds");
+  ntn_location_subcmd->add_option_function<std::vector<std::string>>(
+      "--circular_orbit_satellites",
+      [&config](const std::vector<std::string>& values) {
+        config.ntn_location_mobility.circular_orbit_satellites.resize(values.size());
+
+        for (unsigned i = 0, e = values.size(); i != e; ++i) {
+          CLI::App subapp("NTN circular orbit satellite");
+          subapp.config_formatter(create_yaml_config_parser());
+          subapp.allow_config_extras(CLI::config_extras_mode::error);
+          configure_cli11_ntn_circular_orbit_satellite_args(
+              subapp, config.ntn_location_mobility.circular_orbit_satellites[i]);
+          std::istringstream ss(values[i]);
+          subapp.parse_from_stream(ss);
+        }
+      },
+      "Sets the list of circular-orbit NTN satellites");
   add_option(*ntn_location_subcmd,
              "--tle_satellite_name",
              config.ntn_location_mobility.tle_satellite_name,
@@ -449,6 +556,16 @@ static void configure_cli11_mobility_args(CLI::App& app, cu_cp_unit_mobility_con
              "--location_max_age_ms",
              config.ntn_location_mobility.location_max_age_ms,
              "Maximum accepted age of an NTN UE location sample")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--location_lost_release_grace_period_ms",
+             config.ntn_location_mobility.location_lost_release_grace_period_ms,
+             "Grace period before releasing a service-bound NTN UE after its location becomes missing or stale")
+      ->capture_default_str();
+  add_option(*ntn_location_subcmd,
+             "--idle_paging_context_max_age_ms",
+             config.ntn_location_mobility.idle_paging_context_max_age_ms,
+             "Maximum age of cached NTN idle paging context")
       ->capture_default_str();
   add_option(*ntn_location_subcmd,
              "--handover_retry_timeout_ms",
@@ -487,6 +604,104 @@ static void configure_cli11_mobility_args(CLI::App& app, cu_cp_unit_mobility_con
              config.ntn_location_mobility.core_network_reporting_min_report_interval_ms,
              "Minimum interval between two NTN core-network LocationReports for the same UE")
       ->capture_default_str();
+
+  CLI::App* ntn_position_plan_subcmd =
+      app.add_subcommand("ntn_onboard_position_plan", "Versioned management-center onboard L1 position plan");
+  add_option(*ntn_position_plan_subcmd,
+             "--enabled",
+             config.ntn_onboard_position_plan.enabled,
+             "Enable versioned onboard L1 position-plan input")
+      ->capture_default_str();
+  add_option(*ntn_position_plan_subcmd,
+             "--du_execution_enabled",
+             config.ntn_onboard_position_plan.du_execution_enabled,
+             "Deploy checked calendars to DU/MAC; applied means software scheduler state, not RF telemetry")
+      ->capture_default_str();
+  add_option(*ntn_position_plan_subcmd,
+             "--satellite_id",
+             config.ntn_onboard_position_plan.satellite_id,
+             "Stable local satellite identifier expected in the position plan")
+      ->capture_default_str();
+  add_option(*ntn_position_plan_subcmd,
+             "--plan_json_file",
+             config.ntn_onboard_position_plan.plan_json_file,
+             "Path to the management-center versioned position-plan JSON file")
+      ->capture_default_str();
+  add_option(*ntn_position_plan_subcmd,
+             "--cell_ncis",
+             config.ntn_onboard_position_plan.cell_ncis,
+             "Exactly two stable opaque 36-bit NCIs owned by this satellite")
+      ->check(CLI::Range(static_cast<uint64_t>(0U), nr_cell_identity::max().value()));
+  add_option(*ntn_position_plan_subcmd,
+             "--cell_pcis",
+             config.ntn_onboard_position_plan.cell_pcis,
+             "Exactly two planned PCIs paired with cell_ncis; reuse is permitted")
+      ->check(CLI::Range(0U, static_cast<unsigned>(MAX_PCI)));
+  add_option(*ntn_position_plan_subcmd,
+             "--max_l1_positions_per_cell",
+             config.ntn_onboard_position_plan.max_l1_positions_per_cell,
+             "Maximum L1 positions assigned to either onboard cell")
+      ->check(CLI::PositiveNumber);
+  add_option(*ntn_position_plan_subcmd,
+             "--max_l1_positions_per_satellite",
+             config.ntn_onboard_position_plan.max_l1_positions_per_satellite,
+             "Maximum L1 positions accepted for the complete satellite inventory")
+      ->check(CLI::PositiveNumber);
+  add_option(*ntn_position_plan_subcmd,
+             "--max_analog_ports_per_cell",
+             config.ntn_onboard_position_plan.max_analog_ports_per_cell,
+             "Maximum concurrent analog access ports per onboard cell")
+      ->check(CLI::Range(1U, static_cast<unsigned>(std::numeric_limits<uint16_t>::max() - 1U)));
+  add_option(*ntn_position_plan_subcmd,
+             "--max_analog_ports_per_satellite",
+             config.ntn_onboard_position_plan.max_analog_ports_per_satellite,
+             "Maximum concurrent analog access ports across the satellite")
+      ->check(CLI::PositiveNumber);
+  add_option(*ntn_position_plan_subcmd,
+             "--access_slot_us",
+             config.ntn_onboard_position_plan.access_slot_us,
+             "Access-calendar slot duration in microseconds")
+      ->check(CLI::PositiveNumber);
+  add_option(*ntn_position_plan_subcmd,
+             "--subvisit_duration_us",
+             config.ntn_onboard_position_plan.subvisit_duration_us,
+             "Duration of one DL or UL position visit in microseconds")
+      ->check(CLI::PositiveNumber);
+  add_option(*ntn_position_plan_subcmd,
+             "--max_ssb_interval_ms",
+             config.ntn_onboard_position_plan.max_ssb_interval_ms,
+             "Maximum audited interval between SSB visits for one L1 position")
+      ->check(CLI::PositiveNumber);
+  add_option(*ntn_position_plan_subcmd,
+             "--max_prach_interval_ms",
+             config.ntn_onboard_position_plan.max_prach_interval_ms,
+             "Maximum audited interval between PRACH opportunities for one L1 position")
+      ->check(CLI::PositiveNumber);
+  add_option(*ntn_position_plan_subcmd,
+             "--activation_alignment_ms",
+             config.ntn_onboard_position_plan.activation_alignment_ms,
+             "Required management-center activation epoch alignment")
+      ->check(CLI::PositiveNumber);
+  add_option(*ntn_position_plan_subcmd,
+             "--reload_period_ms",
+             config.ntn_onboard_position_plan.reload_period_ms,
+             "File polling period for management-center plan updates; 0 loads once")
+      ->capture_default_str();
+  add_option(*ntn_position_plan_subcmd,
+             "--du_prepare_guard_ms",
+             config.ntn_onboard_position_plan.du_prepare_guard_ms,
+             "Minimum lead reserved for DU/MAC prepare and downstream slot buffering")
+      ->check(CLI::PositiveNumber);
+  add_option(*ntn_position_plan_subcmd,
+             "--du_prepare_horizon_ms",
+             config.ntn_onboard_position_plan.du_prepare_horizon_ms,
+             "How early to open DU prepare while staying inside the plain-SFN mapping horizon")
+      ->check(CLI::PositiveNumber);
+  add_option(*ntn_position_plan_subcmd,
+             "--du_apply_timeout_ms",
+             config.ntn_onboard_position_plan.du_apply_timeout_ms,
+             "Post-activation grace for both scheduler cells to report applied before rollback")
+      ->check(CLI::PositiveNumber);
 }
 
 static void configure_cli11_rrc_args(CLI::App& app, cu_cp_unit_rrc_config& config)

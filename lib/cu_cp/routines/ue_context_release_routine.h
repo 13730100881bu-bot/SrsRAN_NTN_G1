@@ -25,6 +25,7 @@
 #include "../ue_manager/ue_manager_impl.h"
 #include "srsran/support/async/async_task.h"
 #include "srsran/support/async/eager_async_task.h"
+#include <optional>
 
 namespace srsran {
 namespace srs_cu_cp {
@@ -38,7 +39,10 @@ public:
                              f1ap_ue_context_manager&                f1ap_ue_ctxt_mng_,
                              cu_cp_ue_removal_handler&               ue_removal_handler_,
                              ue_manager&                             ue_mng_,
-                             srslog::basic_logger&                   logger_);
+                             srslog::basic_logger&                   logger_,
+                             std::optional<cu_cp_user_location_info_nr> ntn_user_location_info_ = std::nullopt,
+                             std::optional<cu_cp_info_on_recommended_cells_and_ran_nodes_for_paging>
+                                 info_on_recommended_cells_and_ran_nodes_for_paging_ = std::nullopt);
 
   void operator()(coro_context<async_task<cu_cp_ue_context_release_complete>>& ctx);
 
@@ -52,6 +56,9 @@ private:
   cu_cp_ue_removal_handler&    ue_removal_handler;             // to remove UE
   ue_manager&                  ue_mng;
   srslog::basic_logger&        logger;
+  std::optional<cu_cp_user_location_info_nr> ntn_user_location_info;
+  std::optional<cu_cp_info_on_recommended_cells_and_ran_nodes_for_paging>
+      info_on_recommended_cells_and_ran_nodes_for_paging;
 
   // (sub-)routine requests
   rrc_ue_release_context              release_context;

@@ -128,7 +128,17 @@ o_cu_cp_unit srsran::build_o_cu_cp(const o_cu_cp_unit_config& unit_cfg, o_cu_cp_
   ocucp.commands.cmdline.commands.push_back(
       std::make_unique<ntn_satellite_geo_state_app_command>(ocucp.unit->get_cu_cp().get_command_handler()));
   ocucp.commands.cmdline.commands.push_back(
+      std::make_unique<ntn_state_app_command>(ocucp.unit->get_cu_cp().get_command_handler()));
+  ocucp.commands.cmdline.commands.push_back(
+      std::make_unique<ntn_diagnose_app_command>(ocucp.unit->get_cu_cp().get_command_handler()));
+  ocucp.commands.cmdline.commands.push_back(
+      std::make_unique<ntn_repair_app_command>(ocucp.unit->get_cu_cp().get_command_handler()));
+  ocucp.commands.cmdline.commands.push_back(
+      std::make_unique<ntn_assistance_app_command>(ocucp.unit->get_cu_cp().get_command_handler()));
+  ocucp.commands.cmdline.commands.push_back(
       std::make_unique<ntn_beams_app_command>(ocucp.unit->get_cu_cp().get_command_handler()));
+  ocucp.commands.cmdline.commands.push_back(
+      std::make_unique<ntn_ues_app_command>(ocucp.unit->get_cu_cp().get_command_handler()));
 
   return ocucp;
 }

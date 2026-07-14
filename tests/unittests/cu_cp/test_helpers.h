@@ -439,9 +439,29 @@ public:
     return true;
   }
 
+  async_task<bool> handle_ue_context_suspend_request(ue_index_t ue_index) override
+  {
+    last_suspend_ue_index = ue_index;
+    return launch_async([](coro_context<async_task<bool>>& ctx) {
+      CORO_BEGIN(ctx);
+      CORO_RETURN(true);
+    });
+  }
+
+  async_task<bool> handle_ue_context_resume_request(ue_index_t ue_index, establishment_cause_t rrc_resume_cause) override
+  {
+    last_resume_ue_index = ue_index;
+    return launch_async([](coro_context<async_task<bool>>& ctx) {
+      CORO_BEGIN(ctx);
+      CORO_RETURN(true);
+    });
+  }
+
   void set_ue_context_release_request_outcome(bool outcome_) { release_request_outcome = outcome_; }
 
   std::optional<ngap_location_report> last_location_report;
+  std::optional<ue_index_t>           last_suspend_ue_index;
+  std::optional<ue_index_t>           last_resume_ue_index;
 
 private:
   bool                  release_request_outcome = true;
@@ -455,6 +475,30 @@ struct ue_context_outcome_t {
   std::list<unsigned> drb_removed_list; // List of DRB IDs that were removed.
   byte_buffer         cell_group_cfg = make_byte_buffer("5800b24223c853a0120c7c080408c008").value();
 };
+
+inline bool has_ntn_ul_slot_resource_values(const f1ap_ntn_ul_slot_resource_request& request)
+{
+  return request.sr_slot_offset.has_value() || request.srs_slot_offset.has_value() ||
+         request.sr_slot_period.has_value() || request.srs_slot_period.has_value();
+}
+
+inline std::optional<f1ap_ntn_ul_slot_resource_result>
+make_successful_ntn_ul_slot_result(const std::optional<f1ap_ntn_ul_slot_resource_request>& request)
+{
+  if (!request.has_value()) {
+    return std::nullopt;
+  }
+
+  f1ap_ntn_ul_slot_resource_result result;
+  result.accepted = true;
+  result.reason   = has_ntn_ul_slot_resource_values(*request)
+                        ? f1ap_ntn_ul_slot_resource_result_reason::applied
+                        : f1ap_ntn_ul_slot_resource_result_reason::clear_applied;
+  if (has_ntn_ul_slot_resource_values(*request)) {
+    result.applied_request = request;
+  }
+  return result;
+}
 
 struct dummy_f1ap_ue_context_manager : public f1ap_ue_context_manager {
 public:
@@ -472,13 +516,18 @@ public:
                                   const std::optional<rrc_ue_transfer_context>& rrc_context) override
   {
     logger.info("Received a new UE context setup request");
+    const std::optional<f1ap_ntn_ul_slot_resource_request> ntn_ul_slot_request = request.ntn_ul_slot_request;
 
     return launch_async([res = f1ap_ue_context_setup_response{},
+                         ntn_ul_slot_request,
                          this](coro_context<async_task<f1ap_ue_context_setup_response>>& ctx) mutable {
       CORO_BEGIN(ctx);
 
       res.success                          = ue_context_setup_outcome;
       res.du_to_cu_rrc_info.cell_group_cfg = make_byte_buffer("5800b24223c853a0120c7c080408c008").value();
+      if (res.success) {
+        res.ntn_ul_slot_result = make_successful_ntn_ul_slot_result(ntn_ul_slot_request);
+      }
 
       CORO_RETURN(res);
     });
@@ -491,8 +540,10 @@ public:
 
     // store request so it can be verified in the test code
     make_partial_copy(ue_context_modification_request, request);
+    const std::optional<f1ap_ntn_ul_slot_resource_request> ntn_ul_slot_request = request.ntn_ul_slot_request;
 
     return launch_async([res = f1ap_ue_context_modification_response{},
+                         ntn_ul_slot_request,
                          this](coro_context<async_task<f1ap_ue_context_modification_response>>& ctx) mutable {
       CORO_BEGIN(ctx);
 
@@ -504,6 +555,9 @@ public:
         res.drbs_setup_list.push_back(drb_item);
       }
       res.du_to_cu_rrc_info.cell_group_cfg = ue_context_modification_outcome.cell_group_cfg.copy();
+      if (res.success) {
+        res.ntn_ul_slot_result = make_successful_ntn_ul_slot_result(ntn_ul_slot_request);
+      }
       // TODO: add failed list and other fields here ..
 
       CORO_RETURN(res);
@@ -588,6 +642,8 @@ public:
 
   bool next_ue_setup_response = true;
 
+  bool handle_ue_setup_request(ue_index_t ue_index) override { return next_ue_setup_response; }
+
   rrc_ue_reestablishment_context_response
   handle_rrc_reestablishment_request(pci_t old_pci, rnti_t old_c_rnti, ue_index_t ue_index) override
   {
@@ -616,6 +672,16 @@ public:
     logger.info("ue={}: Received RRC Reestablishment complete notification", old_ue_index);
   }
 
+  void handle_rrc_resume_request(ue_index_t            ue_index,
+                                 ue_index_t            old_ue_index,
+                                 establishment_cause_t rrc_resume_cause) override
+  {
+    logger.info("ue={}: Received RRC Resume Request notification for old_ue={}", ue_index, old_ue_index);
+    last_rrc_resume_ue_index     = ue_index;
+    last_rrc_resume_old_ue_index = old_ue_index;
+    last_rrc_resume_cause        = rrc_resume_cause;
+  }
+
   async_task<bool> handle_ue_context_transfer(ue_index_t ue_index, ue_index_t old_ue_index) override
   {
     logger.info("ue={}: Requested a UE context transfer from old_ue={}", ue_index, old_ue_index);
@@ -639,6 +705,9 @@ public:
   void handle_rrc_reconf_complete_indicator(ue_index_t ue_index) override {}
 
   cu_cp_ue_context_release_request last_cu_cp_ue_context_release_request;
+  std::optional<ue_index_t>        last_rrc_resume_ue_index;
+  std::optional<ue_index_t>        last_rrc_resume_old_ue_index;
+  std::optional<establishment_cause_t> last_rrc_resume_cause;
 
 private:
   rrc_ue_reestablishment_context_response reest_context = {};

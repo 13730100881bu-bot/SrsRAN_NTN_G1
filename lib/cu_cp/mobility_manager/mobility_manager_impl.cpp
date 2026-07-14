@@ -49,7 +49,24 @@ void mobility_manager::trigger_handover(pci_t source_pci, rnti_t rnti, pci_t tar
     logger.warning("Could not trigger handover, UE is invalid. rnti={} pci={}", rnti, source_pci);
     return;
   }
-  handle_handover(ue_index, gnb_id_t{}, nr_cell_identity{}, target_pci); // TODO: define gNB-ID and NCI
+
+  du_index_t target_du_index = du_db.find_du(target_pci);
+  if (target_du_index == du_index_t::invalid) {
+    logger.warning("Could not trigger handover, target PCI={} is not served by any connected DU", target_pci);
+    return;
+  }
+
+  std::optional<nr_cell_global_id_t> target_cgi =
+      du_db.get_du_processor(target_du_index).get_mobility_handler().get_cgi(target_pci);
+  if (!target_cgi.has_value()) {
+    logger.warning("Could not trigger handover, target CGI for PCI={} at du_index={} was not found",
+                   target_pci,
+                   target_du_index);
+    return;
+  }
+
+  handle_handover(
+      ue_index, target_cgi->nci.gnb_id(22), target_cgi->nci, target_pci, std::nullopt, target_du_index);
 }
 
 void mobility_manager::handle_neighbor_better_than_spcell(ue_index_t       ue_index,
@@ -84,6 +101,8 @@ void mobility_manager::handle_ntn_beam_placement_plan_updated(const ntn_beam_pla
 
 bool mobility_manager::handle_ntn_location_handover_required(const ntn_location_handover_trigger& trigger)
 {
+  const bool has_service_pair_target = !trigger.target_uplink_resource_beam_id.empty() &&
+                                       trigger.target_uplink_resource_beam_id != trigger.target_beam_id;
   if (trigger.ue_index == ue_index_t::invalid) {
     logger.warning("Ignoring NTN location handover trigger with invalid UE index");
     return false;
@@ -99,7 +118,8 @@ bool mobility_manager::handle_ntn_location_handover_required(const ntn_location_
     return false;
   }
   if (std::find(current_served_ntn_beam_ids.begin(), current_served_ntn_beam_ids.end(), trigger.target_beam_id) ==
-      current_served_ntn_beam_ids.end()) {
+          current_served_ntn_beam_ids.end() &&
+      !has_service_pair_target) {
     logger.warning("ue={}: Ignoring NTN location handover trigger attempt={} beam={}. Cause: target beam is not in "
                    "the current served beam set",
                    trigger.ue_index,
@@ -110,22 +130,26 @@ bool mobility_manager::handle_ntn_location_handover_required(const ntn_location_
   if (std::find(trigger.served_beam_ids_snapshot.begin(),
                 trigger.served_beam_ids_snapshot.end(),
                 trigger.target_beam_id) == trigger.served_beam_ids_snapshot.end()) {
-    logger.warning("ue={}: Ignoring NTN location handover trigger attempt={} beam={}. Cause: target beam is not in "
-                   "the served beam snapshot",
-                   trigger.ue_index,
-                   trigger.handover_attempt_id,
-                   trigger.target_beam_id);
-    return false;
+    if (!has_service_pair_target) {
+      logger.warning("ue={}: Ignoring NTN location handover trigger attempt={} beam={}. Cause: target beam is not in "
+                     "the served beam snapshot",
+                     trigger.ue_index,
+                     trigger.handover_attempt_id,
+                     trigger.target_beam_id);
+      return false;
+    }
   }
 
   std::optional<du_index_t> planned_target_du_index;
   const auto assignment_it = current_ntn_beam_assignments_by_id.find(trigger.target_beam_id);
   if (assignment_it != current_ntn_beam_assignments_by_id.end()) {
     const ntn_beam_du_assignment& assignment = assignment_it->second;
-    if (assignment.state != ntn_beam_assignment_state::active ||
-        assignment.du_index == du_index_t::invalid) {
+    const bool target_is_active_loaded = assignment.state == ntn_beam_assignment_state::active_loaded;
+    const bool target_is_eligible_candidate =
+        assignment.state == ntn_beam_assignment_state::candidate && assignment.in_hopping_window;
+    if ((!target_is_active_loaded && !target_is_eligible_candidate) || assignment.du_index == du_index_t::invalid) {
       logger.warning("ue={}: Ignoring NTN location handover trigger attempt={} beam={}. Cause: target beam is not "
-                     "active in the current beam placement plan",
+                     "mobility eligible in the current beam placement plan",
                      trigger.ue_index,
                      trigger.handover_attempt_id,
                      trigger.target_beam_id);
@@ -148,11 +172,25 @@ bool mobility_manager::handle_ntn_location_handover_required(const ntn_location_
       std::chrono::duration_cast<std::chrono::milliseconds>(trigger.last_report_time - trigger.candidate_since);
   ntn_handover_context ntn_context;
   ntn_context.handover_attempt_id         = trigger.handover_attempt_id;
+  ntn_context.source_beam_id              = trigger.source_beam_id;
   ntn_context.target_beam_id                = trigger.target_beam_id;
+  ntn_context.source_analog_beam_id       = trigger.source_analog_beam_id;
+  ntn_context.target_analog_beam_id       = trigger.target_analog_beam_id;
+  ntn_context.handover_reason             = trigger.handover_reason;
   ntn_context.serving_nci                   = trigger.serving_nci;
   ntn_context.target_nci                    = trigger.target_nci;
   ntn_context.consecutive_location_reports  = trigger.consecutive_location_reports;
   ntn_context.candidate_age                 = std::max(candidate_age, std::chrono::milliseconds{0});
+  ntn_context.target_preloaded              = trigger.target_preloaded;
+  ntn_context.target_du_index               = trigger.target_du_index;
+  ntn_context.target_c_rnti                 = trigger.target_c_rnti;
+  ntn_context.target_uplink_resource_beam_id = trigger.target_uplink_resource_beam_id;
+  ntn_context.target_uplink_resource_nci     = trigger.target_uplink_resource_nci;
+  ntn_context.target_uplink_resource_du_index = trigger.target_uplink_resource_du_index;
+  ntn_context.target_service_pair_reason     = trigger.target_service_pair_reason;
+  ntn_context.target_ul_slot_request        = trigger.target_ul_slot_request;
+  ntn_context.target_resource_state         = trigger.target_resource_state;
+  ntn_context.target_sr_srs_applied         = trigger.target_sr_srs_applied;
 
   logger.info("ue={}: NTN location handover trigger attempt={} beam={} target_nci={:#x} pci={} reports={} age={}ms "
               "served_beams={} snapshot_beams={}",

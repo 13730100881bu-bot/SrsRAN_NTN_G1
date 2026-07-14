@@ -69,6 +69,29 @@ struct cell_meas_config {
   std::vector<neighbor_cell_meas_config> ncells;                 ///< List of neighbor cells.
 };
 
+/// CU-CP resource-domain caps applied to an analog access beam. A cap value of zero means unlimited.
+struct ntn_analog_beam_resource_policy {
+  unsigned max_access_only_ues           = 0;
+  unsigned max_service_bound_ues         = 0;
+  unsigned max_loaded_digital_children   = 0;
+  unsigned max_drbs                      = 0;
+};
+
+/// CU-CP resource-domain caps and explicit reuse/conflict metadata applied to a digital service beam.
+struct ntn_digital_beam_resource_policy {
+  unsigned                 max_ues             = 0;
+  unsigned                 max_drbs            = 0;
+  unsigned                 max_loaded_ues      = 0;
+  std::string              reuse_group_id;
+  std::vector<std::string> conflict_group_ids;
+};
+
+/// CU-CP resource-domain policy defaults. Per-beam overrides may refine these defaults.
+struct ntn_resource_domain_policy {
+  ntn_analog_beam_resource_policy  analog;
+  ntn_digital_beam_resource_policy digital;
+};
+
 /// Static ground-fixed position of one NTN beam as seen by CU-CP mobility.
 struct ntn_beam_position {
   std::string      beam_id;                         ///< Stable identifier from the external NTN beam table.
@@ -77,6 +100,26 @@ struct ntn_beam_position {
   double           center_longitude_deg = 0.0;      ///< Beam center longitude.
   double           coverage_radius_m    = 0.0;      ///< Physical coverage radius used by mobility decisions.
   bool             enabled              = true;     ///< Whether this static beam participates in mobility.
+  bool             downlink_enabled     = true;     ///< Whether CU-CP may use this beam for downlink assistance/paging.
+  bool             uplink_enabled       = true;     ///< Whether CU-CP may use this beam for uplink SR/SRS resources.
+  std::string      analog_beam_id;                  ///< Parent analog access beam identifier, when configured.
+  std::optional<int> hex_q;                          ///< Optional axial hex q coordinate from the planning grid.
+  std::optional<int> hex_r;                          ///< Optional axial hex r coordinate from the planning grid.
+  std::optional<ntn_digital_beam_resource_policy> resource_policy; ///< Optional digital service resource policy.
+};
+
+/// Static CU-CP-only analog access beam grouping over digital service beams.
+struct ntn_analog_beam_position {
+  std::string              analog_beam_id;         ///< Stable analog access beam identifier.
+  int                      center_hex_q = 0;       ///< Axial q coordinate of the analog cluster center.
+  int                      center_hex_r = 0;       ///< Axial r coordinate of the analog cluster center.
+  std::string              center_digital_beam_id; ///< Digital beam at the analog cluster center.
+  std::vector<std::string> child_digital_beam_ids; ///< Digital service beams controlled by this analog access beam.
+  bool                     is_edge_partial = false; ///< True when the footprint boundary cuts the 7-cell cluster.
+  bool                     enabled         = true;  ///< Whether this analog access beam participates in access gating.
+  bool                     downlink_enabled = true; ///< Whether child beams may be used for downlink access/service intent.
+  bool                     uplink_enabled   = true; ///< Whether child beams may be used for uplink access/service intent.
+  std::optional<ntn_analog_beam_resource_policy> resource_policy; ///< Optional analog access resource policy.
 };
 
 /// Static NTN beam table loaded from an external configuration file.
@@ -84,10 +127,22 @@ struct ntn_beam_table_config {
   unsigned                       version            = 1;
   std::string                    region;
   std::optional<double>          satellite_height_m;
+  ntn_resource_domain_policy     resource_policy;
+  std::vector<ntn_analog_beam_position> analog_beams;
   std::vector<ntn_beam_position> beams;
 };
 
 enum class ntn_satellite_state_source { manual, circular_orbit, tle };
+
+/// One configured satellite in a CU-CP-only circular-orbit constellation.
+struct ntn_circular_orbit_satellite_config {
+  std::string satellite_id = "sat-0";
+  double      altitude_m               = 500000.0;
+  double      inclination_deg          = 53.0;
+  double      raan_deg                 = 0.0;
+  double      argument_of_latitude_deg = 0.0;
+  std::chrono::system_clock::time_point epoch = std::chrono::system_clock::time_point{};
+};
 
 /// Orbit source used to periodically refresh the CU-CP NTN served beam set.
 struct ntn_satellite_state_update_config {
@@ -101,6 +156,15 @@ struct ntn_satellite_state_update_config {
   double                                circular_raan_deg                 = 0.0;
   double                                circular_argument_of_latitude_deg = 0.0;
   std::chrono::system_clock::time_point circular_epoch                    = std::chrono::system_clock::time_point{};
+
+  /// Optional multi-satellite circular orbit list. When empty, the legacy single circular_orbit_* fields are used.
+  std::vector<ntn_circular_orbit_satellite_config> circular_orbit_satellites;
+
+  /// Future service-window horizon for predictive beam mobility. Zero keeps the legacy one-step prediction.
+  std::chrono::milliseconds predictive_service_window_horizon{0};
+
+  /// Lead time before predicted beam exit when CU-CP should block new demand and prepare handover.
+  std::chrono::milliseconds predictive_handover_lead_time{0};
 
   std::string tle_satellite_name;
   std::string tle_line1;
@@ -128,17 +192,59 @@ struct ntn_location_mobility_config {
   /// Static beam table known by CU-CP. This is typically loaded from JSON at configuration time.
   std::vector<ntn_beam_position> beams;
 
+  /// Static CU-CP-only analog access beam groups over digital beams.
+  std::vector<ntn_analog_beam_position> analog_beams;
+
+  /// CU-CP-only resource-domain policy defaults. Zero caps mean unlimited.
+  ntn_resource_domain_policy resource_policy;
+
   /// Minimum satellite elevation angle required for a beam to become part of the runtime served beam set.
   double served_beam_min_elevation_deg = 10.0;
 
-  /// Maximum number of beams that may be simultaneously served by the runtime hopping schedule.
+  /// Maximum number of beams in the runtime hopping window. A value of zero means no CU-CP cap.
   unsigned max_nof_served_beams = 1;
 
-  /// Rotate the active CU-CP beam-set window across visible beams when visibility exceeds max_nof_served_beams.
+  /// Maximum number of simultaneously active analog access beams. A value of zero means no CU-CP cap.
+  unsigned max_nof_active_analog_access_beams = 0;
+
+  /// Maximum number of loaded digital service beams. A value of zero means no CU-CP cap.
+  unsigned max_nof_loaded_digital_service_beams = 0;
+
+  /// Time an idle preheated analog/digital beam is retained before returning to candidate/inactive. Zero disables.
+  std::chrono::milliseconds preheated_beam_hold_time{5000};
+
+  /// Minimum time after preheat application before a cross-analog target is considered ready. Zero disables.
+  std::chrono::milliseconds preheated_beam_min_ready_time{1000};
+
+  /// Cooldown before reusing the same source/target analog pair for load rebalancing. Zero disables.
+  std::chrono::milliseconds analog_rebalance_pair_cooldown{10000};
+
+  /// Hold time for target-aware digital capacity reservations. Zero disables reservation expiry.
+  std::chrono::milliseconds digital_target_reservation_hold_time{5000};
+
+  /// Rotate the active CU-CP access/service window across visible beams when configured caps are exceeded.
   bool served_beam_hopping_enabled = false;
 
   /// Number of accepted satellite-state update periods that one hopping window should hold before rotating.
   unsigned served_beam_hopping_dwell_updates = 1;
+
+  /// Enable CU-CP steering and controlled handover to balance load across eligible digital service beams.
+  bool multi_beam_load_balancing_enabled = false;
+
+  /// Prefer beams with active CU-CP UE/DRB/QoS demand when selecting the active served/hopping window.
+  bool demand_aware_beam_scheduling_enabled = false;
+
+  /// Reserve CU-CP multi-beam headroom for handover/rebalance target capacity before admitting low-priority demand.
+  bool multi_beam_headroom_admission_enabled = false;
+
+  /// Minimum source-target UE load delta before CU-CP considers proactive load-balancing handover.
+  unsigned multi_beam_load_balancing_min_ue_delta = 2;
+
+  /// Maximum number of load-balancing handovers scheduled in one CU-CP evaluation.
+  unsigned multi_beam_load_balancing_max_handovers_per_eval = 1;
+
+  /// Cooldown before the same UE can be considered for another load-balancing handover.
+  std::chrono::milliseconds multi_beam_load_balancing_handover_cooldown{30000};
 
   /// Optional automatic satellite state source for orbit-driven served beam updates.
   ntn_satellite_state_update_config satellite_state_update;
@@ -155,6 +261,13 @@ struct ntn_location_mobility_config {
 
   /// Maximum age of a received location sample before it is ignored. A value of zero disables it.
   std::chrono::milliseconds location_max_age{0};
+
+  /// Grace period after a service-bound UE location becomes missing/stale before CU-CP releases the UE. A value of zero
+  /// derives the grace from the periodic report configuration.
+  std::chrono::milliseconds location_lost_release_grace_period{0};
+
+  /// Maximum age of a cached NTN idle paging context. A value of zero disables context expiry.
+  std::chrono::milliseconds idle_paging_context_max_age{300000};
 
   /// Time after an accepted NTN handover trigger before the same stable candidate may be retried. A value of zero
   /// disables automatic retry from the measurement manager.

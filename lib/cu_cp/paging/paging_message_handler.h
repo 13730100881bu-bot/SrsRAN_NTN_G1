@@ -41,7 +41,7 @@ public:
   void handle_paging_message(const cu_cp_paging_message& msg);
 
 private:
-  bool handle_du_paging_message(du_index_t du_index, const cu_cp_paging_message& msg);
+  bool handle_du_paging_message(du_index_t du_index, const cu_cp_paging_message& msg, bool restrict_to_recommended_cells);
 
   du_processor_repository& dus;
   srslog::basic_logger&    logger;

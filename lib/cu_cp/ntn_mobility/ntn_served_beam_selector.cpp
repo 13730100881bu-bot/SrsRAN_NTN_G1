@@ -23,6 +23,7 @@
 #include "ntn_served_beam_selector.h"
 #include <algorithm>
 #include <cmath>
+#include <map>
 
 using namespace srsran;
 using namespace srs_cu_cp;
@@ -85,11 +86,10 @@ double elevation_deg(const ecef_coordinates_t& satellite, const ntn_beam_positio
 
 } // namespace
 
-std::vector<ntn_served_beam_candidate> srsran::srs_cu_cp::select_ntn_served_beam_candidates_by_elevation(
+std::vector<ntn_served_beam_candidate> srsran::srs_cu_cp::select_ntn_candidate_inventory_by_elevation(
     const std::vector<ntn_beam_position>& beams,
     const ecef_coordinates_t&             satellite,
-    double                                min_elevation_deg,
-    unsigned                              max_nof_served_beams)
+    double                                min_elevation_deg)
 {
   std::vector<ntn_served_beam_candidate> candidates;
   candidates.reserve(beams.size());
@@ -101,7 +101,7 @@ std::vector<ntn_served_beam_candidate> srsran::srs_cu_cp::select_ntn_served_beam
 
     const double beam_elevation_deg = elevation_deg(satellite, beam);
     if (beam_elevation_deg >= min_elevation_deg) {
-      candidates.push_back({beam.beam_id, beam_elevation_deg});
+      candidates.push_back({beam.beam_id, beam_elevation_deg, true, "sat-0"});
     }
   }
 
@@ -113,6 +113,59 @@ std::vector<ntn_served_beam_candidate> srsran::srs_cu_cp::select_ntn_served_beam
               }
               return lhs.elevation_deg > rhs.elevation_deg;
             });
+
+  return candidates;
+}
+
+std::vector<ntn_served_beam_candidate> srsran::srs_cu_cp::select_ntn_candidate_inventory_by_elevation(
+    const std::vector<ntn_beam_position>&  beams,
+    const std::vector<ntn_satellite_state>& satellites,
+    double                                 min_elevation_deg)
+{
+  std::map<std::string, ntn_served_beam_candidate> best_by_beam;
+  for (const ntn_satellite_state& satellite : satellites) {
+    const std::string satellite_id = satellite.satellite_id.empty() ? "sat-0" : satellite.satellite_id;
+    for (const auto& beam : beams) {
+      if (!beam.enabled) {
+        continue;
+      }
+
+      const double beam_elevation_deg = elevation_deg(satellite.ecef, beam);
+      if (beam_elevation_deg < min_elevation_deg) {
+        continue;
+      }
+      auto it = best_by_beam.find(beam.beam_id);
+      if (it == best_by_beam.end() || beam_elevation_deg > it->second.elevation_deg ||
+          (beam_elevation_deg == it->second.elevation_deg && satellite_id < it->second.serving_satellite_id)) {
+        best_by_beam[beam.beam_id] = {beam.beam_id, beam_elevation_deg, true, satellite_id};
+      }
+    }
+  }
+
+  std::vector<ntn_served_beam_candidate> candidates;
+  candidates.reserve(best_by_beam.size());
+  for (auto& entry : best_by_beam) {
+    candidates.push_back(std::move(entry.second));
+  }
+  std::sort(candidates.begin(),
+            candidates.end(),
+            [](const ntn_served_beam_candidate& lhs, const ntn_served_beam_candidate& rhs) {
+              if (lhs.elevation_deg == rhs.elevation_deg) {
+                return lhs.beam_id < rhs.beam_id;
+              }
+              return lhs.elevation_deg > rhs.elevation_deg;
+            });
+  return candidates;
+}
+
+std::vector<ntn_served_beam_candidate> srsran::srs_cu_cp::select_ntn_served_beam_candidates_by_elevation(
+    const std::vector<ntn_beam_position>& beams,
+    const ecef_coordinates_t&             satellite,
+    double                                min_elevation_deg,
+    unsigned                              max_nof_served_beams)
+{
+  std::vector<ntn_served_beam_candidate> candidates =
+      select_ntn_candidate_inventory_by_elevation(beams, satellite, min_elevation_deg);
 
   if (max_nof_served_beams != 0 && candidates.size() > max_nof_served_beams) {
     candidates.resize(max_nof_served_beams);

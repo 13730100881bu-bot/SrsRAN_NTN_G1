@@ -147,6 +147,33 @@ void intra_cu_handover_routine::operator()(coro_context<async_task<cu_cp_intra_c
       // Note: From this point the UE is removed and only the stored context can be accessed.
       CORO_EARLY_RETURN(response_msg);
     }
+
+    if (request.ntn_context.has_value()) {
+      if (request.ntn_context->target_c_rnti != rnti_t::INVALID_RNTI &&
+          (!target_ue_context_setup_response.c_rnti.has_value() ||
+           target_ue_context_setup_response.c_rnti.value() != request.ntn_context->target_c_rnti)) {
+        logger.warning("ue={}: \"{}\" target DU did not apply requested NTN target C-RNTI",
+                       request.source_ue_index,
+                       name());
+        CORO_AWAIT(cu_cp_handler.handle_ue_removal_request(target_ue_context_setup_request.ue_index));
+        CORO_EARLY_RETURN(response_msg);
+      }
+      if (request.ntn_context->target_ul_slot_request.has_value()) {
+        if (!target_ue_context_setup_response.ntn_ul_slot_result.has_value() ||
+            !target_ue_context_setup_response.ntn_ul_slot_result->accepted) {
+          logger.warning("ue={}: \"{}\" target DU did not apply requested NTN target SR/SRS resources",
+                         request.source_ue_index,
+                         name());
+          CORO_AWAIT(cu_cp_handler.handle_ue_removal_request(target_ue_context_setup_request.ue_index));
+          CORO_EARLY_RETURN(response_msg);
+        }
+        cu_cp_handler.handle_ntn_handover_target_resources_applied(request.source_ue_index,
+                                                                   target_ue_context_setup_request.ue_index,
+                                                                   request.ntn_context.value(),
+                                                                   request.ntn_context->target_c_rnti,
+                                                                   *target_ue_context_setup_response.ntn_ul_slot_result);
+      }
+    }
   }
 
   // Target UE object exists from this point on.
@@ -244,6 +271,17 @@ bool intra_cu_handover_routine::generate_ue_context_setup_request(f1ap_ue_contex
   }
   setup_request.cu_to_du_rrc_info.ie_exts.value().ho_prep_info = std::move(buffer_copy.value());
   setup_request.cu_to_du_rrc_info.ue_cap_rat_container_list    = transfer_context.ue_cap_rat_container_list.copy();
+  if (request.ntn_context.has_value()) {
+    if (request.ntn_context->target_c_rnti != rnti_t::INVALID_RNTI) {
+      setup_request.requested_c_rnti = request.ntn_context->target_c_rnti;
+    }
+    if (request.ntn_context->target_ul_slot_request.has_value()) {
+      setup_request.ntn_ul_slot_request = request.ntn_context->target_ul_slot_request;
+      if (setup_request.requested_c_rnti.has_value()) {
+        setup_request.ntn_ul_slot_request->requested_c_rnti = *setup_request.requested_c_rnti;
+      }
+    }
+  }
 
   for (const auto& srb_id : srbs) {
     f1ap_srb_to_setup srb_item;

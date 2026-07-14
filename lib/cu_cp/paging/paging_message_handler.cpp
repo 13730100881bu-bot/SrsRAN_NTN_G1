@@ -28,6 +28,8 @@
 using namespace srsran;
 using namespace srs_cu_cp;
 
+static bool has_applicable_recommended_cells(du_processor_repository& dus, const cu_cp_paging_message& msg);
+
 paging_message_handler::paging_message_handler(du_processor_repository& dus_) :
   dus(dus_), logger(srslog::fetch_basic_logger("CU-CP"))
 {
@@ -35,10 +37,12 @@ paging_message_handler::paging_message_handler(du_processor_repository& dus_) :
 
 void paging_message_handler::handle_paging_message(const cu_cp_paging_message& msg)
 {
+  const bool restrict_to_recommended_cells = has_applicable_recommended_cells(dus, msg);
+
   // Forward paging message to all DU processors
   bool paging_sent = false;
   for (const auto& du_idx : dus.get_du_processor_indexes()) {
-    paging_sent |= handle_du_paging_message(du_idx, msg);
+    paging_sent |= handle_du_paging_message(du_idx, msg, restrict_to_recommended_cells);
   }
 
   if (not paging_sent) {
@@ -49,6 +53,42 @@ void paging_message_handler::handle_paging_message(const cu_cp_paging_message& m
 static bool is_tac_in_list(span<const cu_cp_tai_list_for_paging_item> tai_list, tac_t tac)
 {
   return std::any_of(tai_list.begin(), tai_list.end(), [&tac](const auto& tai) { return tai.tai.tac == tac; });
+}
+
+static bool has_recommended_cells_for_paging(const cu_cp_paging_message& msg)
+{
+  return msg.assist_data_for_paging.has_value() &&
+         msg.assist_data_for_paging->assist_data_for_recommended_cells.has_value() &&
+         !msg.assist_data_for_paging->assist_data_for_recommended_cells->recommended_cells_for_paging
+              .recommended_cell_list.empty();
+}
+
+static bool has_applicable_recommended_cells(du_processor_repository& dus, const cu_cp_paging_message& msg)
+{
+  if (!has_recommended_cells_for_paging(msg)) {
+    return false;
+  }
+
+  const auto& recommended_cells = msg.assist_data_for_paging->assist_data_for_recommended_cells
+                                      ->recommended_cells_for_paging.recommended_cell_list;
+  for (const auto& du_idx : dus.get_du_processor_indexes()) {
+    const du_configuration_context* du_cfg = dus.get_du_processor(du_idx).get_context();
+    if (du_cfg == nullptr) {
+      continue;
+    }
+    for (const auto& recommended_cell : recommended_cells) {
+      const auto cell_it = std::find_if(du_cfg->served_cells.begin(),
+                                        du_cfg->served_cells.end(),
+                                        [&recommended_cell](const auto& c) {
+                                          return recommended_cell.ngran_cgi == c.cgi;
+                                        });
+      if (cell_it != du_cfg->served_cells.end() && is_tac_in_list(msg.tai_list_for_paging, cell_it->tac)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 /// Remove recommended cells that do not match any TAC in the TAI list or that do not belong to this DU.
@@ -73,7 +113,9 @@ static void remove_non_applicable_recommended_cells(cu_cp_paging_message& msg, c
                           recommended_cells.end());
 }
 
-bool paging_message_handler::handle_du_paging_message(du_index_t du_index, const cu_cp_paging_message& msg_before)
+bool paging_message_handler::handle_du_paging_message(du_index_t              du_index,
+                                                      const cu_cp_paging_message& msg_before,
+                                                      bool                    restrict_to_recommended_cells)
 {
   du_processor&                   du     = dus.get_du_processor(du_index);
   const du_configuration_context* du_cfg = du.get_context();
@@ -97,21 +139,23 @@ bool paging_message_handler::handle_du_paging_message(du_index_t du_index, const
   // Clear recommended cells not matching any TAC in the tai_list_for_paging or that do not belong to this DU.
   remove_non_applicable_recommended_cells(msg_filtered, *du_cfg);
 
-  for (const du_cell_configuration& cell : du_cfg->served_cells) {
-    // Check if cell already exists in the list of recommended.
-    if (std::any_of(recommended_cells.begin(), recommended_cells.end(), [&cell](const auto& c) {
-          return c.ngran_cgi == cell.cgi;
-        })) {
-      continue;
-    }
-    if (not is_tac_in_list(msg_filtered.tai_list_for_paging, cell.tac)) {
-      continue;
-    }
+  if (!restrict_to_recommended_cells) {
+    for (const du_cell_configuration& cell : du_cfg->served_cells) {
+      // Check if cell already exists in the list of recommended.
+      if (std::any_of(recommended_cells.begin(), recommended_cells.end(), [&cell](const auto& c) {
+            return c.ngran_cgi == cell.cgi;
+          })) {
+        continue;
+      }
+      if (not is_tac_in_list(msg_filtered.tai_list_for_paging, cell.tac)) {
+        continue;
+      }
 
-    // Setup recommended cell item to add in case it doesn't exist
-    cu_cp_recommended_cell_item cell_item;
-    cell_item.ngran_cgi = cell.cgi;
-    recommended_cells.push_back(cell_item);
+      // Setup recommended cell item to add in case it doesn't exist
+      cu_cp_recommended_cell_item cell_item;
+      cell_item.ngran_cgi = cell.cgi;
+      recommended_cells.push_back(cell_item);
+    }
   }
 
   if (recommended_cells.empty()) {

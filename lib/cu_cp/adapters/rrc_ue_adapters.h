@@ -63,10 +63,14 @@ class rrc_ue_ngap_adapter : public rrc_ue_ngap_notifier
 {
 public:
   void connect_ngap(ngap_interface* ngap_) { ngap = ngap_; }
+  void connect_cu_cp(cu_cp_ngap_handler& cu_cp_handler_) { cu_cp_handler = &cu_cp_handler_; }
 
   void on_initial_ue_message(const cu_cp_initial_ue_message& msg) override
   {
     srsran_assert(ngap != nullptr, "ue={}: NGAP not found", msg.ue_index);
+    if (cu_cp_handler != nullptr) {
+      cu_cp_handler->handle_rrc_initial_ue_message(msg);
+    }
     ngap->get_ngap_nas_message_handler().handle_initial_ue_message(msg);
   }
 
@@ -77,7 +81,8 @@ public:
   }
 
 private:
-  ngap_interface* ngap = nullptr;
+  ngap_interface*     ngap = nullptr;
+  cu_cp_ngap_handler* cu_cp_handler = nullptr;
 };
 
 /// Adapter between RRC UE and CU-CP UE
@@ -182,8 +187,8 @@ public:
 
   bool on_ue_setup_request() override
   {
-    srsran_assert(controller != nullptr, "CU-CP controller must not be nullptr");
-    return controller->request_ue_setup(cu_cp_admission_request_type::initial_access);
+    srsran_assert(cu_cp_rrc_ue_handler != nullptr, "CU-CP handler must not be nullptr");
+    return cu_cp_rrc_ue_handler->handle_ue_setup_request(ue_index);
   }
 
   bool on_ue_setup_complete_received(const plmn_identity& plmn) override
@@ -216,10 +221,22 @@ public:
     cu_cp_rrc_ue_handler->handle_rrc_reestablishment_complete(old_ue_index);
   }
 
+  void on_rrc_resume_request(ue_index_t old_ue_index, establishment_cause_t rrc_resume_cause) override
+  {
+    srsran_assert(cu_cp_rrc_ue_handler != nullptr, "CU-CP handler must not be nullptr");
+    cu_cp_rrc_ue_handler->handle_rrc_resume_request(ue_index, old_ue_index, rrc_resume_cause);
+  }
+
   virtual void on_rrc_reconfiguration_complete_indicator() override
   {
     srsran_assert(cu_cp_rrc_ue_handler != nullptr, "CU-CP handler must not be nullptr");
     cu_cp_rrc_ue_handler->handle_rrc_reconf_complete_indicator(ue_index);
+  }
+
+  void on_ue_capability_updated() override
+  {
+    srsran_assert(meas_handler != nullptr, "Measurement handler must not be nullptr");
+    meas_handler->handle_ue_capability_update(ue_index);
   }
 
   async_task<bool> on_ue_transfer_required(ue_index_t old_ue_index) override
@@ -272,6 +289,12 @@ public:
     ntn_ue_location_report report = location_report;
     report.ue_index              = ue_index;
     meas_handler->handle_ue_location_report(report);
+  }
+
+  void on_ue_location_report_outcome(ntn_rrc_ue_location_report_outcome outcome) override
+  {
+    srsran_assert(meas_handler != nullptr, "Measurement handler must not be nullptr");
+    meas_handler->handle_rrc_ue_location_report_outcome(ue_index, outcome);
   }
 
 private:

@@ -68,6 +68,8 @@ struct dummy_cu_cp_measurement_handler : public cu_cp_measurement_handler {
   void handle_measurement_report(const ue_index_t ue_index, const rrc_meas_results& meas_results) override {}
 
   void handle_ue_location_report(const ntn_ue_location_report& location_report) override {}
+
+  void handle_rrc_ue_location_report_outcome(ue_index_t ue_index, ntn_rrc_ue_location_report_outcome outcome) override {}
 };
 
 struct dummy_cu_cp_ue_removal_handler : public cu_cp_ue_removal_handler {
@@ -76,6 +78,7 @@ struct dummy_cu_cp_ue_removal_handler : public cu_cp_ue_removal_handler {
 };
 
 struct dummy_cu_cp_rrc_ue_interface : public cu_cp_rrc_ue_interface {
+  bool handle_ue_setup_request(ue_index_t ue_index) override { return true; }
   bool handle_ue_plmn_selected(ue_index_t ue_index, const plmn_identity& plmn) override { return true; }
   rrc_ue_reestablishment_context_response
   handle_rrc_reestablishment_request(pci_t old_pci, rnti_t old_c_rnti, ue_index_t ue_index) override

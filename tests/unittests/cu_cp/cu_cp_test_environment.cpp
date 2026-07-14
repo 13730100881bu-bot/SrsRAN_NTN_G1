@@ -30,6 +30,7 @@
 #include "tests/unittests/cu_cp/test_helpers.h"
 #include "tests/unittests/e1ap/common/e1ap_cu_cp_test_messages.h"
 #include "tests/unittests/ngap/ngap_test_messages.h"
+#include "srsran/asn1/f1ap/common.h"
 #include "srsran/asn1/f1ap/f1ap_pdu_contents.h"
 #include "srsran/asn1/f1ap/f1ap_pdu_contents_ue.h"
 #include "srsran/asn1/ngap/ngap_pdu_contents.h"
@@ -42,10 +43,11 @@
 #include "srsran/e1ap/common/e1ap_message.h"
 #include "srsran/e1ap/common/e1ap_types.h"
 #include "srsran/f1ap/f1ap_message.h"
+#include "srsran/f1ap/ntn_access_calendar.h"
+#include "srsran/f1ap/ntn_rnti_lease_pool.h"
 #include "srsran/ngap/ngap_message.h"
 #include "srsran/ran/cu_types.h"
 #include "srsran/ran/plmn_identity.h"
-#include "srsran/security/integrity.h"
 #include "srsran/support/executors/task_worker.h"
 
 using namespace srsran;
@@ -65,6 +67,92 @@ public:
 };
 
 // ////
+
+static bool is_gnb_du_resource_coordination_request(const f1ap_message& pdu)
+{
+  return pdu.pdu.type().value == asn1::f1ap::f1ap_pdu_c::types_opts::init_msg &&
+         pdu.pdu.init_msg().value.type().value ==
+             asn1::f1ap::f1ap_elem_procs_o::init_msg_c::types_opts::gnb_du_res_coordination_request;
+}
+
+static bool is_ntn_access_calendar_query(const f1ap_message& pdu)
+{
+  if (!is_gnb_du_resource_coordination_request(pdu)) {
+    return false;
+  }
+  const auto& request = pdu.pdu.init_msg().value.gnb_du_res_coordination_request();
+  const auto  update  =
+      decode_f1ap_ntn_access_calendar_update(request->eutra_nr_cell_res_coordination_req_container);
+  return update.has_value() && update->operation == f1ap_ntn_access_calendar_operation::query;
+}
+
+static f1ap_message make_gnb_du_resource_coordination_response(const f1ap_message& request,
+                                                                bool ntn_calendar_query_stays_ready = false)
+{
+  const auto& asn1_req = request.pdu.init_msg().value.gnb_du_res_coordination_request();
+
+  const std::optional<f1ap_ntn_rnti_lease_pool_update> update =
+      decode_f1ap_ntn_rnti_lease_pool_update(asn1_req->eutra_nr_cell_res_coordination_req_container);
+  const std::optional<f1ap_ntn_access_calendar_update> calendar_update =
+      decode_f1ap_ntn_access_calendar_update(asn1_req->eutra_nr_cell_res_coordination_req_container);
+  const std::optional<f1ap_ntn_sib19_broadcast_update> sib19_update =
+      decode_f1ap_ntn_sib19_broadcast_update(asn1_req->eutra_nr_cell_res_coordination_req_container);
+
+  byte_buffer response_container;
+  if (calendar_update.has_value()) {
+    f1ap_ntn_access_calendar_result result;
+    result.catalog_version     = calendar_update->catalog_version;
+    result.schedule_version    = calendar_update->schedule_version;
+    result.source_content_hash = calendar_update->source_content_hash;
+    result.calendar_hash       = calendar_update->calendar_hash;
+    const uint64_t now_unix_ms = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                           std::chrono::system_clock::now().time_since_epoch())
+                                                           .count());
+    result.status = calendar_update->operation == f1ap_ntn_access_calendar_operation::prepare
+                        ? f1ap_ntn_access_calendar_result_status::preparing
+                    : calendar_update->operation == f1ap_ntn_access_calendar_operation::query
+                        ? (!ntn_calendar_query_stays_ready && now_unix_ms >= calendar_update->activation_epoch_unix_ms
+                               ? f1ap_ntn_access_calendar_result_status::applied
+                               : f1ap_ntn_access_calendar_result_status::ready)
+                        : f1ap_ntn_access_calendar_result_status::cleared;
+    result.reject_reason = result.status == f1ap_ntn_access_calendar_result_status::applied
+                               ? "ssb_prach_software_gate_applied_no_position_or_rf_evidence"
+                           : result.status == f1ap_ntn_access_calendar_result_status::preparing
+                               ? "waiting_for_both_cell_slot_threads_to_arm"
+                               : "accepted_by_mock_du";
+    for (unsigned i = 0; i != calendar_update->cells.size(); ++i) {
+      result.accepted_intents_per_cell[i] = static_cast<uint16_t>(calendar_update->cells[i].intents.size());
+    }
+    response_container = encode_f1ap_ntn_access_calendar_result(result);
+  } else if (update.has_value()) {
+    f1ap_ntn_rnti_lease_pool_result result;
+    result.generation_id   = update->generation_id;
+    result.accepted        = true;
+    result.accepted_leases = update->leases;
+    result.reject_reason   = "accepted_by_mock_du";
+    response_container     = encode_f1ap_ntn_rnti_lease_pool_result(result);
+  } else if (sib19_update.has_value()) {
+    f1ap_ntn_sib19_broadcast_result result;
+    result.generation_id = sib19_update->generation_id;
+    result.status        = sib19_update->operation == f1ap_ntn_sib19_broadcast_operation::clear
+                               ? f1ap_ntn_sib19_broadcast_result_status::clear_applied
+                               : f1ap_ntn_sib19_broadcast_result_status::applied;
+    result.reject_reason = sib19_update->operation == f1ap_ntn_sib19_broadcast_operation::clear ? "cleared" : "applied";
+    response_container   = encode_f1ap_ntn_sib19_broadcast_result(result);
+  } else {
+    f1ap_ntn_rnti_lease_pool_result result;
+    result.accepted      = false;
+    result.reject_reason = "malformed_mock_du_request";
+    response_container   = encode_f1ap_ntn_rnti_lease_pool_result(result);
+  }
+
+  f1ap_message response;
+  response.pdu.set_successful_outcome().load_info_obj(ASN1_F1AP_ID_GNB_DU_RES_COORDINATION);
+  auto& asn1_resp = response.pdu.successful_outcome().value.gnb_du_res_coordination_resp();
+  asn1_resp->transaction_id = asn1_req->transaction_id;
+  asn1_resp->eutra_nr_cell_res_coordination_req_ack_container = std::move(response_container);
+  return response;
+}
 
 cu_cp_test_environment::cu_cp_test_environment(cu_cp_test_env_params params_) :
   params(std::move(params_)),
@@ -116,6 +204,9 @@ cu_cp_test_environment::cu_cp_test_environment(cu_cp_test_env_params params_) :
 
   // > Mobility config
   cu_cp_cfg.mobility.mobility_manager_config.trigger_handover_from_measurements = params.trigger_ho_from_measurements;
+  if (params.ntn_onboard_position_plan.has_value()) {
+    cu_cp_cfg.mobility.onboard_position_plan = *params.ntn_onboard_position_plan;
+  }
   {
     // > Meas manager config
     cell_meas_manager_cfg meas_mng_cfg;
@@ -323,8 +414,93 @@ bool cu_cp_test_environment::wait_for_f1ap_tx_pdu(unsigned du_idx, f1ap_message&
     if (du_idx >= dus.size() or dus[du_idx] == nullptr) {
       return false;
     }
-    return dus[du_idx]->try_pop_dl_pdu(pdu);
+    if (!dus[du_idx]->try_pop_dl_pdu(pdu)) {
+      return false;
+    }
+    if (is_gnb_du_resource_coordination_request(pdu)) {
+      if (!params.ntn_calendar_drop_query_responses || !is_ntn_access_calendar_query(pdu)) {
+        dus[du_idx]->push_ul_pdu(
+            make_gnb_du_resource_coordination_response(pdu, params.ntn_calendar_query_stays_ready));
+      }
+      return false;
+    }
+    return true;
   });
+}
+
+bool cu_cp_test_environment::wait_for_f1ap_tx_pdu_without_auto_response(unsigned                  du_idx,
+                                                                        f1ap_message&             pdu,
+                                                                        std::chrono::milliseconds timeout)
+{
+  report_fatal_error_if_not(dus.size() >= du_idx and dus[du_idx] != nullptr, "DU index out of range");
+  return tick_until(timeout, [&]() { return dus[du_idx] != nullptr && dus[du_idx]->try_pop_dl_pdu(pdu); });
+}
+
+void cu_cp_test_environment::respond_to_f1ap_resource_coordination_request(unsigned            du_idx,
+                                                                            const f1ap_message& request)
+{
+  report_fatal_error_if_not(dus.size() >= du_idx and dus[du_idx] != nullptr, "DU index out of range");
+  report_fatal_error_if_not(is_gnb_du_resource_coordination_request(request),
+                            "Expected GNB-DU Resource Coordination Request");
+  dus[du_idx]->push_ul_pdu(
+      make_gnb_du_resource_coordination_response(request, params.ntn_calendar_query_stays_ready));
+}
+
+void cu_cp_test_environment::drain_f1ap_resource_coordination_requests(unsigned du_idx)
+{
+  auto du_it = dus.find(du_idx);
+  report_fatal_error_if_not(du_it != dus.end() and du_it->second != nullptr, "DU index out of range");
+
+  while (true) {
+    f1ap_message f1ap_pdu;
+    const bool drained_request = tick_until(std::chrono::milliseconds{20}, [&]() {
+      if (!du_it->second->try_pop_dl_pdu(f1ap_pdu)) {
+        return false;
+      }
+      report_fatal_error_if_not(is_gnb_du_resource_coordination_request(f1ap_pdu),
+                                "there are still F1AP DL messages to pop from DU");
+      if (!params.ntn_calendar_drop_query_responses || !is_ntn_access_calendar_query(f1ap_pdu)) {
+        du_it->second->push_ul_pdu(
+            make_gnb_du_resource_coordination_response(f1ap_pdu, params.ntn_calendar_query_stays_ready));
+      }
+      return true;
+    });
+    if (!drained_request) {
+      break;
+    }
+    cu_cp_workers->wait_pending_tasks();
+  }
+}
+
+void cu_cp_test_environment::record_last_ntn_ul_slot_request(unsigned du_idx, const f1ap_message& f1ap_pdu)
+{
+  last_ntn_ul_slot_request_by_du.erase(du_idx);
+
+  if (!test_helpers::is_valid_ue_context_modification_request(f1ap_pdu)) {
+    return;
+  }
+
+  const auto& mod_req = f1ap_pdu.pdu.init_msg().value.ue_context_mod_request();
+  if (!mod_req->res_coordination_transfer_container_present) {
+    return;
+  }
+
+  last_ntn_ul_slot_request_by_du.emplace(
+      du_idx, decode_f1ap_ntn_ul_slot_resource_request(mod_req->res_coordination_transfer_container));
+}
+
+std::optional<f1ap_ntn_ul_slot_resource_result>
+cu_cp_test_environment::consume_last_ntn_ul_slot_result(unsigned du_idx)
+{
+  auto it = last_ntn_ul_slot_request_by_du.find(du_idx);
+  if (it == last_ntn_ul_slot_request_by_du.end()) {
+    return std::nullopt;
+  }
+
+  std::optional<f1ap_ntn_ul_slot_resource_result> result =
+      make_successful_ntn_ul_slot_result(it->second);
+  last_ntn_ul_slot_request_by_du.erase(it);
+  return result;
 }
 
 const cu_cp_test_environment::ue_context* cu_cp_test_environment::find_ue_context(unsigned            du_idx,
@@ -437,15 +613,19 @@ bool cu_cp_test_environment::run_e1_setup(unsigned cu_up_idx)
 bool cu_cp_test_environment::connect_new_ue(unsigned            du_idx,
                                             gnb_du_ue_f1ap_id_t du_ue_id,
                                             rnti_t              crnti,
-                                            plmn_identity       plmn)
+                                            plmn_identity       plmn,
+                                            std::optional<cu_cp_five_g_s_tmsi> five_g_s_tmsi,
+                                            std::optional<nr_cell_identity> serving_nci)
 {
   ngap_message ngap_pdu;
   srsran_assert(not this->get_amf().try_pop_rx_pdu(ngap_pdu), "there are still NGAP messages to pop from AMF");
   f1ap_message f1ap_pdu;
+  drain_f1ap_resource_coordination_requests(du_idx);
   srsran_assert(not this->get_du(du_idx).try_pop_dl_pdu(f1ap_pdu), "there are still F1AP DL messages to pop from DU");
 
   // Inject Initial UL RRC message
-  f1ap_message init_ul_rrc_msg = test_helpers::generate_init_ul_rrc_message_transfer(du_ue_id, crnti, plmn);
+  f1ap_message init_ul_rrc_msg =
+      test_helpers::generate_init_ul_rrc_message_transfer(du_ue_id, crnti, plmn, {}, {}, serving_nci);
   test_logger.info("c-rnti={} du_ue={}: Injecting Initial UL RRC message", crnti, fmt::underlying(du_ue_id));
   get_du(du_idx).push_ul_pdu(init_ul_rrc_msg);
 
@@ -465,7 +645,7 @@ bool cu_cp_test_environment::connect_new_ue(unsigned            du_idx,
 
   // Send RRC Setup Complete.
   // > Generate UL DCCH message (containing RRC Setup Complete).
-  byte_buffer pdu = test_helpers::pack_ul_dcch_msg(test_helpers::create_rrc_setup_complete());
+  byte_buffer pdu = test_helpers::pack_ul_dcch_msg(test_helpers::create_rrc_setup_complete(1, five_g_s_tmsi));
   // > Generate UL RRC Message (containing RRC Setup Complete) with PDCP SN=0.
   get_du(du_idx).push_rrc_ul_dcch_message(du_ue_id, srb_id_t::srb1, std::move(pdu));
 
@@ -496,6 +676,7 @@ bool cu_cp_test_environment::authenticate_ue(unsigned du_idx, gnb_du_ue_f1ap_id_
   ngap_message ngap_pdu;
   srsran_assert(not this->get_amf().try_pop_rx_pdu(ngap_pdu), "there are still NGAP messages to pop from AMF");
   f1ap_message f1ap_pdu;
+  drain_f1ap_resource_coordination_requests(du_idx);
   srsran_assert(not this->get_du(du_idx).try_pop_dl_pdu(f1ap_pdu), "there are still F1AP DL messages to pop from DU");
 
   auto& ue_ctx     = attached_ues.at(du_ue_id_to_ran_ue_id_map.at(du_idx).at(du_ue_id));
@@ -558,10 +739,13 @@ bool cu_cp_test_environment::authenticate_ue(unsigned du_idx, gnb_du_ue_f1ap_id_
   return true;
 }
 
-bool cu_cp_test_environment::setup_ue_security(unsigned du_idx, gnb_du_ue_f1ap_id_t du_ue_id)
+bool cu_cp_test_environment::setup_ue_security(unsigned            du_idx,
+                                               gnb_du_ue_f1ap_id_t du_ue_id,
+                                               byte_buffer         ue_capability_info_pdu)
 {
   ngap_message ngap_pdu;
   srsran_assert(not this->get_amf().try_pop_rx_pdu(ngap_pdu), "there are still NGAP messages to pop from AMF");
+  drain_f1ap_resource_coordination_requests(du_idx);
   f1ap_message f1ap_pdu;
   srsran_assert(not this->get_du(du_idx).try_pop_dl_pdu(f1ap_pdu), "there are still F1AP DL messages to pop from DU");
 
@@ -574,19 +758,30 @@ bool cu_cp_test_environment::setup_ue_security(unsigned du_idx, gnb_du_ue_f1ap_i
 
   // Wait for F1AP UE Context Setup Request (containing Security Mode Command).
   bool result = this->wait_for_f1ap_tx_pdu(du_idx, f1ap_pdu);
-  report_fatal_error_if_not(result, "Failed to receive Security Mode Command");
-  report_fatal_error_if_not(test_helpers::is_valid_ue_context_setup_request(f1ap_pdu),
-                            "Invalid UE Context Setup Request");
+  if (!result || !test_helpers::is_valid_ue_context_setup_request(f1ap_pdu)) {
+    return false;
+  }
   {
     const byte_buffer& rrc_container = test_helpers::get_rrc_container(f1ap_pdu);
-    report_fatal_error_if_not(
-        test_helpers::is_valid_rrc_security_mode_command(test_helpers::extract_dl_dcch_msg(rrc_container)),
-        "Invalid Security Mode command");
+    if (!test_helpers::is_valid_rrc_security_mode_command(test_helpers::extract_dl_dcch_msg(rrc_container))) {
+      return false;
+    }
+  }
+  const auto& setup_req = f1ap_pdu.pdu.init_msg().value.ue_context_setup_request();
+  std::optional<f1ap_ntn_ul_slot_resource_request> ntn_slot_request;
+  if (setup_req->res_coordination_transfer_container_present) {
+    ntn_slot_request = decode_f1ap_ntn_ul_slot_resource_request(setup_req->res_coordination_transfer_container);
   }
 
   // Inject UE Context Setup Response
   f1ap_message ue_ctxt_setup_response =
       test_helpers::generate_ue_context_setup_response(ue_ctx.cu_ue_id.value(), du_ue_id);
+  if (ntn_slot_request.has_value()) {
+    auto& setup_resp = ue_ctxt_setup_response.pdu.successful_outcome().value.ue_context_setup_resp();
+    setup_resp->res_coordination_transfer_container_present = true;
+    setup_resp->res_coordination_transfer_container =
+        encode_f1ap_ntn_ul_slot_resource_result(*make_successful_ntn_ul_slot_result(ntn_slot_request));
+  }
   get_du(du_idx).push_ul_pdu(ue_ctxt_setup_response);
 
   // Inject RRC Security Mode Complete
@@ -596,59 +791,68 @@ bool cu_cp_test_environment::setup_ue_security(unsigned du_idx, gnb_du_ue_f1ap_i
 
   // Wait for UE Capability Enquiry
   result = this->wait_for_f1ap_tx_pdu(du_idx, f1ap_pdu);
-  report_fatal_error_if_not(result, "Failed to receive DL RRC Message, containing RRC UE Capability Enquiry");
-  report_fatal_error_if_not(test_helpers::is_valid_dl_rrc_message_transfer(f1ap_pdu),
-                            "Invalid DL RRC Message Transfer");
+  if (!result || !test_helpers::is_valid_dl_rrc_message_transfer(f1ap_pdu)) {
+    return false;
+  }
   {
     const byte_buffer& rrc_container = test_helpers::get_rrc_container(f1ap_pdu);
-    report_fatal_error_if_not(
-        test_helpers::is_valid_rrc_ue_capability_enquiry(test_helpers::extract_dl_dcch_msg(rrc_container)),
-        "Invalid UE Capability Enquiry");
+    if (!test_helpers::is_valid_rrc_ue_capability_enquiry(test_helpers::extract_dl_dcch_msg(rrc_container))) {
+      return false;
+    }
+  }
+
+  if (ue_capability_info_pdu.empty()) {
+    ue_capability_info_pdu =
+        make_byte_buffer("00044c821930680ce811d1968097e360e1480005824c5c00060fc2c00637fe002e00131401a0000000880058d006007"
+                         "a071e439f0000240400e0300000000100186c0000700809df000000000000030368000800004b2ca000a07143c001c0"
+                         "03c000000100200409028098a8660c")
+            .value();
   }
 
   // Inject UL RRC Message Transfer (containing UE Capability Info)
   get_du(du_idx).push_ul_pdu(test_helpers::generate_ul_rrc_message_transfer(
-      du_ue_id,
-      ue_ctx.cu_ue_id.value(),
-      srb_id_t::srb1,
-      make_byte_buffer("00044c821930680ce811d1968097e360e1480005824c5c00060fc2c00637fe002e00131401a0000000880058d006007"
-                       "a071e439f0000240400e0300000000100186c0000700809df000000000000030368000800004b2ca000a07143c001c0"
-                       "03c000000100200409028098a8660c")
-          .value()));
+      du_ue_id, ue_ctx.cu_ue_id.value(), srb_id_t::srb1, std::move(ue_capability_info_pdu)));
 
   // Wait for DL RRC Message Transfer (containing NAS Registration Accept)
   result = this->wait_for_f1ap_tx_pdu(du_idx, f1ap_pdu);
-  report_fatal_error_if_not(result, "Failed to receive DL RRC Message, containing NAS Registration Accept");
-  report_fatal_error_if_not(test_helpers::is_valid_dl_rrc_message_transfer(f1ap_pdu),
-                            "Invalid DL RRC Message Transfer");
+  if (!result || !test_helpers::is_valid_dl_rrc_message_transfer(f1ap_pdu)) {
+    return false;
+  }
 
   // Wait for Initial Context Setup Response.
   result = this->wait_for_ngap_tx_pdu(ngap_pdu);
-  report_fatal_error_if_not(result, "Failed to receive Initial Context Setup Response");
-  report_fatal_error_if_not(test_helpers::is_valid_initial_context_setup_response(ngap_pdu), "Invalid init ctxt setup");
+  if (!result || !test_helpers::is_valid_initial_context_setup_response(ngap_pdu)) {
+    return false;
+  }
 
   // Wait for UE Radio Capability Info Indication.
   result = this->wait_for_ngap_tx_pdu(ngap_pdu);
-  report_fatal_error_if_not(result, "Failed to receive UE Radio Capability Info Indication");
-  report_fatal_error_if_not(test_helpers::is_valid_ue_radio_capability_info_indication(ngap_pdu),
-                            "Invalid UE Radio Capability Info Indication");
+  if (!result || !test_helpers::is_valid_ue_radio_capability_info_indication(ngap_pdu)) {
+    return false;
+  }
+
+  drain_f1ap_resource_coordination_requests(du_idx);
 
   return true;
 }
 
-bool cu_cp_test_environment::finish_ue_registration(unsigned du_idx, unsigned cu_up_idx, gnb_du_ue_f1ap_id_t du_ue_id)
+bool cu_cp_test_environment::finish_ue_registration(unsigned            du_idx,
+                                                    unsigned            cu_up_idx,
+                                                    gnb_du_ue_f1ap_id_t du_ue_id,
+                                                    byte_buffer         registration_complete)
 {
   ngap_message ngap_pdu;
   srsran_assert(not this->get_amf().try_pop_rx_pdu(ngap_pdu), "there are still NGAP messages to pop from AMF");
 
   auto& ue_ctx = attached_ues.at(du_ue_id_to_ran_ue_id_map.at(du_idx).at(du_ue_id));
 
+  if (registration_complete.empty()) {
+    registration_complete = make_byte_buffer("00053a053f015362c51680bf00218086b09a5b").value();
+  }
+
   // Inject Registration Complete and wait UL NAS message.
   get_du(du_idx).push_ul_pdu(test_helpers::generate_ul_rrc_message_transfer(
-      du_ue_id,
-      ue_ctx.cu_ue_id.value(),
-      srb_id_t::srb1,
-      make_byte_buffer("00053a053f015362c51680bf00218086b09a5b").value()));
+      du_ue_id, ue_ctx.cu_ue_id.value(), srb_id_t::srb1, std::move(registration_complete)));
   bool result = this->wait_for_ngap_tx_pdu(ngap_pdu);
   report_fatal_error_if_not(result, "Failed to receive Registration Complete");
 
@@ -742,6 +946,7 @@ bool cu_cp_test_environment::send_bearer_context_setup_response_and_await_ue_con
     qos_flow_id_t          qfi)
 {
   f1ap_message f1ap_pdu;
+  drain_f1ap_resource_coordination_requests(du_idx);
   srsran_assert(not this->get_du(du_idx).try_pop_dl_pdu(f1ap_pdu), "there are still F1AP DL messages to pop from DU");
 
   auto& ue_ctx         = attached_ues.at(du_ue_id_to_ran_ue_id_map.at(du_idx).at(du_ue_id));
@@ -754,6 +959,7 @@ bool cu_cp_test_environment::send_bearer_context_setup_response_and_await_ue_con
   report_fatal_error_if_not(result, "Failed to receive UE Context Modification Request");
   report_fatal_error_if_not(test_helpers::is_valid_ue_context_modification_request(f1ap_pdu),
                             "Invalid UE Context Modification Request");
+  record_last_ntn_ul_slot_request(du_idx, f1ap_pdu);
 
   return true;
 }
@@ -778,6 +984,7 @@ bool cu_cp_test_environment::send_bearer_context_modification_response_and_await
   report_fatal_error_if_not(result, "Failed to receive UE Context Modification Request");
   report_fatal_error_if_not(test_helpers::is_valid_ue_context_modification_request(f1ap_pdu),
                             "Invalid UE Context Modification Request");
+  record_last_ntn_ul_slot_request(du_idx, f1ap_pdu);
 
   return true;
 }
@@ -795,8 +1002,14 @@ bool cu_cp_test_environment::send_ue_context_modification_response_and_await_bea
   auto& ue_ctx = attached_ues.at(du_ue_id_to_ran_ue_id_map.at(du_idx).at(du_ue_id));
 
   // Inject UE Context Modification Response and wait for Bearer Context Modification Request
-  get_du(du_idx).push_ul_pdu(
-      test_helpers::generate_ue_context_modification_response(du_ue_id, ue_ctx.cu_ue_id.value(), crnti));
+  get_du(du_idx).push_ul_pdu(test_helpers::generate_ue_context_modification_response(
+      du_ue_id,
+      ue_ctx.cu_ue_id.value(),
+      crnti,
+      {drb_id_t::drb1},
+      {},
+      test_helpers::create_cell_group_config(),
+      consume_last_ntn_ul_slot_result(du_idx)));
   bool result = this->wait_for_e1ap_tx_pdu(cu_up_idx, e1ap_pdu);
   report_fatal_error_if_not(result, "Failed to receive Bearer Context Modification Request");
   report_fatal_error_if_not(test_helpers::is_valid_bearer_context_modification_request(e1ap_pdu),

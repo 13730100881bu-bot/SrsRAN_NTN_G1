@@ -339,12 +339,30 @@ generate_ntn_location_mobility_config(const cu_cp_unit_ntn_location_mobility_con
   out_cfg.enabled                               = app_cfg.enabled;
   out_cfg.served_beam_min_elevation_deg         = app_cfg.served_beam_min_elevation_deg;
   out_cfg.max_nof_served_beams                  = app_cfg.max_nof_served_beams;
+  out_cfg.max_nof_active_analog_access_beams    = app_cfg.max_nof_active_analog_access_beams;
+  out_cfg.max_nof_loaded_digital_service_beams  = app_cfg.max_nof_loaded_digital_service_beams;
+  out_cfg.preheated_beam_hold_time              = std::chrono::milliseconds{app_cfg.preheated_beam_hold_time_ms};
+  out_cfg.preheated_beam_min_ready_time = std::chrono::milliseconds{app_cfg.preheated_beam_min_ready_time_ms};
+  out_cfg.analog_rebalance_pair_cooldown = std::chrono::milliseconds{app_cfg.analog_rebalance_pair_cooldown_ms};
+  out_cfg.digital_target_reservation_hold_time =
+      std::chrono::milliseconds{app_cfg.digital_target_reservation_hold_time_ms};
   out_cfg.served_beam_hopping_enabled           = app_cfg.served_beam_hopping_enabled;
   out_cfg.served_beam_hopping_dwell_updates     = app_cfg.served_beam_hopping_dwell_updates;
+  out_cfg.multi_beam_load_balancing_enabled     = app_cfg.multi_beam_load_balancing_enabled;
+  out_cfg.demand_aware_beam_scheduling_enabled  = app_cfg.demand_aware_beam_scheduling_enabled;
+  out_cfg.multi_beam_headroom_admission_enabled = app_cfg.multi_beam_headroom_admission_enabled;
+  out_cfg.multi_beam_load_balancing_min_ue_delta = app_cfg.multi_beam_load_balancing_min_ue_delta;
+  out_cfg.multi_beam_load_balancing_max_handovers_per_eval =
+      app_cfg.multi_beam_load_balancing_max_handovers_per_eval;
+  out_cfg.multi_beam_load_balancing_handover_cooldown =
+      std::chrono::milliseconds{app_cfg.multi_beam_load_balancing_handover_cooldown_ms};
   out_cfg.measurement_report_period            = std::chrono::milliseconds{app_cfg.measurement_report_period_ms};
   out_cfg.time_to_trigger                      = std::chrono::milliseconds{app_cfg.time_to_trigger_ms};
   out_cfg.max_report_gap                       = std::chrono::milliseconds{app_cfg.max_report_gap_ms};
   out_cfg.location_max_age                     = std::chrono::milliseconds{app_cfg.location_max_age_ms};
+  out_cfg.location_lost_release_grace_period =
+      std::chrono::milliseconds{app_cfg.location_lost_release_grace_period_ms};
+  out_cfg.idle_paging_context_max_age         = std::chrono::milliseconds{app_cfg.idle_paging_context_max_age_ms};
   out_cfg.handover_retry_timeout               = std::chrono::milliseconds{app_cfg.handover_retry_timeout_ms};
   out_cfg.required_consecutive_location_reports = app_cfg.required_consecutive_location_reports;
   out_cfg.boundary_hysteresis_m                = app_cfg.boundary_hysteresis_m;
@@ -365,6 +383,9 @@ generate_ntn_location_mobility_config(const cu_cp_unit_ntn_location_mobility_con
     report_error("Invalid NTN satellite_state_source '{}'.\n", app_cfg.satellite_state_source);
   }
   sat_state_cfg.update_period = std::chrono::milliseconds{app_cfg.satellite_state_update_period_ms};
+  sat_state_cfg.predictive_service_window_horizon =
+      std::chrono::milliseconds{app_cfg.predictive_service_window_horizon_ms};
+  sat_state_cfg.predictive_handover_lead_time = std::chrono::milliseconds{app_cfg.predictive_handover_lead_time_ms};
   sat_state_cfg.circular_altitude_m               = app_cfg.circular_orbit_altitude_m;
   sat_state_cfg.circular_inclination_deg          = app_cfg.circular_orbit_inclination_deg;
   sat_state_cfg.circular_raan_deg                 = app_cfg.circular_orbit_raan_deg;
@@ -373,6 +394,20 @@ generate_ntn_location_mobility_config(const cu_cp_unit_ntn_location_mobility_con
     sat_state_cfg.circular_epoch = std::chrono::system_clock::time_point{
         std::chrono::duration_cast<std::chrono::system_clock::duration>(
             std::chrono::duration<double>{app_cfg.circular_orbit_epoch_unix_s.value()})};
+  }
+  for (const cu_cp_unit_ntn_circular_orbit_satellite_config& satellite : app_cfg.circular_orbit_satellites) {
+    srs_cu_cp::ntn_circular_orbit_satellite_config satellite_cfg;
+    satellite_cfg.satellite_id                     = satellite.satellite_id;
+    satellite_cfg.altitude_m                       = satellite.altitude_m;
+    satellite_cfg.inclination_deg                  = satellite.inclination_deg;
+    satellite_cfg.raan_deg                         = satellite.raan_deg;
+    satellite_cfg.argument_of_latitude_deg         = satellite.argument_of_latitude_deg;
+    if (satellite.epoch_unix_s.has_value()) {
+      satellite_cfg.epoch = std::chrono::system_clock::time_point{
+          std::chrono::duration_cast<std::chrono::system_clock::duration>(
+              std::chrono::duration<double>{satellite.epoch_unix_s.value()})};
+    }
+    sat_state_cfg.circular_orbit_satellites.push_back(std::move(satellite_cfg));
   }
   sat_state_cfg.tle_satellite_name = app_cfg.tle_satellite_name;
   sat_state_cfg.tle_line1          = app_cfg.tle_line1;
@@ -383,7 +418,9 @@ generate_ntn_location_mobility_config(const cu_cp_unit_ntn_location_mobility_con
     if (!beam_table.has_value()) {
       report_error("Invalid NTN beam table file '{}'. Cause: {}\n", app_cfg.beam_table_json_file, beam_table.error());
     }
-    out_cfg.beams = std::move(beam_table.value().beams);
+    auto beam_table_value = std::move(beam_table.value());
+    out_cfg.analog_beams = std::move(beam_table_value.analog_beams);
+    out_cfg.beams        = std::move(beam_table_value.beams);
   }
 
   return out_cfg;
@@ -506,6 +543,48 @@ srs_cu_cp::cu_cp_configuration srsran::generate_cu_cp_config(const cu_cp_unit_co
   out_cfg.mobility.mobility_manager_config.enable_rrc_metrics  = cu_cfg.metrics.layers_cfg.enable_rrc;
   out_cfg.mobility.meas_manager_config.ntn_location_mobility =
       generate_ntn_location_mobility_config(cu_cfg.mobility_config.ntn_location_mobility);
+  out_cfg.mobility.onboard_position_plan.enabled = cu_cfg.mobility_config.ntn_onboard_position_plan.enabled;
+  out_cfg.mobility.onboard_position_plan.du_execution_enabled =
+      cu_cfg.mobility_config.ntn_onboard_position_plan.du_execution_enabled;
+  out_cfg.mobility.onboard_position_plan.satellite_id =
+      cu_cfg.mobility_config.ntn_onboard_position_plan.satellite_id;
+  out_cfg.mobility.onboard_position_plan.plan_json_file =
+      cu_cfg.mobility_config.ntn_onboard_position_plan.plan_json_file;
+  out_cfg.mobility.onboard_position_plan.reload_period =
+      std::chrono::milliseconds{cu_cfg.mobility_config.ntn_onboard_position_plan.reload_period_ms};
+  out_cfg.mobility.onboard_position_plan.du_prepare_guard =
+      std::chrono::milliseconds{cu_cfg.mobility_config.ntn_onboard_position_plan.du_prepare_guard_ms};
+  out_cfg.mobility.onboard_position_plan.du_prepare_horizon =
+      std::chrono::milliseconds{cu_cfg.mobility_config.ntn_onboard_position_plan.du_prepare_horizon_ms};
+  out_cfg.mobility.onboard_position_plan.du_apply_timeout =
+      std::chrono::milliseconds{cu_cfg.mobility_config.ntn_onboard_position_plan.du_apply_timeout_ms};
+  if (cu_cfg.mobility_config.ntn_onboard_position_plan.cell_ncis.size() == 2 &&
+      cu_cfg.mobility_config.ntn_onboard_position_plan.cell_pcis.size() == 2) {
+    for (unsigned i = 0; i != out_cfg.mobility.onboard_position_plan.cell_ncis.size(); ++i) {
+      out_cfg.mobility.onboard_position_plan.cell_ncis[i] =
+          nr_cell_identity::create(cu_cfg.mobility_config.ntn_onboard_position_plan.cell_ncis[i]).value();
+      out_cfg.mobility.onboard_position_plan.cell_pcis[i] =
+          static_cast<pci_t>(cu_cfg.mobility_config.ntn_onboard_position_plan.cell_pcis[i]);
+    }
+  }
+  out_cfg.mobility.onboard_position_plan.max_l1_positions_per_cell =
+      cu_cfg.mobility_config.ntn_onboard_position_plan.max_l1_positions_per_cell;
+  out_cfg.mobility.onboard_position_plan.max_l1_positions_per_satellite =
+      cu_cfg.mobility_config.ntn_onboard_position_plan.max_l1_positions_per_satellite;
+  out_cfg.mobility.onboard_position_plan.max_analog_ports_per_cell =
+      cu_cfg.mobility_config.ntn_onboard_position_plan.max_analog_ports_per_cell;
+  out_cfg.mobility.onboard_position_plan.max_analog_ports_per_satellite =
+      cu_cfg.mobility_config.ntn_onboard_position_plan.max_analog_ports_per_satellite;
+  out_cfg.mobility.onboard_position_plan.access_slot =
+      std::chrono::microseconds{cu_cfg.mobility_config.ntn_onboard_position_plan.access_slot_us};
+  out_cfg.mobility.onboard_position_plan.subvisit_duration =
+      std::chrono::microseconds{cu_cfg.mobility_config.ntn_onboard_position_plan.subvisit_duration_us};
+  out_cfg.mobility.onboard_position_plan.max_ssb_interval =
+      std::chrono::milliseconds{cu_cfg.mobility_config.ntn_onboard_position_plan.max_ssb_interval_ms};
+  out_cfg.mobility.onboard_position_plan.max_prach_interval =
+      std::chrono::milliseconds{cu_cfg.mobility_config.ntn_onboard_position_plan.max_prach_interval_ms};
+  out_cfg.mobility.onboard_position_plan.activation_alignment =
+      std::chrono::milliseconds{cu_cfg.mobility_config.ntn_onboard_position_plan.activation_alignment_ms};
 
   // F1AP-CU config.
   out_cfg.f1ap.proc_timeout     = std::chrono::milliseconds{cu_cfg.f1ap_config.procedure_timeout};

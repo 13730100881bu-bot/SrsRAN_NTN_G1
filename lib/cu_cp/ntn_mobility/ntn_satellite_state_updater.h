@@ -41,9 +41,13 @@ class ntn_satellite_state_updater
 public:
   using orbit_propagator_variant =
       std::variant<srs_ntn::circular_orbit_propagator, srs_ntn::tle_orbit_propagator>;
+  struct orbit_propagator_entry {
+    std::string              satellite_id = "sat-0";
+    orbit_propagator_variant propagator;
+  };
 
   ntn_satellite_state_updater(ntn_satellite_state_update_config cfg_,
-                              orbit_propagator_variant          propagator_,
+                              std::vector<orbit_propagator_entry> propagators_,
                               cu_cp_ntn_command_handler&        command_handler_,
                               timer_manager&                    timers,
                               task_executor&                    executor,
@@ -59,7 +63,7 @@ private:
   void update_satellite_state();
 
   ntn_satellite_state_update_config cfg;
-  orbit_propagator_variant          propagator;
+  std::vector<orbit_propagator_entry> propagators;
   cu_cp_ntn_command_handler&        command_handler;
   unique_timer                      update_timer;
   srslog::basic_logger&             logger;
