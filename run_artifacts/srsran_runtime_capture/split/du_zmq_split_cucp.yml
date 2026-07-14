@@ -1,0 +1,56 @@
+f1ap:
+  cu_cp_addr: 127.0.10.1
+  bind_addr: 127.0.10.2
+
+f1u:
+  socket:
+    - bind_addr: 127.0.10.2
+
+ru_sdr:
+  device_driver: zmq
+  device_args: tx_port=tcp://127.0.0.1:2000,rx_port=tcp://127.0.0.1:2001,base_srate=23.04e6
+  srate: 23.04
+  tx_gain: 75
+  rx_gain: 75
+
+cell_cfg:
+  dl_arfcn: 368500
+  band: 3
+  channel_bandwidth_MHz: 20
+  common_scs: 15
+  plmn: "00101"
+  tac: 7
+  pci: 1
+  pdcch:
+    dedicated:
+      ss2_type: common
+      dci_format_0_1_and_1_1: false
+    common:
+      ss0_index: 0
+      coreset0_index: 12
+  prach:
+    prach_config_index: 1
+  pdsch:
+    mcs_table: qam64
+  pusch:
+    mcs_table: qam64
+
+log:
+  filename: /tmp/split_du.log
+  all_level: warning
+  f1ap_level: warning
+  du_level: warning
+  mac_level: warning
+  phy_level: warning
+  radio_level: warning
+  broadcast_enabled: false
+  hex_max_size: 256
+
+pcap:
+  mac_enable: true
+  mac_type: dlt
+  mac_filename: /tmp/split_du_mac.pcap
+  f1ap_enable: true
+  f1ap_filename: /tmp/split_du_f1ap.pcap
+  f1u_enable: true
+  f1u_filename: /tmp/split_du_f1u.pcap

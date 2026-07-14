@@ -1,0 +1,65 @@
+cu_cp:
+  amf:
+    addr: 127.0.0.1
+    port: 38412
+    bind_addr: 127.0.0.1
+    supported_tracking_areas:
+      - tac: 7
+        plmn_list:
+          - plmn: "00101"
+            tai_slice_support_list:
+              - sst: 1
+
+ru_sdr:
+  device_driver: zmq
+  device_args: tx_port=tcp://127.0.0.1:2000,rx_port=tcp://127.0.0.1:2001,base_srate=23.04e6
+  srate: 23.04
+  tx_gain: 75
+  rx_gain: 75
+
+cell_cfg:
+  dl_arfcn: 368500
+  band: 3
+  channel_bandwidth_MHz: 20
+  common_scs: 15
+  plmn: "00101"
+  tac: 7
+  pci: 1
+  pdcch:
+    dedicated:
+      ss2_type: common
+      dci_format_0_1_and_1_1: false
+    common:
+      ss0_index: 0
+      coreset0_index: 12
+  prach:
+    prach_config_index: 1
+  pdsch:
+    mcs_table: qam64
+  pusch:
+    mcs_table: qam64
+
+log:
+  filename: /tmp/gnb_20_cucp.log
+  all_level: warning
+  cu_level: debug
+  rrc_level: debug
+  ngap_level: debug
+  f1ap_level: debug
+  du_level: warning
+  mac_level: warning
+  phy_level: warning
+  radio_level: warning
+  broadcast_enabled: true
+  hex_max_size: 256
+
+pcap:
+  mac_enable: false
+  mac_type: dlt
+  mac_filename: /tmp/gnb_live_mac.pcap
+  ngap_enable: true
+  ngap_filename: /tmp/gnb_live_ngap.pcap
+  f1ap_enable: true
+  f1ap_filename: /tmp/gnb_live_f1ap.pcap
+  e1ap_enable: true
+  e1ap_filename: /tmp/gnb_live_e1ap.pcap

@@ -1,0 +1,64 @@
+# CU-CP NTN SIB19 runtime proof config for the split demo.
+# This config is intentionally scoped to run_artifacts and matches the live split DU cell.
+
+cu_cp:
+  request_pdu_session_timeout: 30
+  amf:
+    addr: 127.0.0.1
+    port: 38412
+    bind_addr: 127.0.0.1
+    supported_tracking_areas:
+      - tac: 7
+        plmn_list:
+          - plmn: "00101"
+            tai_slice_support_list:
+              - sst: 1
+  e1ap:
+    bind_addr: 127.0.20.1
+  f1ap:
+    bind_addr: 127.0.10.1
+  mobility:
+    trigger_handover_from_measurements: false
+    cells:
+      - nr_cell_id: 0x66c000
+        gnb_id_bit_length: 22
+    ntn_location_mobility:
+      enabled: true
+      beam_table_json_file: run_artifacts/srsran_runtime_capture/split/split_ntn_beam_table.json
+      served_beam_min_elevation_deg: 10.0
+      max_nof_served_beams: 1
+      max_nof_active_analog_access_beams: 1
+      max_nof_loaded_digital_service_beams: 1
+      served_beam_hopping_enabled: false
+      served_beam_hopping_dwell_updates: 1
+      satellite_state_source: manual
+      satellite_state_update_period_ms: 0
+      measurement_report_period_ms: 0
+      time_to_trigger_ms: 1000
+      max_report_gap_ms: 750
+      location_max_age_ms: 5000
+      handover_retry_timeout_ms: 2000
+      required_consecutive_location_reports: 1
+      boundary_hysteresis_m: 5000.0
+      max_horizontal_accuracy_m: 250.0
+      core_network_reporting_local_forwarding_enabled: false
+      core_network_reporting_amf_control_enabled: true
+      core_network_reporting_min_report_interval_ms: 0
+
+log:
+  filename: /tmp/split_cu_cp_ntn_sib19_proof.log
+  all_level: warning
+  cu_level: info
+  rrc_level: info
+  ngap_level: warning
+  f1ap_level: debug
+  e1ap_level: warning
+  hex_max_size: 512
+
+pcap:
+  ngap_enable: true
+  ngap_filename: /tmp/split_cu_cp_ntn_sib19_proof_ngap.pcap
+  f1ap_enable: true
+  f1ap_filename: /tmp/split_cu_cp_ntn_sib19_proof_f1ap.pcap
+  e1ap_enable: true
+  e1ap_filename: /tmp/split_cu_cp_ntn_sib19_proof_e1ap.pcap

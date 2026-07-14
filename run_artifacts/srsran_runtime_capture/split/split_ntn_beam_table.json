@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "region": "split-demo-ntn-runtime-proof",
+  "satellite_height_m": 500000.0,
+  "analog_beams": [
+    {
+      "analog_beam_id": "SPLIT-ANALOG-0001",
+      "center_hex_q": 0,
+      "center_hex_r": 0,
+      "center_digital_beam_id": "SPLIT-DIGI-0001",
+      "child_digital_beam_ids": [
+        "SPLIT-DIGI-0001"
+      ],
+      "is_edge_partial": true
+    }
+  ],
+  "beams": [
+    {
+      "beam_id": "SPLIT-DIGI-0001",
+      "nci": "0x66c000",
+      "center_latitude_deg": 31.2304,
+      "center_longitude_deg": 121.4737,
+      "coverage_radius_m": 15000.0,
+      "analog_beam_id": "SPLIT-ANALOG-0001",
+      "hex_q": 0,
+      "hex_r": 0
+    }
+  ]
+}
