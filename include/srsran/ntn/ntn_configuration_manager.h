@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include "srsran/ntn/beam_position.h"
 #include "srsran/ran/nr_cgi.h"
 #include "srsran/ran/ntn.h"
 #include <chrono>
@@ -31,6 +32,13 @@
 namespace srsran {
 
 namespace srs_ntn {
+
+/// Runtime beam hopping configuration carried by an NTN configuration update.
+struct beam_hopping_update_info {
+  beam_position_grid_config grid;
+  uint16_t                  n_active;
+  uint16_t                  dwell_frames;
+};
 
 /// NTN Config update message to be received over a websocket interface.
 struct ntn_config_update_info {
@@ -42,6 +50,8 @@ struct ntn_config_update_info {
   std::optional<ta_info_t>                                ta_info;
   std::optional<feeder_link_info_t>                       feeder_link_info;
   std::optional<geodetic_coordinates_t>                   ntn_gateway_location;
+  std::optional<beam_hopping_update_info>                 beam_hopping;
+  bool                                                    stop_beam_hopping = false;
 };
 
 /// Public NTN configuration manager interface.
