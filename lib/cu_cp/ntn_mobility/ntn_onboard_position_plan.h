@@ -137,11 +137,19 @@ enum class ntn_position_plan_reject_reason {
   invalid_l1_position,
   identity_mismatch,
   schedule_overflow,
+  invalid_calendar_profile,
   invalid_calendar_position,
+  invalid_calendar_timing,
+  invalid_calendar_direction,
+  invalid_access_phase_port,
   invalid_resource_port,
   ssb_deadline_miss,
   prach_deadline_miss,
   prach_ro_without_beam,
+  duplicate_prach_ro,
+  duplicate_prach_ul_beam,
+  prach_beam_without_ro,
+  invalid_rar_placement,
   resource_conflict,
   du_unavailable,
   cross_du_calendar_not_supported,
@@ -167,17 +175,28 @@ struct ntn_access_calendar_audit {
   ntn_position_plan_reject_reason reason   = ntn_position_plan_reject_reason::none;
   unsigned                        nof_l1_positions = 0;
   unsigned                        nof_calendar_intents = 0;
+  unsigned                        nof_ssb_intents                     = 0;
+  unsigned                        nof_prach_ro_intents                = 0;
+  unsigned                        nof_prach_ul_beam_intents           = 0;
   unsigned                        max_used_analog_ports_per_cell = 0;
   unsigned                        max_used_analog_ports_per_satellite = 0;
   std::chrono::microseconds       max_ssb_interval{0};
   std::chrono::microseconds       max_prach_interval{0};
   unsigned                        prach_ro_without_beam = 0;
+  unsigned                        duplicate_prach_ros       = 0;
+  unsigned                        duplicate_prach_ul_beams  = 0;
+  unsigned                        prach_beam_without_ro     = 0;
+  unsigned                        invalid_direction_intents = 0;
+  unsigned                        invalid_phase_ports       = 0;
+  unsigned                        rar_placement_mismatches  = 0;
   unsigned                        resource_conflicts   = 0;
 };
 
 struct ntn_access_calendar_phase {
-  uint16_t downlink_port_mask = 0;
-  uint16_t uplink_port_mask   = 0;
+  uint16_t downlink_port_mask        = 0;
+  uint16_t uplink_port_mask          = 0;
+  unsigned digital_downlink_capacity = 0;
+  unsigned digital_uplink_capacity   = 0;
 };
 
 /// Configurable planning parameters. These are not protocol or hardware constants.
@@ -209,9 +228,9 @@ struct ntn_onboard_position_plan_config {
   unsigned                                  cell_access_slot_stride   = 2;
   unsigned                                  subvisits_per_access_slot = 4;
   std::array<ntn_access_calendar_phase, 3>  access_phases{{
-      {0x07ff, 0xf800},
-      {0x07ff, 0xf800},
-      {0x03ff, 0xfc00},
+      {0x07ff, 0xf800, 43, 21},
+      {0x07ff, 0xf800, 43, 21},
+      {0x03ff, 0xfc00, 42, 22},
   }};
 };
 

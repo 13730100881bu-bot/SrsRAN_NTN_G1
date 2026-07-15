@@ -64,7 +64,7 @@ void set_onboard_planning_context(cu_cp_unit_ntn_onboard_position_plan_config& p
   plan.expected_identity_registry_version = "mc-ntn-onboard-cell-registry-v1";
   plan.expected_identity_registry_hash    = "sha256:7475821350e104b57a70d979d630f4b29a6cecb89ca0eca7b16dddf2ffee6a4a";
   plan.expected_access_profile_id         = "ntn-access-16a-64d-v1";
-  plan.expected_access_profile_hash       = "sha256:bb79577c791d26260828959cecd6b7658d9c5d69eefcd99f833f5e76d081e320";
+  plan.expected_access_profile_hash       = "sha256:195786f4161e3b0fad6faa0605144948a7401c067a014bde684c1b29a8087d63";
 }
 
 void add_ntn_cell(cu_cp_unit_config& cfg, nr_cell_identity nci)
@@ -300,7 +300,7 @@ TEST(cu_cp_unit_config, onboard_position_plan_is_an_independent_opt_in_profile)
             "sha256:7475821350e104b57a70d979d630f4b29a6cecb89ca0eca7b16dddf2ffee6a4a");
   EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.expected_access_profile_id, "ntn-access-16a-64d-v1");
   EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.expected_access_profile_hash,
-            "sha256:bb79577c791d26260828959cecd6b7658d9c5d69eefcd99f833f5e76d081e320");
+            "sha256:195786f4161e3b0fad6faa0605144948a7401c067a014bde684c1b29a8087d63");
   EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.reload_period, std::chrono::milliseconds{2000});
   EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.du_prepare_guard, std::chrono::milliseconds{250});
   EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.du_prepare_horizon, std::chrono::milliseconds{3000});
@@ -325,7 +325,7 @@ TEST(cu_cp_unit_config, onboard_position_plan_is_an_independent_opt_in_profile)
             "sha256:7475821350e104b57a70d979d630f4b29a6cecb89ca0eca7b16dddf2ffee6a4a");
   EXPECT_EQ(yaml_plan["expected_access_profile_id"].as<std::string>(), "ntn-access-16a-64d-v1");
   EXPECT_EQ(yaml_plan["expected_access_profile_hash"].as<std::string>(),
-            "sha256:bb79577c791d26260828959cecd6b7658d9c5d69eefcd99f833f5e76d081e320");
+            "sha256:195786f4161e3b0fad6faa0605144948a7401c067a014bde684c1b29a8087d63");
   EXPECT_EQ(yaml_plan["max_digital_ports_per_cell"].as<unsigned>(), 64U);
   EXPECT_EQ(yaml_plan["max_digital_ports_per_satellite"].as<unsigned>(), 128U);
 }
@@ -401,7 +401,7 @@ TEST(cu_cp_unit_config, onboard_execution_rejects_legacy_identity_authority_and_
   EXPECT_FALSE(validate_cu_cp_unit_config(cfg));
 
   cfg.mobility_config.ntn_location_mobility.enabled = false;
-  plan.expected_access_profile_hash = "Sha256:BB79577C791D26260828959CECD6B7658D9C5D69EEFCD99F833F5E76D081E320";
+  plan.expected_access_profile_hash = "Sha256:195786F4161E3B0FAD6FAA0605144948A7401C067A014BDE684C1B29A8087D63";
   EXPECT_TRUE(validate_cu_cp_unit_config(cfg));
 }
 

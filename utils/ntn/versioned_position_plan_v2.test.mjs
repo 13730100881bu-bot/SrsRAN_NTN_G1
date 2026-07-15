@@ -21,7 +21,7 @@ function clone(value) {
 
 test('schema-v2 golden plan matches the C++ canonical hash', () => {
   assert.equal(ACCESS_PROFILE_V1_HASH,
-    'sha256:bb79577c791d26260828959cecd6b7658d9c5d69eefcd99f833f5e76d081e320');
+    'sha256:195786f4161e3b0fad6faa0605144948a7401c067a014bde684c1b29a8087d63');
   const plan = makeGoldenPlanV2();
   assert.equal(plan.content_hash, GOLDEN_CONTENT_HASH);
   assert.equal(validatePlanV2(plan).contentHash, GOLDEN_CONTENT_HASH);

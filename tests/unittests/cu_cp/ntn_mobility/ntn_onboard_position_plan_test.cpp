@@ -35,7 +35,7 @@ namespace {
 
 constexpr const char* catalog_hash        = "sha256:b39fe9c3ee9a9355b3546036b7f16e0fb858c953f8558cc4295122f2169fbe7a";
 constexpr const char* registry_hash       = "sha256:7475821350e104b57a70d979d630f4b29a6cecb89ca0eca7b16dddf2ffee6a4a";
-constexpr const char* access_profile_hash = "sha256:bb79577c791d26260828959cecd6b7658d9c5d69eefcd99f833f5e76d081e320";
+constexpr const char* access_profile_hash = "sha256:195786f4161e3b0fad6faa0605144948a7401c067a014bde684c1b29a8087d63";
 
 std::chrono::system_clock::time_point at_ms(int64_t milliseconds)
 {
@@ -177,7 +177,7 @@ TEST(ntn_onboard_position_plan, empty_visible_inventory_produces_a_checked_expli
 TEST(ntn_onboard_position_plan, management_center_json_parses_and_keeps_opaque_cell_identities)
 {
   const ntn_versioned_position_plan plan = make_plan(2);
-  ASSERT_EQ(plan.content_hash, "sha256:fab0688dc8a51850384f568ec35ef1464284d9e45ffd0dd82e24d8280269423e");
+  ASSERT_EQ(plan.content_hash, "sha256:374593193a7a297734e583978263759e12209c491418eed55ee82af884ab599d");
   nlohmann::json root;
   root["schema_version"]    = plan.schema_version;
   root["planning_run_id"]   = plan.planning_run_id;

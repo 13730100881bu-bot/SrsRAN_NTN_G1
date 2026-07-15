@@ -108,7 +108,7 @@ void bind_onboard_planning_context(ntn_versioned_position_plan& plan)
   plan.identity_registry_version = "mc-ntn-onboard-cell-registry-v1";
   plan.identity_registry_hash    = "sha256:7475821350e104b57a70d979d630f4b29a6cecb89ca0eca7b16dddf2ffee6a4a";
   plan.access_profile_id         = "ntn-access-16a-64d-v1";
-  plan.access_profile_hash       = "sha256:bb79577c791d26260828959cecd6b7658d9c5d69eefcd99f833f5e76d081e320";
+  plan.access_profile_hash       = "sha256:195786f4161e3b0fad6faa0605144948a7401c067a014bde684c1b29a8087d63";
   for (ntn_l1_position& position : plan.visible_l1_positions) {
     position.child_mask = 0x7f;
   }
@@ -121,7 +121,7 @@ void bind_onboard_planning_context(ntn_onboard_position_plan_source_config& sour
   source.expected_identity_registry_version = "mc-ntn-onboard-cell-registry-v1";
   source.expected_identity_registry_hash    = "sha256:7475821350e104b57a70d979d630f4b29a6cecb89ca0eca7b16dddf2ffee6a4a";
   source.expected_access_profile_id         = "ntn-access-16a-64d-v1";
-  source.expected_access_profile_hash       = "sha256:bb79577c791d26260828959cecd6b7658d9c5d69eefcd99f833f5e76d081e320";
+  source.expected_access_profile_hash       = "sha256:195786f4161e3b0fad6faa0605144948a7401c067a014bde684c1b29a8087d63";
 }
 
 std::filesystem::path write_onboard_position_plan_for_runtime_test(const ntn_versioned_position_plan& plan)

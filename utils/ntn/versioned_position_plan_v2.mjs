@@ -40,9 +40,9 @@ export const ACCESS_PROFILE_V1 = Object.freeze({
   cell_access_slot_stride: 2,
   subvisits_per_access_slot: 4,
   phases: [
-    {downlink_port_mask: 0x07ff, uplink_port_mask: 0xf800},
-    {downlink_port_mask: 0x07ff, uplink_port_mask: 0xf800},
-    {downlink_port_mask: 0x03ff, uplink_port_mask: 0xfc00}
+    {downlink_port_mask: 0x07ff, uplink_port_mask: 0xf800, digital_downlink_capacity: 43, digital_uplink_capacity: 21},
+    {downlink_port_mask: 0x07ff, uplink_port_mask: 0xf800, digital_downlink_capacity: 43, digital_uplink_capacity: 21},
+    {downlink_port_mask: 0x03ff, uplink_port_mask: 0xfc00, digital_downlink_capacity: 42, digital_uplink_capacity: 22}
   ]
 });
 
@@ -65,7 +65,9 @@ export function canonicalAccessProfileV1() {
     `subvisits_per_access_slot=${profile.subvisits_per_access_slot}`
   ];
   for (const [index, phase] of profile.phases.entries()) {
-    lines.push(`phase=${index},${phase.downlink_port_mask},${phase.uplink_port_mask}`);
+    lines.push(
+      `phase=${index},${phase.downlink_port_mask},${phase.uplink_port_mask},` +
+      `${phase.digital_downlink_capacity},${phase.digital_uplink_capacity}`);
   }
   return `${lines.join('\n')}\n`;
 }
@@ -74,7 +76,7 @@ export const ACCESS_PROFILE_V1_HASH =
   `sha256:${createHash('sha256').update(canonicalAccessProfileV1(), 'utf8').digest('hex')}`;
 
 export const GOLDEN_CONTENT_HASH =
-  'sha256:fab0688dc8a51850384f568ec35ef1464284d9e45ffd0dd82e24d8280269423e';
+  'sha256:374593193a7a297734e583978263759e12209c491418eed55ee82af884ab599d';
 
 export class PlanValidationError extends Error {
   constructor(message) {

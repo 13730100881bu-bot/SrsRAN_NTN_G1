@@ -338,6 +338,79 @@ bool intervals_overlap(const ntn_access_calendar_intent& lhs, const ntn_access_c
   return lhs.start_time < rhs.start_time + rhs.duration && rhs.start_time < lhs.start_time + lhs.duration;
 }
 
+unsigned count_mask_bits(uint16_t mask)
+{
+  unsigned result = 0;
+  while (mask != 0) {
+    result += mask & 1U;
+    mask >>= 1U;
+  }
+  return result;
+}
+
+std::optional<uint16_t> nth_mask_port(uint16_t mask, unsigned ordinal)
+{
+  for (uint16_t port = 0; port != 16; ++port) {
+    if ((mask & (uint16_t{1} << port)) == 0) {
+      continue;
+    }
+    if (ordinal == 0) {
+      return port;
+    }
+    --ordinal;
+  }
+  return std::nullopt;
+}
+
+bool is_supported_access_calendar_profile(const ntn_onboard_position_plan_config& config)
+{
+  static constexpr std::array<ntn_access_calendar_phase, 3> expected_phases{{
+      {0x07ff, 0xf800, 43, 21},
+      {0x07ff, 0xf800, 43, 21},
+      {0x03ff, 0xfc00, 42, 22},
+  }};
+  const bool                                                unbound_legacy_profile =
+      config.expected_access_profile_id.empty() && config.expected_access_profile_hash.empty();
+  const bool bound_profile =
+      config.expected_access_profile_id == "ntn-access-16a-64d-v1" &&
+      normalize_hash(config.expected_access_profile_hash) == compute_ntn_access_profile_hash(config);
+  if ((!unbound_legacy_profile && !bound_profile) || config.max_l1_positions_per_cell != 128 ||
+      config.max_l1_positions_per_satellite != 256 || config.max_analog_ports_per_cell != 16 ||
+      config.max_analog_ports_per_satellite != 32 || config.max_digital_ports_per_cell != 64 ||
+      config.max_digital_ports_per_satellite != 128 || config.access_slot != std::chrono::milliseconds{10} ||
+      config.subvisit_duration != std::chrono::microseconds{2500} ||
+      config.max_ssb_interval != std::chrono::milliseconds{80} ||
+      config.max_prach_interval != std::chrono::milliseconds{640} ||
+      config.activation_alignment != std::chrono::milliseconds{640} || config.cell_access_slot_stride != 2 ||
+      config.subvisits_per_access_slot != 4) {
+    return false;
+  }
+
+  uint16_t common_downlink = std::numeric_limits<uint16_t>::max();
+  uint16_t common_uplink   = std::numeric_limits<uint16_t>::max();
+  for (size_t index = 0; index != config.access_phases.size(); ++index) {
+    const ntn_access_calendar_phase& phase = config.access_phases[index];
+    if (phase.downlink_port_mask != expected_phases[index].downlink_port_mask ||
+        phase.uplink_port_mask != expected_phases[index].uplink_port_mask ||
+        phase.digital_downlink_capacity != expected_phases[index].digital_downlink_capacity ||
+        phase.digital_uplink_capacity != expected_phases[index].digital_uplink_capacity ||
+        phase.digital_downlink_capacity + phase.digital_uplink_capacity != config.max_digital_ports_per_cell) {
+      return false;
+    }
+    if ((phase.downlink_port_mask & phase.uplink_port_mask) != 0 ||
+        (phase.downlink_port_mask | phase.uplink_port_mask) != std::numeric_limits<uint16_t>::max()) {
+      return false;
+    }
+    common_downlink &= phase.downlink_port_mask;
+    common_uplink &= phase.uplink_port_mask;
+  }
+  const uint64_t occasions_per_window =
+      config.max_ssb_interval.count() / (config.cell_access_slot_stride * config.access_slot.count());
+  const uint64_t stable_capacity =
+      occasions_per_window * config.subvisits_per_access_slot * count_mask_bits(common_downlink);
+  return common_uplink != 0 && stable_capacity >= config.max_l1_positions_per_cell;
+}
+
 expected<nr_cell_identity, std::string> parse_nci(const nlohmann::json& value, const char* context)
 {
   uint64_t parsed = 0;
@@ -452,8 +525,16 @@ const char* srsran::srs_cu_cp::to_string(ntn_position_plan_reject_reason reason)
       return "identity_mismatch";
     case ntn_position_plan_reject_reason::schedule_overflow:
       return "schedule_overflow";
+    case ntn_position_plan_reject_reason::invalid_calendar_profile:
+      return "invalid_calendar_profile";
     case ntn_position_plan_reject_reason::invalid_calendar_position:
       return "invalid_calendar_position";
+    case ntn_position_plan_reject_reason::invalid_calendar_timing:
+      return "invalid_calendar_timing";
+    case ntn_position_plan_reject_reason::invalid_calendar_direction:
+      return "invalid_calendar_direction";
+    case ntn_position_plan_reject_reason::invalid_access_phase_port:
+      return "invalid_access_phase_port";
     case ntn_position_plan_reject_reason::invalid_resource_port:
       return "invalid_resource_port";
     case ntn_position_plan_reject_reason::ssb_deadline_miss:
@@ -462,6 +543,14 @@ const char* srsran::srs_cu_cp::to_string(ntn_position_plan_reject_reason reason)
       return "prach_deadline_miss";
     case ntn_position_plan_reject_reason::prach_ro_without_beam:
       return "prach_ro_without_beam";
+    case ntn_position_plan_reject_reason::duplicate_prach_ro:
+      return "duplicate_prach_ro";
+    case ntn_position_plan_reject_reason::duplicate_prach_ul_beam:
+      return "duplicate_prach_ul_beam";
+    case ntn_position_plan_reject_reason::prach_beam_without_ro:
+      return "prach_beam_without_ro";
+    case ntn_position_plan_reject_reason::invalid_rar_placement:
+      return "invalid_rar_placement";
     case ntn_position_plan_reject_reason::resource_conflict:
       return "resource_conflict";
     case ntn_position_plan_reject_reason::du_unavailable:
@@ -782,47 +871,77 @@ std::vector<ntn_access_calendar_intent> ntn_onboard_position_plan_controller::bu
     uint64_t schedule_version, const std::array<ntn_onboard_cell_position_set, 2>& assignments) const
 {
   std::vector<ntn_access_calendar_intent> result;
-  if (cfg.max_analog_ports_per_cell == 0 || cfg.access_slot.count() <= 0 || cfg.subvisit_duration.count() <= 0 ||
-      cfg.max_ssb_interval.count() <= 0 || cfg.max_prach_interval.count() <= 0 ||
-      cfg.max_prach_interval.count() % cfg.max_ssb_interval.count() != 0 ||
-      cfg.max_ssb_interval.count() % cfg.access_slot.count() != 0 ||
-      2 * cfg.subvisit_duration > cfg.access_slot) {
+  if (!is_supported_access_calendar_profile(cfg)) {
     return result;
   }
 
-  const unsigned ssb_cycles = cfg.max_prach_interval.count() / cfg.max_ssb_interval.count();
-  const unsigned slots_per_ssb_period = cfg.max_ssb_interval.count() / cfg.access_slot.count();
-  if (ssb_cycles == 0 || slots_per_ssb_period == 0) {
+  unsigned nof_stable_downlink_lanes = std::numeric_limits<unsigned>::max();
+  unsigned nof_stable_uplink_lanes   = std::numeric_limits<unsigned>::max();
+  for (const ntn_access_calendar_phase& phase : cfg.access_phases) {
+    nof_stable_downlink_lanes = std::min(nof_stable_downlink_lanes, count_mask_bits(phase.downlink_port_mask));
+    nof_stable_uplink_lanes   = std::min(nof_stable_uplink_lanes, count_mask_bits(phase.uplink_port_mask));
+  }
+  const unsigned ssb_rounds = cfg.max_prach_interval.count() / cfg.max_ssb_interval.count();
+  const unsigned occasions_per_ssb_window =
+      cfg.max_ssb_interval.count() / (cfg.cell_access_slot_stride * cfg.access_slot.count());
+  const unsigned lanes_per_occasion = nof_stable_downlink_lanes * cfg.subvisits_per_access_slot;
+  if (nof_stable_downlink_lanes == 0 || nof_stable_uplink_lanes == 0 || ssb_rounds == 0 ||
+      occasions_per_ssb_window == 0 || lanes_per_occasion == 0) {
     return result;
   }
 
-  size_t nof_positions = assignments[0].assigned_l1_ids.size() + assignments[1].assigned_l1_ids.size();
-  result.reserve(nof_positions * (ssb_cycles + 2));
+  const nr_cell_identity lower_nci     = std::min(assignments[0].identity.nci, assignments[1].identity.nci);
+  size_t                 nof_positions = assignments[0].assigned_l1_ids.size() + assignments[1].assigned_l1_ids.size();
+  result.reserve(nof_positions * (ssb_rounds + 2));
   for (const ntn_onboard_cell_position_set& cell : assignments) {
+    const unsigned cell_slot_parity = cell.identity.nci == lower_nci ? 0U : 1U;
     for (size_t i = 0; i != cell.assigned_l1_ids.size(); ++i) {
-      const unsigned port = i % cfg.max_analog_ports_per_cell;
-      const unsigned slot = i / cfg.max_analog_ports_per_cell;
-      if (slot >= slots_per_ssb_period) {
+      const unsigned occasion_in_ssb_window = i / lanes_per_occasion;
+      const unsigned lane_in_occasion       = i % lanes_per_occasion;
+      if (occasion_in_ssb_window >= occasions_per_ssb_window) {
         continue;
       }
-      const unsigned prach_cycle = slot % ssb_cycles;
-      const unsigned rar_cycle   = (prach_cycle + 1) % ssb_cycles;
-      for (unsigned cycle = 0; cycle != ssb_cycles; ++cycle) {
+      const unsigned downlink_port_ordinal = lane_in_occasion / cfg.subvisits_per_access_slot;
+      const unsigned subvisit              = lane_in_occasion % cfg.subvisits_per_access_slot;
+
+      const unsigned group       = occasion_in_ssb_window * cfg.subvisits_per_access_slot + subvisit;
+      const unsigned prach_round = (group + downlink_port_ordinal / nof_stable_uplink_lanes) % ssb_rounds;
+      const unsigned rar_round   = (prach_round + 1) % ssb_rounds;
+      for (unsigned round = 0; round != ssb_rounds; ++round) {
+        const unsigned cell_occasion           = round * occasions_per_ssb_window + occasion_in_ssb_window;
+        const unsigned access_slot_index       = cell_slot_parity + cfg.cell_access_slot_stride * cell_occasion;
+        const ntn_access_calendar_phase& phase = cfg.access_phases[access_slot_index % cfg.access_phases.size()];
+        const unsigned                   phase_downlink_lanes = count_mask_bits(phase.downlink_port_mask);
+        const auto                       downlink_port =
+            nth_mask_port(phase.downlink_port_mask, (downlink_port_ordinal + round) % phase_downlink_lanes);
+        if (!downlink_port.has_value()) {
+          continue;
+        }
         ntn_access_calendar_intent intent;
         intent.schedule_version = schedule_version;
         intent.nci              = cell.identity.nci;
         intent.position_id      = cell.assigned_l1_ids[i];
-        intent.start_time       = cycle * cfg.max_ssb_interval + slot * cfg.access_slot;
+        intent.start_time       = access_slot_index * cfg.access_slot + subvisit * cfg.subvisit_duration;
         intent.duration         = cfg.subvisit_duration;
         intent.direction        = ntn_access_calendar_direction::downlink;
-        intent.purpose = cycle == rar_cycle ? ntn_access_calendar_purpose::ssb_sib_paging_rar
-                                             : ntn_access_calendar_purpose::ssb_sib_paging;
-        intent.port_id = static_cast<uint16_t>(port);
+        intent.purpose          = round == rar_round ? ntn_access_calendar_purpose::ssb_sib_paging_rar
+                                                     : ntn_access_calendar_purpose::ssb_sib_paging;
+        intent.port_id          = downlink_port.value();
         result.push_back(std::move(intent));
       }
 
+      const unsigned prach_cell_occasion     = prach_round * occasions_per_ssb_window + occasion_in_ssb_window;
+      const unsigned prach_access_slot_index = cell_slot_parity + cfg.cell_access_slot_stride * prach_cell_occasion;
+      const ntn_access_calendar_phase& prach_phase =
+          cfg.access_phases[prach_access_slot_index % cfg.access_phases.size()];
+      const unsigned phase_uplink_lanes = count_mask_bits(prach_phase.uplink_port_mask);
+      const auto     uplink_port =
+          nth_mask_port(prach_phase.uplink_port_mask, (downlink_port_ordinal + prach_round) % phase_uplink_lanes);
+      if (!uplink_port.has_value()) {
+        continue;
+      }
       const std::chrono::microseconds prach_start =
-          prach_cycle * cfg.max_ssb_interval + slot * cfg.access_slot + cfg.subvisit_duration;
+          prach_access_slot_index * cfg.access_slot + subvisit * cfg.subvisit_duration;
       ntn_access_calendar_intent ro;
       ro.schedule_version = schedule_version;
       ro.nci              = cell.identity.nci;
@@ -835,7 +954,7 @@ std::vector<ntn_access_calendar_intent> ntn_onboard_position_plan_controller::bu
       result.push_back(ro);
 
       ro.purpose = ntn_access_calendar_purpose::prach_ul_beam;
-      ro.port_id = static_cast<uint16_t>(port);
+      ro.port_id = uplink_port.value();
       result.push_back(std::move(ro));
     }
   }
@@ -850,6 +969,11 @@ ntn_access_calendar_audit ntn_onboard_position_plan_controller::audit_access_cal
   ntn_access_calendar_audit audit;
   audit.nof_calendar_intents = intents.size();
 
+  if (!is_supported_access_calendar_profile(cfg)) {
+    audit.reason = ntn_position_plan_reject_reason::invalid_calendar_profile;
+    return audit;
+  }
+
   std::map<std::string, nr_cell_identity> expected_positions;
   std::set<nr_cell_identity>               cell_ncis;
   for (const ntn_onboard_cell_position_set& cell : assignments) {
@@ -862,18 +986,32 @@ ntn_access_calendar_audit ntn_onboard_position_plan_controller::audit_access_cal
     }
   }
   audit.nof_l1_positions = expected_positions.size();
+  if (cell_ncis.size() != assignments.size()) {
+    audit.reason = ntn_position_plan_reject_reason::invalid_calendar_position;
+    return audit;
+  }
+
+  const nr_cell_identity               lower_nci = *cell_ncis.begin();
+  std::map<nr_cell_identity, unsigned> cell_slot_parity;
+  for (nr_cell_identity nci : cell_ncis) {
+    cell_slot_parity.emplace(nci, nci == lower_nci ? 0U : 1U);
+  }
 
   std::map<std::string, std::vector<std::chrono::microseconds>> ssb_offsets;
   std::map<std::string, std::vector<std::chrono::microseconds>> prach_offsets;
+  std::map<std::string, std::vector<std::chrono::microseconds>>                                   rar_offsets;
+  std::map<std::string, unsigned>                                                                 ssb_counts;
+  std::map<std::string, unsigned>                                                                 prach_ro_counts;
+  std::map<std::string, unsigned>                                                                 prach_beam_counts;
   std::map<std::pair<nr_cell_identity, uint16_t>, std::vector<const ntn_access_calendar_intent*>> resources;
   std::map<nr_cell_identity, std::set<uint16_t>> used_ports;
-  std::vector<const ntn_access_calendar_intent*> prach_ros;
-  std::vector<const ntn_access_calendar_intent*> prach_beams;
+  using prach_pair_key =
+      std::tuple<uint64_t, nr_cell_identity, std::string, std::chrono::microseconds, std::chrono::microseconds>;
+  std::map<prach_pair_key, std::pair<unsigned, unsigned>> prach_pairs;
 
   for (const ntn_access_calendar_intent& intent : intents) {
-    if (intent.schedule_version != schedule_version || intent.duration.count() <= 0 || intent.start_time.count() < 0 ||
-        intent.start_time + intent.duration > cfg.max_prach_interval ||
-        cell_ncis.count(intent.nci) == 0) {
+    if (intent.schedule_version != schedule_version || intent.start_time.count() < 0 ||
+        intent.start_time + intent.duration > cfg.max_prach_interval || cell_ncis.count(intent.nci) == 0) {
       audit.reason = ntn_position_plan_reject_reason::invalid_calendar_position;
       return audit;
     }
@@ -883,34 +1021,69 @@ ntn_access_calendar_audit ntn_onboard_position_plan_controller::audit_access_cal
       return audit;
     }
 
+    if (intent.duration != cfg.subvisit_duration || intent.start_time.count() % cfg.subvisit_duration.count() != 0) {
+      audit.reason = ntn_position_plan_reject_reason::invalid_calendar_timing;
+      return audit;
+    }
+    const int64_t slot_index  = intent.start_time.count() / cfg.access_slot.count();
+    const int64_t slot_offset = intent.start_time.count() % cfg.access_slot.count();
+    if (slot_offset + intent.duration.count() > cfg.access_slot.count() ||
+        static_cast<unsigned>(slot_index % cfg.cell_access_slot_stride) != cell_slot_parity.at(intent.nci)) {
+      audit.reason = ntn_position_plan_reject_reason::invalid_calendar_timing;
+      return audit;
+    }
+    const ntn_access_calendar_phase& phase = cfg.access_phases[slot_index % cfg.access_phases.size()];
+    const prach_pair_key             pair_key{
+        intent.schedule_version, intent.nci, intent.position_id, intent.start_time, intent.duration};
+
     if (intent.purpose == ntn_access_calendar_purpose::ssb_sib_paging ||
         intent.purpose == ntn_access_calendar_purpose::ssb_sib_paging_rar) {
       if (intent.direction != ntn_access_calendar_direction::downlink) {
-        audit.reason = ntn_position_plan_reject_reason::invalid_calendar_position;
-        return audit;
+        ++audit.invalid_direction_intents;
       }
+      ++audit.nof_ssb_intents;
+      ++ssb_counts[intent.position_id];
       ssb_offsets[intent.position_id].push_back(intent.start_time);
+      if (intent.purpose == ntn_access_calendar_purpose::ssb_sib_paging_rar) {
+        rar_offsets[intent.position_id].push_back(intent.start_time);
+      }
     } else if (intent.purpose == ntn_access_calendar_purpose::prach_ro) {
-      if (intent.direction != ntn_access_calendar_direction::uplink ||
-          intent.port_id != ntn_access_calendar_intent::no_resource_port) {
+      if (intent.direction != ntn_access_calendar_direction::uplink) {
+        ++audit.invalid_direction_intents;
+      }
+      if (intent.port_id != ntn_access_calendar_intent::no_resource_port) {
         audit.reason = ntn_position_plan_reject_reason::invalid_resource_port;
         return audit;
       }
+      ++audit.nof_prach_ro_intents;
+      ++prach_ro_counts[intent.position_id];
       prach_offsets[intent.position_id].push_back(intent.start_time);
-      prach_ros.push_back(&intent);
+      ++prach_pairs[pair_key].first;
       continue;
     } else if (intent.purpose == ntn_access_calendar_purpose::prach_ul_beam) {
       if (intent.direction != ntn_access_calendar_direction::uplink) {
-        audit.reason = ntn_position_plan_reject_reason::invalid_calendar_position;
-        return audit;
+        ++audit.invalid_direction_intents;
       }
-      prach_beams.push_back(&intent);
+      ++audit.nof_prach_ul_beam_intents;
+      ++prach_beam_counts[intent.position_id];
+      ++prach_pairs[pair_key].second;
+    } else {
+      audit.reason = ntn_position_plan_reject_reason::invalid_calendar_position;
+      return audit;
     }
 
     if (intent.port_id == ntn_access_calendar_intent::no_resource_port ||
         intent.port_id >= cfg.max_analog_ports_per_cell) {
       audit.reason = ntn_position_plan_reject_reason::invalid_resource_port;
       return audit;
+    }
+    const uint16_t port_bit           = uint16_t{1} << intent.port_id;
+    const bool     phase_port_matches = (intent.purpose == ntn_access_calendar_purpose::ssb_sib_paging ||
+                                         intent.purpose == ntn_access_calendar_purpose::ssb_sib_paging_rar)
+                                            ? (phase.downlink_port_mask & port_bit) != 0
+                                            : (phase.uplink_port_mask & port_bit) != 0;
+    if (!phase_port_matches) {
+      ++audit.invalid_phase_ports;
     }
     resources[{intent.nci, intent.port_id}].push_back(&intent);
     used_ports[intent.nci].insert(intent.port_id);
@@ -942,31 +1115,69 @@ ntn_access_calendar_audit ntn_onboard_position_plan_controller::audit_access_cal
     }
   }
 
-  for (const ntn_access_calendar_intent* ro : prach_ros) {
-    const bool paired = std::any_of(prach_beams.begin(), prach_beams.end(), [ro](const auto* beam) {
-      return beam->schedule_version == ro->schedule_version && beam->nci == ro->nci &&
-             beam->position_id == ro->position_id && beam->start_time == ro->start_time &&
-             beam->duration == ro->duration;
-    });
-    if (!paired) {
-      ++audit.prach_ro_without_beam;
+  for (const auto& entry : prach_pairs) {
+    const unsigned ro_count   = entry.second.first;
+    const unsigned beam_count = entry.second.second;
+    if (ro_count > 1) {
+      audit.duplicate_prach_ros += ro_count - 1;
+    }
+    if (beam_count > 1) {
+      audit.duplicate_prach_ul_beams += beam_count - 1;
+    }
+    if (ro_count != 0 && beam_count == 0) {
+      audit.prach_ro_without_beam += ro_count;
+    }
+    if (beam_count != 0 && ro_count == 0) {
+      audit.prach_beam_without_ro += beam_count;
     }
   }
 
+  const unsigned expected_ssb_count  = cfg.max_prach_interval.count() / cfg.max_ssb_interval.count();
+  bool           invalid_ssb_count   = false;
+  bool           invalid_prach_count = false;
   for (const auto& entry : expected_positions) {
+    const std::string& position_id = entry.first;
     audit.max_ssb_interval =
-        std::max(audit.max_ssb_interval, max_cyclic_gap(ssb_offsets[entry.first], cfg.max_prach_interval));
+        std::max(audit.max_ssb_interval, max_cyclic_gap(ssb_offsets[position_id], cfg.max_prach_interval));
     audit.max_prach_interval =
-        std::max(audit.max_prach_interval, max_cyclic_gap(prach_offsets[entry.first], cfg.max_prach_interval));
+        std::max(audit.max_prach_interval, max_cyclic_gap(prach_offsets[position_id], cfg.max_prach_interval));
+    invalid_ssb_count |= ssb_counts[position_id] != expected_ssb_count;
+    invalid_prach_count |= prach_ro_counts[position_id] != 1 || prach_beam_counts[position_id] != 1;
+
+    if (prach_ro_counts[position_id] == 1 && rar_offsets[position_id].size() == 1 &&
+        !ssb_offsets[position_id].empty()) {
+      std::vector<std::chrono::microseconds> ordered_ssb = ssb_offsets[position_id];
+      std::sort(ordered_ssb.begin(), ordered_ssb.end());
+      const std::chrono::microseconds ro_offset = prach_offsets[position_id].front();
+      auto                            next_ssb  = std::upper_bound(ordered_ssb.begin(), ordered_ssb.end(), ro_offset);
+      const std::chrono::microseconds expected_rar = next_ssb == ordered_ssb.end() ? ordered_ssb.front() : *next_ssb;
+      if (rar_offsets[position_id].front() != expected_rar) {
+        ++audit.rar_placement_mismatches;
+      }
+    } else if (rar_offsets[position_id].size() != 1) {
+      ++audit.rar_placement_mismatches;
+    }
   }
 
-  if (audit.resource_conflicts != 0) {
-    audit.reason = ntn_position_plan_reject_reason::resource_conflict;
+  if (audit.invalid_direction_intents != 0) {
+    audit.reason = ntn_position_plan_reject_reason::invalid_calendar_direction;
+  } else if (audit.invalid_phase_ports != 0) {
+    audit.reason = ntn_position_plan_reject_reason::invalid_access_phase_port;
+  } else if (audit.duplicate_prach_ros != 0) {
+    audit.reason = ntn_position_plan_reject_reason::duplicate_prach_ro;
+  } else if (audit.duplicate_prach_ul_beams != 0) {
+    audit.reason = ntn_position_plan_reject_reason::duplicate_prach_ul_beam;
   } else if (audit.prach_ro_without_beam != 0) {
     audit.reason = ntn_position_plan_reject_reason::prach_ro_without_beam;
-  } else if (audit.max_ssb_interval > cfg.max_ssb_interval) {
+  } else if (audit.prach_beam_without_ro != 0) {
+    audit.reason = ntn_position_plan_reject_reason::prach_beam_without_ro;
+  } else if (audit.rar_placement_mismatches != 0) {
+    audit.reason = ntn_position_plan_reject_reason::invalid_rar_placement;
+  } else if (audit.resource_conflicts != 0) {
+    audit.reason = ntn_position_plan_reject_reason::resource_conflict;
+  } else if (invalid_ssb_count || audit.max_ssb_interval > cfg.max_ssb_interval) {
     audit.reason = ntn_position_plan_reject_reason::ssb_deadline_miss;
-  } else if (audit.max_prach_interval > cfg.max_prach_interval) {
+  } else if (invalid_prach_count || audit.max_prach_interval > cfg.max_prach_interval) {
     audit.reason = ntn_position_plan_reject_reason::prach_deadline_miss;
   } else {
     audit.accepted = true;
@@ -1329,7 +1540,9 @@ std::string srsran::srs_cu_cp::compute_ntn_access_profile_hash(const ntn_onboard
   canonical << "subvisits_per_access_slot=" << config.subvisits_per_access_slot << '\n';
   for (size_t index = 0; index != config.access_phases.size(); ++index) {
     canonical << "phase=" << index << ',' << config.access_phases[index].downlink_port_mask << ','
-              << config.access_phases[index].uplink_port_mask << '\n';
+              << config.access_phases[index].uplink_port_mask << ','
+              << config.access_phases[index].digital_downlink_capacity << ','
+              << config.access_phases[index].digital_uplink_capacity << '\n';
   }
   return sha256_with_prefix(canonical.str());
 }

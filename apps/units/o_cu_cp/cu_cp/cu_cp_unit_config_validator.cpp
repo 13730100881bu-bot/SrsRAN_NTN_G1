@@ -224,7 +224,7 @@ static bool validate_mobility_appconfig(gnb_id_t gnb_id, const cu_cp_unit_mobili
     if (position_plan_cfg.du_execution_enabled &&
         (position_plan_cfg.expected_access_profile_id != "ntn-access-16a-64d-v1" ||
          normalize_sha256_digest(position_plan_cfg.expected_access_profile_hash) !=
-             "sha256:bb79577c791d26260828959cecd6b7658d9c5d69eefcd99f833f5e76d081e320" ||
+             "sha256:195786f4161e3b0fad6faa0605144948a7401c067a014bde684c1b29a8087d63" ||
          position_plan_cfg.max_l1_positions_per_cell != 128 ||
          position_plan_cfg.max_l1_positions_per_satellite != 256 || position_plan_cfg.max_analog_ports_per_cell != 16 ||
          position_plan_cfg.max_analog_ports_per_satellite != 32 || position_plan_cfg.max_digital_ports_per_cell != 64 ||
@@ -289,15 +289,17 @@ static bool validate_mobility_appconfig(gnb_id_t gnb_id, const cu_cp_unit_mobili
 
     const uint64_t max_ssb_interval_us   = 1000ULL * position_plan_cfg.max_ssb_interval_ms;
     const uint64_t max_prach_interval_us = 1000ULL * position_plan_cfg.max_prach_interval_ms;
-    if (max_ssb_interval_us % position_plan_cfg.access_slot_us != 0 ||
+    if (max_ssb_interval_us % (2ULL * position_plan_cfg.access_slot_us) != 0 ||
         max_prach_interval_us % max_ssb_interval_us != 0 ||
-        2ULL * position_plan_cfg.subvisit_duration_us > position_plan_cfg.access_slot_us) {
+        4ULL * position_plan_cfg.subvisit_duration_us != position_plan_cfg.access_slot_us) {
       fmt::print("Invalid CU-CP configuration. NTN access-calendar timing values are not exactly schedulable\n");
       return false;
     }
-    const uint64_t slots_per_ssb_period = max_ssb_interval_us / position_plan_cfg.access_slot_us;
+    const uint64_t     cell_occasions_per_ssb_period = max_ssb_interval_us / (2ULL * position_plan_cfg.access_slot_us);
+    constexpr uint64_t common_downlink_ports         = 10;
+    constexpr uint64_t subvisits_per_slot            = 4;
     if (static_cast<uint64_t>(position_plan_cfg.max_l1_positions_per_cell) >
-        static_cast<uint64_t>(position_plan_cfg.max_analog_ports_per_cell) * slots_per_ssb_period) {
+        common_downlink_ports * subvisits_per_slot * cell_occasions_per_ssb_period) {
       fmt::print("Invalid CU-CP configuration. NTN per-cell L1 capacity cannot meet the configured SSB interval\n");
       return false;
     }
