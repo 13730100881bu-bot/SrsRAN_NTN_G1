@@ -1,6 +1,6 @@
 # NTN CU-CP Task Change Index
 
-Last updated: 2026-07-13
+Last updated: 2026-07-15
 
 This file maps the CUCP task chain to the main feature changes and
 representative code areas. It is a compact lookup table for future agents.
@@ -98,7 +98,7 @@ them casually.
 | CUCP-022 | Resource-domain guard policy: analog/digital caps, reuse groups, explicit conflicts, blocked reasons. | `include/srsran/cu_cp/ntn_location.h`, `lib/cu_cp/cell_meas_manager/ntn_beam_table_json.cpp`, `ntn_beam_placement_planner.*`, resource tests. |
 | CUCP-023 | Analog access release after ICS and digital service ownership. Control-only UE state. | `include/srsran/cu_cp/ntn_beam_service_resources.h`, `lib/cu_cp/ntn_mobility/ntn_beam_service_resource_manager.*`, `cu_cp_impl.cpp`, PDU/session tests. |
 | CUCP-024 | Beam service resource manager: analog C-RNTI ownership contract and digital SR/SRS intent snapshot. | `lib/cu_cp/ntn_mobility/ntn_beam_service_resource_manager.*`, `tests/unittests/cu_cp/ntn_mobility/ntn_beam_service_resource_manager_test.cpp`. |
-| CUCP-025 | CU-CP-authoritative real RNTI and digital SR/SRS architecture. DU/MAC execute; terrestrial paths remain. | `include/srsran/f1ap/ntn_ul_slot_resource_request.h`, F1AP/DU/MAC resource interfaces, resource manager tests. |
+| CUCP-025 | CU-CP-authoritative real RNTI and digital SR/SRS architecture. DU/MAC execute; with NTN inactive, terrestrial selection/default outcomes remain while synchronization overhead is outside the compatibility claim. | `include/srsran/f1ap/ntn_ul_slot_resource_request.h`, F1AP/DU/MAC resource interfaces, resource manager tests. |
 | CUCP-026 | RNTI lease pool distribution through private F1AP resource coordination before access. | `include/srsran/f1ap/ntn_rnti_lease_pool.h`, `include/srsran/f1ap/cu_cp/f1ap_cu_resource_coordination.h`, `lib/f1ap/*/gnb_du_resource_coordination*`, F1AP CU/DU tests. |
 | CUCP-027 | RNTI lease lifecycle and access readiness: reserved, sent, applied, offered, initial UL, committed, released, expired, conflict. | `lib/cu_cp/ntn_mobility/ntn_beam_service_resource_manager.*`, `lib/mac/rnti_manager.h`, `lib/mac/mac_sched/mac_rach_handler.cpp`, MAC/RNTI tests. |
 | CUCP-028 | SR/SRS application feedback. DU applied/rejected response gates service-bound state; scheduler consistency tested. | `include/srsran/f1ap/ntn_ul_slot_resource_request.h`, F1AP UE context setup/modification, DU PUCCH/SRS managers, scheduler SR/SRS tests. |
@@ -111,6 +111,7 @@ them casually.
 | CUCP-035 | Versioned management-center onboard L1 plan: complete inventory validation, explicit two-cell NCI/PCI profile, deterministic partition, configurable access-calendar dry-run, timer-safe atomic activation and synchronized read-only OAM. Independent opt-in profile; no RF application. | `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.*`, `lib/cu_cp/cu_cp_impl.*`, `include/srsran/cu_cp/cu_cp_configuration.h`, `include/srsran/cu_cp/cu_cp_command_handler.h`, O-CU-CP config/`ntn_state`, `tests/unittests/cu_cp/ntn_mobility/ntn_*position_plan*`, `ntn_access_calendar_audit_test.cpp`. |
 | CUCP-036 | Versioned access-calendar cross-layer deployment: private F1AP prepare/query/clear, same-DU two-cell validation, both-slot-thread armed barrier, configurable prepare/apply deadlines, persistent rollback cleanup, extended validity, `mu=4`-exact wall-clock mapping, execution-envelope startup validation, opt-in scheduler SSB/PRACH software gate, applied/clear feedback and Web candidate plan exporter backed by a versioned explicit identity registry. Default off. Evidence explicitly stops before position/port beam steering and RF application. | `include/srsran/f1ap/ntn_access_calendar.h`, F1AP resource-coordination procedures, `du_manager_impl.*`, `include/srsran/mac/mac_manager.h`, `lib/mac/mac_impl.h`, `lib/mac/mac_ntn_access_calendar_manager.h`, `lib/mac/mac_ntn_access_calendar_compiler.h`, `lib/mac/mac_dl/mac_cell_time_mapper_impl.*`, `include/srsran/scheduler/ntn_access_calendar.h`, `lib/scheduler/ntn_access_calendar_gate.h`, `cell_scheduler.*`, `lib/cu_cp/cu_cp_impl.*`, `web_replicas/ntn_beam_planner/app/position-plan-model.ts`, `app/onboard-cell-identity-registry.json`, `docs/ntn_access_calendar_cross_layer_execution.md`, focused F1AP/DU/MAC/scheduler/CU-CP/Web tests. |
 | CUCP-037 | Initial UL active-plan audit contract and activation-integrity hardening. RNTI lease ownership is cell-scoped even when onboard cells reuse PCI, and duplicate entries in one batch fail atomically; deployment feedback cannot regress; prepare/query feedback must preserve the complete intent count. A private pure auditor matches proposed satellite/version/hash, stable NCI/PCI, L1 owner, PRACH occasion and UL port against the current active plan. No production Initial UL transport or RF evidence is claimed. | `lib/cu_cp/ntn_mobility/ntn_beam_service_resource_manager.*`, `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.*`, `lib/cu_cp/cu_cp_impl.cpp`, CU-CP test environment, `ntn_beam_service_resource_manager_test.cpp`, `ntn_onboard_position_plan_test.cpp`, `cu_cp_ntn_mobility_test.cpp`, roadmap/catalog/runtime-contract and access-plan documentation. |
+| CUCP-038 | Fail-safe DU resource-audit completeness and RNTI lifecycle reconciliation. Private codec v2 independently qualifies RNTI and UE-slot snapshots; v1 is incomplete by default. MAC retains pending/consumed/expired leases with enforced expiry; exact-generation/full-set ACK validation, `ack_unknown` same-generation recovery, unresolved-pool generation gating, recoverable audit conflicts and indexed snapshot lookup close the CU/DU software-state loop. Same-DU C-RNTI values remain unique, SR/SRS repair records the DU-applied request, and SIB19 feedback is generation/state guarded. UE-slot mapping and durable terminal GC/reuse remain incomplete. This is not endurance or RF evidence. | Implementation commits `465e8c6` and `2ad0b1b`. Representative areas: `include/srsran/f1ap/ntn_rnti_lease_pool.h`, `include/srsran/mac/mac_manager.h`, `lib/mac/rnti_manager.h`, `lib/du/du_high/du_manager/du_manager_impl.cpp`, `lib/cu_cp/ntn_mobility/ntn_beam_service_resource_manager.*`, `lib/cu_cp/cu_cp_impl.*`, focused F1AP/DU/MAC/CU-CP tests and these NTN documents. |
 
 ## Current Useful Validation Notes
 
@@ -208,3 +209,38 @@ transport supplies its complete sideband metadata. The CU-CP mock integration pr
 control-plane ordering and rollback only. It does not prove sender authentication,
 freshness/anti-replay, position/port beam steering, PRACH detection, PHY/OFH execution or
 RU/RF telemetry.
+
+CUCP-038 closeout evidence (2026-07-15):
+
+```bash
+cmake --build build/ai-clean --target ntn_mobility_test -j1
+build/ai-clean/tests/unittests/cu_cp/ntn_mobility/ntn_mobility_test \
+  --gtest_filter='ntn_beam_service_resource_manager.*'
+ctest --test-dir build/ai-clean -R 'ntn_mobility' --output-on-failure
+```
+
+All affected MAC/RACH, resource-manager, CU-CP implementation/test, F1 CU and
+O-CU-CP CLI test objects were forced to rebuild with `gmake -B -j1` and compiled
+without diagnostics. The `ntn_mobility_test` target linked successfully; the
+resource-manager suite passed 39/39. A temporary focused executable linked from
+the latest `rnti_manager_test.cpp.o` passed 23/23 and was then deleted.
+
+A direct full `ntn_mobility_test` run passed 174/180. Its six failures are the
+same pre-existing placement/rebalance expectation mismatches recorded for
+CUCP-035 and CUCP-037: one `ntn_beam_placement_plan_helpers` case and five
+`ntn_beam_rebalance_policy` cases; none of their implementation or test files is
+part of CUCP-038. The requested broad `ctest -R ntn_mobility` unexpectedly
+matched 159 CU integration cases and was stopped after 304 seconds while running
+test 106, without a complete summary, so it is not reported as passing.
+
+`f1ap_cu_test` (two attempts), `cu_cp_unit_config_test` and `cu_cp_test` each
+spent their 314-second bounded window rebuilding unrelated dependencies and did
+not link; their directly affected objects did compile, but their gtests were not
+run. Passing tests prove the CU resource-manager and MAC RNTI-manager state
+machines; affected DU/F1/CU integration paths have compile-only evidence. No
+split demo was run. This is not proof of RAR transmission, raw PRACH detection,
+authenticated Initial UL metadata, position/port steering, PHY/OFH execution,
+RU/RF telemetry or long-duration endurance. Terminal-history GC and durable
+C-RNTI reuse remain required before claiming namespace stability. With NTN
+inactive, terrestrial selection/default outcomes are preserved; added
+synchronization overhead is not a performance-equivalence claim.

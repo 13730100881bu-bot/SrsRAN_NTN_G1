@@ -214,7 +214,9 @@ Use a staged validation ladder:
 
 - CU-CP is authoritative for NTN RNTI lease pools and digital SR/SRS assignment.
 - DU/MAC/Scheduler execute and report results.
-- Terrestrial/default DU allocation paths must remain unchanged.
+- With NTN inactive, terrestrial/default DU allocation selection and outcomes
+  must remain unchanged. Shared synchronization overhead is not a claim of
+  performance equivalence.
 - Initial access cannot wait until CU-CP sees Initial UL to create a RNTI.
   Correct model:
   1. CU-CP computes active analog access beams.
@@ -226,6 +228,43 @@ Use a staged validation ladder:
   DU-applied feedback.
 - Resource consistency logic compares DU state against CU-CP authority and
   resends, clears, rolls back, or blocks conservatively.
+- A periodic audit response is authoritative per domain, not merely because
+  `accepted=true`. Before CUCP-038, the one-second DU audit could return an
+  accepted empty snapshot and trigger false repair. Private codec v2 carries
+  `rnti_snapshot_complete` and `ue_slot_snapshot_complete`; decoded v1 results
+  fail safe with both domains incomplete.
+- MAC owns a per-cell lease ledger with `pending -> consumed_by_mac -> expired`
+  state and enforces `expiry_ms`, refreshing expiry before replace validation.
+  A replace is all-or-nothing and retains terminal history. An exact
+  same-generation add is a no-op for pending/consumed/expired records; it does
+  not refresh expiry or resurrect state. `allocate_for_cell` chooses the mode
+  under the shared allocator lock. A returned terrestrial TC-RNTI is recorded
+  for 10 seconds so the first concurrent NTN update can reject a collision; the
+  record does not filter terrestrial selection before NTN activation, so the
+  original RNTI sequence remains unchanged. Synchronization cost is not a
+  performance-equivalence claim.
+- DU validates gNB-DU, full NCGI and PCI on pool updates, checks the snapshot
+  cell, and returns the real RNTI snapshot with per-entry generation. CU-CP
+  accepts a lease result only when generation and the full accepted/rejected
+  set match. Missing or malformed ACK becomes `ack_unknown`; a complete audit
+  retries the same generation, while an ordinary in-flight pool waits and
+  blocks a newer low-water generation. CU-CP promotes matching pending
+  evidence, reconciles consumed/expired state and never resurrects a consumed,
+  Initial-UL-seen, committed or expired lease. Explicit audit rejection reaches
+  conflict observability; a later accepted complete audit resolves the generic
+  target blocker.
+- UE-slot audit remains incomplete because DU does not yet have a reliable
+  CU-global UE identity mapping for every local SR/SRS entry. Do not infer
+  authoritative absence from its empty snapshot.
+- Resource audit is MAC/DU software-state evidence, not RAR transmission, raw
+  PRACH, trusted Initial UL position evidence or PHY/RU/RF telemetry. DU
+  connection-epoch/stable audit-target binding, authentication,
+  freshness/anti-replay, UE-slot identity mapping and terminal-history GC/RNTI
+  reuse remain follow-up risks. Snapshot lookup is indexed, but without durable
+  GC/reuse this is not an endurance or long-duration namespace-exhaustion proof.
+  Codec v2 requires same-version CU/DU deployment; its v1 compatibility is
+  decode-only and fail safe. Successful SR/SRS repair must cache the DU's actual
+  `applied_request`.
 
 ### UE Capability Policy
 
@@ -311,8 +350,9 @@ For a more detailed task-to-change lookup, use
   non-baseline sweeps require an explicit matching registry.
 - CUCP-037 hardens this boundary without claiming a transport that does not
   exist. RNTI lease ownership keys include `(DU, cell index, PCI, C-RNTI)`,
-  because the two stable onboard cells may reuse one PCI and still have
-  independent C-RNTI namespaces. Calendar deployment feedback is monotonic,
+  because the two stable onboard cells may reuse one PCI. The current DU RNTI
+  table is flat, so C-RNTI values remain unique across cells of one DU and may
+  be reused only across different DUs. Calendar deployment feedback is monotonic,
   and prepare/query responses must preserve the complete accepted intent count
   before activation.
 - CUCP-037 also adds a CU-CP-private pure Initial UL event auditor. Given
@@ -325,6 +365,19 @@ For a more detailed task-to-change lookup, use
   proves only a CU-CP active-plan/software-gate snapshot match, not trusted
   sideband provenance, DU-reconnect reconciliation, position steering or RF
   application.
+- CUCP-038 makes the periodic DU resource audit fail safe. Codec v2 qualifies
+  the RNTI and UE-slot domains independently, while v1 decodes as incomplete.
+  MAC retains pending/consumed/expired lease history and enforces expiry; DU
+  returns the real RNTI snapshot. CU-CP atomically validates ACK generation and
+  lease membership, converts uncertain delivery to same-generation repair,
+  prevents in-flight generation stacking, and reconciles terminal state without
+  resending consumed, Initial-UL-seen, committed or expired leases. Generic
+  audit-rejection blockers recover after a later clean complete audit. The
+  UE-slot domain remains incomplete until reliable CU-global identity mapping
+  exists. SIB19 completion also requires matching request/current generation,
+  in-flight state and operation result. This is software-state evidence only
+  and does not close connection epoch, authentication, anti-replay, long-term
+  lease GC/reuse, Initial UL position or RF evidence gaps.
 
 ## Protocol References
 

@@ -49,8 +49,10 @@ not permanently own NCI/PCI and must never be inserted into the legacy one-beam-
 per-NCI repository.
 
 The two onboard cells may reuse one PCI. Cell-scoped runtime identities such as
-C-RNTI leases therefore use DU cell identity in addition to PCI. This profile
-must not derive NCI from satellite id, cell ordinal, coordinates or position id.
+C-RNTI leases therefore use DU cell identity in addition to PCI. The current DU
+RNTI table is flat, so a C-RNTI value must still be unique across cells of the
+same DU; different DUs may reuse the value. This profile must not derive NCI
+from satellite id, cell ordinal, coordinates or position id.
 
 ## 4. SIB19 and RRC assistance
 
@@ -100,8 +102,48 @@ CUCP-024 through CUCP-031 centralize the UE-facing resource contract in a CU-CP
 beam service resource manager. The manager owns and distributes NTN C-RNTI
 lease pools, validates cell-scoped Initial UL ownership, releases per-UE analog
 ownership after Initial Context Setup, and owns digital service SR/SRS intent,
-application feedback, audit and repair state. Terrestrial allocation remains
-unchanged.
+application feedback, audit and repair state. With NTN inactive, the terrestrial
+RNTI selection sequence and default outcome remain unchanged; the shared
+synchronization overhead is not a performance-equivalence claim.
+
+CUCP-038 makes periodic resource repair conditional on authoritative snapshot
+completeness. The private audit-result codec v2 reports
+`rnti_snapshot_complete` and `ue_slot_snapshot_complete` independently; a v1
+result is accepted for compatibility but both domains fail safe to incomplete.
+An empty complete snapshot means the domain is authoritatively empty, while an
+empty incomplete snapshot must not trigger repair. MAC keeps the real per-cell
+lease ledger as `pending`, `consumed_by_mac` or `expired` and enforces the
+distributed `expiry_ms`; DU exposes this RNTI domain as complete and carries the
+per-entry `generation_id`. A lease result is applied only when its generation
+and full accepted/rejected set match the update. Missing, partial, duplicate or
+contradictory results become `ack_unknown`; the complete audit then retries the
+original generation. A normal in-flight pool waits for its ACK and blocks a new
+low-water generation. Matching pending evidence promotes a CU lease from
+`sent_to_du` to `applied_by_du`; stale generations, duplicates and unknown
+RNTIs block that domain instead of triggering refill. Explicit audit rejection
+also reaches the conflict path; a later accepted complete audit resolves its
+generic target blocker. The UE-slot domain is currently incomplete because DU
+cannot yet identify every slot entry with a reliable CU-global UE identity.
+
+CU-CP reconciles `consumed_by_mac` to its consumed state and DU expiry to its
+expired state. It may resend only an unused CU-CP lease missing from a complete
+RNTI snapshot. It must not resurrect a lease already consumed, observed on
+Initial UL, committed or expired; low-water replenishment creates new leases
+instead. MAC refreshes expiry before validating a whole replace, retains
+terminal history and accepts exact same-generation retries as no-op without
+refreshing expiry or resurrecting consumed/expired state. Atomic
+`allocate_for_cell` shares one interlock with terrestrial RACH. A terrestrial
+TC-RNTI returned but not yet attached is recorded for 10 seconds so the first
+concurrent NTN update can reject a collision; before NTN activation that record
+does not change the terrestrial RNTI selection sequence. The same DU cannot
+track one C-RNTI value in two cells; different DUs can. DU also rejects a pool
+with the wrong gNB-DU, NCGI or PCI and rejects a complete snapshot for the wrong
+cell. SR/SRS repair caches the DU-reported `applied_request`, not merely the
+requested shape. Terminal-history GC and a durable C-RNTI reuse policy remain
+follow-up work, so this lifecycle is not yet a long-duration exhaustion proof.
+Codec v2 is a same-version deployment boundary: a new CU can fail-safe decode
+v1, but an old CU cannot decode v2. These changes are opt-in NTN resource
+behavior.
 
 ## 7. Admission
 
@@ -182,3 +224,9 @@ task-scoped exceptions such as CUCP-036 do not authorize further DU/MAC changes.
 HARQ timing, TA scheduler, raw PRACH detection, PHY/lower PHY, RU/RF/radio
 drivers, ZMQ channel behavior, O-DU/flexible_o_du behavior, generated ASN.1 and
 GIS-site behavior remain excluded without explicit authorization.
+
+Resource-audit completeness is MAC/DU software-state evidence only. It does not
+prove that a RAR was transmitted, identify a raw PRACH detection, authenticate
+Initial UL position metadata, or provide PHY/RU/RF telemetry. Connection-epoch
+binding, sender authentication, freshness/anti-replay, and reliable UE-slot
+identity mapping remain separate follow-up work.

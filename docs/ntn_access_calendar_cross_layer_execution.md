@@ -108,7 +108,7 @@ CUCP-037 在 CU-CP 私有 position-plan controller 中增加了无副作用审�
 
 标准 F1AP Initial UL 目前只有 CGI、C-RNTI 和 RRC container，不携带上述 position/version/hash/RO/port 证据。生产 `handle_ue_setup_request()` 因而没有接入这个审计器，也绝不能通过 legacy beam-to-NCI table 推导 `G######`。下一步若要成为真实 admission gate，需要一个明确授权、版本化且可鉴别来源的最小 sideband；RAR 低时延路径仍留在 DU/MAC，原始 PRACH 检测仍留在 PHY/DU。
 
-相关的 C-RNTI lease key 已改为 `(DU, DU cell index, PCI, C-RNTI)`。这允许两个长期星载小区按规划复用 PCI，同时保持各自独立的 RNTI namespace；ICS 后释放模拟接入归属和 `control_only`/L2 规则不变。
+相关的 C-RNTI lease key 已改为 `(DU, DU cell index, PCI, C-RNTI)`。这允许两个长期星载小区按规划复用 PCI，但当前 DU RNTI table 仍按 C-RNTI 扁平索引，所以同一 DU 的两个 cell 不能复用同一个 C-RNTI 值；不同 DU 可以复用。CUCP-038 进一步要求 generation 与完整 ACK 集合原子匹配，未知 ACK 只用原 generation 修复，普通 in-flight pool 不叠加新 generation；ICS 后释放模拟接入归属和 `control_only`/L2 规则不变。
 
 ## 管理中心 Web producer
 

@@ -116,6 +116,44 @@ CU-CP 统一处理 PRACH 信息，不代表把采样、相关检测或 RAR 的�
 
 完整 sideband 方案应让 CU-CP 看到 `satellite_id`、`nci/pci`、全球 L1 `position_id`、catalog/schedule version、source/calendar hash、实际 RO/端口、preamble、TA/质量和 RNTI lease。当前标准 Initial UL 只提供 CGI/C-RNTI/RRC container，不能证明 `position_id` 或 PRACH RO。CUCP-037 已提供私有纯审计器，可对完整测试输入返回 `accept/reject/audit_only`，但未接入生产 F1AP，也不使用旧 beam-to-NCI 路径猜测 L1。
 
+CUCP-038 另行修复周期性资源审计的 fail-safe 语义。旧的一秒 DU audit
+可能返回 `accepted=true` 与空 snapshot；CU-CP 若把“未提供”当成“确认不
+存在”，会产生虚假 resend/apply/clear repair。私有 audit codec v2 因此按
+域增加 `rnti_snapshot_complete` / `ue_slot_snapshot_complete`，v1 解码时两域
+均为 incomplete。只有 complete 域里的缺失才允许触发 repair。
+
+MAC 为每个 cell 保留 `pending -> consumed_by_mac -> expired` lease ledger，
+执行下发的 `expiry_ms`，在 replace 前先刷新过期状态，原子替换并保留
+terminal history；同 generation 的 add 重试是 no-op，不延长 expiry，也不复活
+consumed/expired 状态。`allocate_for_cell` 在同一把锁内选择 NTN 或 terrestrial
+路径。同一 DU 的 RNTI table 是扁平的，因此两个 cell 即使 key 含 cell identity，
+也不能复用同一个 C-RNTI 值；不同 DU 可以复用。尚未 `add_ue` 的 terrestrial
+TC-RNTI 会记录 10 秒，以便首次并发 NTN update 拒绝碰撞；NTN 未激活时该记录
+不参与 terrestrial 选择，因此原有 RNTI 序列不变，但同步开销并非性能等价证明。
+
+DU 校验 gNB-DU、完整 NCGI、PCI 和 snapshot cell 后返回带逐项 generation 的
+真实 RNTI snapshot。lease ACK 必须 generation 和完整 accepted/rejected 集合同时
+匹配；缺失、残缺、重复或矛盾的 ACK 记为 `ack_unknown`，随后只以原 generation
+修复。普通 in-flight pool 等待 ACK，并阻止低水位逻辑叠加新 generation。CU-CP
+据此提升匹配 pending 证据、对齐 consumed/expired 状态，不重发已被 MAC 消费、
+已见 Initial UL、已 committed 或已 expired 的旧 lease。明确 audit reject 会进入
+可观测 conflict；同 target 后续 accepted complete audit 可解除 generic blocker。
+当前 DU 缺少可靠的
+CU-global UE identity 映射，所以 UE SR/SRS slot snapshot 明确保持 incomplete，
+不能用空列表修复该域。SR/SRS repair 成功时保存 DU 实际 `applied_request`，避免
+DU 调整 offset/period 后反复产生同一 mismatch。
+
+这份 audit 只证明 MAC/DU software state，不证明 RAR 已发射、原始 PRACH 已
+检测或 Initial UL 携带可信 `position_id`，也不是 PHY/RU/RF telemetry。DU
+connection epoch、authentication、freshness/anti-replay 和 UE-slot identity
+mapping 仍需后续闭环；terminal history GC/RNTI reuse policy 也尚未冻结。
+完整 snapshot 查找已索引化以避免 O(N²) 比较，但未做 endurance 验证；在没有
+terminal history GC/RNTI reuse policy 前，不能声称长期运行不会耗尽 C-RNTI。
+codec v2 要求 CU/DU 同版本部署，v1 兼容仅指新 CU 的 fail-safe 解码。SIB19
+feedback 也校验 request/current generation、in-flight state 和 update/clear 精确
+结果；production DU FIFO 保证完整 completion 顺序，但较小 generation 的应用层
+重放尚未由 DU high-water mark 拒绝。
+
 ## 7. PRACH 参数起点
 
 每个当前星载小区/接入配置可以先用 64 个 preamble 做仿真起点：48 个 contention-based、8 个 CFRA/dedicated、8 个保护预留。这个拆分不是协议定案，也不能永久绑定到每个 L1。
@@ -171,6 +209,7 @@ L2 只有存在 PDU/DRB demand 且 applied 后才调度；`control_only` UE 不�
 | CU-CP 双小区版本化计划与日历 dry-run | 已有测试覆盖 | 保留完整 inventory、确定性划分、80/640 ms 审计、257 L1 显式 overflow、activation epoch 原子切换；不是全球覆盖证明 |
 | DU/MAC SSB/PRACH 软件 gate | 已有测试覆盖 | `applied` 仅表示匹配 version/hash/intents 的软件 snapshot；不含 position/port 或 RF evidence |
 | Initial UL active-plan audit | 已有测试覆盖 | 私有纯函数验证完整 sideband 测试输入；生产 F1AP transport、可信 provenance 与 RF evidence 均未实现 |
+| DU/MAC RNTI resource audit | 已有 focused 测试覆盖 | codec v2 区分 RNTI/UE-slot 完整性；ACK 原子校验、同 generation repair、真实 lease ledger 和可恢复 audit conflict 已闭环；resource-manager 39/39、RNTI manager 23/23 通过，UE-slot 域仍 incomplete；不是 endurance、RAR/PRACH/RF 证据 |
 | 轨道精确审计、PCI 冲突图和实际跳波束 | 规划中 | `selectedScenario=null`，7 天事件审计 `not_run` |
 
 需要重点观测：

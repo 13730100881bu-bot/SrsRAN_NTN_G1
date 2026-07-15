@@ -136,8 +136,9 @@ generates/clears digital slot intent from service-bound digital contexts.
 Promote the beam service resource manager from ownership/intent tracking to a
 CU-CP-authoritative NTN model. CU-CP owns NTN C-RNTI lease and digital SR/SRS
 assignment decisions; DU/MAC/Scheduler execute, validate, and report results
-under exact non-CU-CP task exceptions. Terrestrial allocation paths remain
-unchanged.
+under exact non-CU-CP task exceptions. With NTN inactive, terrestrial selection
+and default outcomes remain unchanged; shared synchronization overhead is not a
+performance-equivalence claim.
 
 ## CUCP-026 RNTI lease pool distribution
 
@@ -151,7 +152,9 @@ pool.
 Close the access-number lifecycle: reserved, sent, applied, offered in RAR,
 initial UL seen, committed, released, expired, and conflict. CU-CP rejects NTN
 access when the RNTI is not from an applied pool for the correct DU/cell/analog
-beam, while terrestrial access remains unchanged.
+beam. With NTN inactive, terrestrial RNTI selection and default outcomes remain
+unchanged; shared synchronization overhead is not a performance-equivalence
+claim.
 
 ## CUCP-028 SR/SRS application feedback
 
@@ -180,7 +183,8 @@ an audit mismatch is detected.
 Execute CUCP-030 repair actions through existing CU-CP/F1AP control paths:
 resend missing RNTI lease pools, reapply or clear SR/SRS resources, roll back
 stale handover target reservations, and block repeated resource conflicts after
-one retry. Terrestrial behavior and generated ASN.1 remain unchanged.
+one retry. The inactive terrestrial functional path and generated ASN.1 remain
+unchanged; allocator synchronization cost is outside that compatibility claim.
 
 ## CUCP-032 SIB19 DU SI broadcast application
 
@@ -236,6 +240,50 @@ cell-local port against the current active plan. The result is
 `accept/reject/audit_only` with a machine-readable reason and an explicit
 no-RF-evidence label. No production F1AP transport carries this metadata yet;
 standard Initial UL must not infer it from the legacy beam-to-NCI mapping.
+
+## CUCP-038 Authoritative resource-audit snapshots
+
+Close the fail-safe gap in the periodic DU resource audit. The previous one-
+second audit could receive `accepted=true` with an empty snapshot and CU-CP
+could misinterpret the absence of entries as missing DU state, producing false
+repair actions. Version the private audit-result codec with independent
+`rnti_snapshot_complete` and `ue_slot_snapshot_complete` flags; legacy v1
+results decode as incomplete in both domains. MAC retains a per-cell lease
+ledger across `pending -> consumed_by_mac -> expired`, enforces `expiry_ms`, and
+DU returns that real RNTI snapshot with each lease's `generation_id`. CU-CP
+accepts a distribution result only when its generation and complete lease set
+match atomically. A missing or malformed result becomes `ack_unknown`; a fresh
+ordinary `sent_to_du` pool waits, while an unknown ACK is repaired with the
+same generation. An unresolved pool blocks low-water creation of a newer
+generation. Matching `sent_to_du/pending` evidence promotes the pool to
+`applied_by_du`; consumed/expired leases are reconciled only in a domain marked
+complete. An explicit DU audit rejection reaches conflict accounting instead
+of being discarded as transport failure. CU-CP never re-inserts consumed,
+Initial-UL-seen, committed or expired leases; conflict-free low-water refill
+may issue new leases only after prior delivery is conclusive.
+
+MAC refreshes expiry before each atomic replace, preserves terminal history,
+and treats an exact same-generation `add` as a no-op even after consumption or
+expiry, without extending expiry or resurrecting state. Its single-lock
+`allocate_for_cell` decision excludes all tracked NTN leases from terrestrial
+allocation and protects an outstanding terrestrial TC-RNTI for a 10-second
+RACH reservation guard. A C-RNTI value is unique across cells of one DU because
+the DU table is flat; different DUs may reuse it. DU validates stable gNB-DU,
+NCGI and PCI identity before applying a pool and verifies the returned snapshot
+cell. SR/SRS repair records the DU's actual `applied_request`. The current
+UE-slot domain remains incomplete until DU has a reliable mapping to CU-global
+UE identity. Codec v2 requires same-version CU/DU rollout; only new CU decoding
+of legacy v1 is supported. Terminal-history garbage collection and durable
+C-RNTI reuse remain bounded-stage follow-up work. Snapshot lookup is indexed to
+avoid quadratic comparison growth, but this is not endurance evidence. This is
+software-state evidence, not RAR transmission, raw PRACH, trusted Initial UL
+position or RF execution.
+
+The same hardening pass rejects wrong-generation SIB19 results at F1 and keeps
+an older CU completion from overwriting a newer record; update and clear also
+require their exact expected result status. Production DU requests are FIFO
+through full completion, but application-level stale-generation replay is not
+yet rejected by a DU high-water mark and remains part of the anti-replay work.
 
 ## Global sequencing rule
 
