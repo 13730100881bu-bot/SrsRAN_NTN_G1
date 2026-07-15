@@ -74,6 +74,12 @@ struct ntn_onboard_position_plan_source_config {
   bool                      du_execution_enabled = false;
   std::string               satellite_id;
   std::string               plan_json_file;
+  std::string               expected_catalog_id;
+  std::string               expected_catalog_hash;
+  std::string               expected_identity_registry_version;
+  std::string               expected_identity_registry_hash;
+  std::string               expected_access_profile_id;
+  std::string               expected_access_profile_hash;
   std::chrono::milliseconds reload_period{0};
   /// Conservative time reserved for F1/DU/MAC prepare, scheduler publication and downstream buffering.
   std::chrono::milliseconds du_prepare_guard{1000};
@@ -88,6 +94,8 @@ struct ntn_onboard_position_plan_source_config {
   unsigned                        max_l1_positions_per_satellite = 256;
   unsigned                        max_analog_ports_per_cell      = 16;
   unsigned                        max_analog_ports_per_satellite = 32;
+  unsigned                        max_digital_ports_per_cell      = 64;
+  unsigned                        max_digital_ports_per_satellite = 128;
   std::chrono::microseconds       access_slot{10000};
   std::chrono::microseconds       subvisit_duration{2500};
   std::chrono::microseconds       max_ssb_interval{80000};

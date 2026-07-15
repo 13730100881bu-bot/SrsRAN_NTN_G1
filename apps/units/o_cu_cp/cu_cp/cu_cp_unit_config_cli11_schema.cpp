@@ -628,6 +628,36 @@ static void configure_cli11_mobility_args(CLI::App& app, cu_cp_unit_mobility_con
              "Path to the management-center versioned position-plan JSON file")
       ->capture_default_str();
   add_option(*ntn_position_plan_subcmd,
+             "--expected_catalog_id",
+             config.ntn_onboard_position_plan.expected_catalog_id,
+             "Expected frozen management-center L1 catalog identifier")
+      ->capture_default_str();
+  add_option(*ntn_position_plan_subcmd,
+             "--expected_catalog_hash",
+             config.ntn_onboard_position_plan.expected_catalog_hash,
+             "Expected SHA-256 digest of the frozen L1 catalog")
+      ->capture_default_str();
+  add_option(*ntn_position_plan_subcmd,
+             "--expected_identity_registry_version",
+             config.ntn_onboard_position_plan.expected_identity_registry_version,
+             "Expected version of the explicit onboard NCI/PCI registry")
+      ->capture_default_str();
+  add_option(*ntn_position_plan_subcmd,
+             "--expected_identity_registry_hash",
+             config.ntn_onboard_position_plan.expected_identity_registry_hash,
+             "Expected SHA-256 digest of the onboard identity registry")
+      ->capture_default_str();
+  add_option(*ntn_position_plan_subcmd,
+             "--expected_access_profile_id",
+             config.ntn_onboard_position_plan.expected_access_profile_id,
+             "Expected access-calendar resource profile identifier")
+      ->capture_default_str();
+  add_option(*ntn_position_plan_subcmd,
+             "--expected_access_profile_hash",
+             config.ntn_onboard_position_plan.expected_access_profile_hash,
+             "Expected SHA-256 digest of the access-calendar resource profile")
+      ->capture_default_str();
+  add_option(*ntn_position_plan_subcmd,
              "--cell_ncis",
              config.ntn_onboard_position_plan.cell_ncis,
              "Exactly two stable opaque 36-bit NCIs owned by this satellite")
@@ -656,6 +686,16 @@ static void configure_cli11_mobility_args(CLI::App& app, cu_cp_unit_mobility_con
              "--max_analog_ports_per_satellite",
              config.ntn_onboard_position_plan.max_analog_ports_per_satellite,
              "Maximum concurrent analog access ports across the satellite")
+      ->check(CLI::PositiveNumber);
+  add_option(*ntn_position_plan_subcmd,
+             "--max_digital_ports_per_cell",
+             config.ntn_onboard_position_plan.max_digital_ports_per_cell,
+             "Planning-only digital service-resource capacity per onboard cell")
+      ->check(CLI::PositiveNumber);
+  add_option(*ntn_position_plan_subcmd,
+             "--max_digital_ports_per_satellite",
+             config.ntn_onboard_position_plan.max_digital_ports_per_satellite,
+             "Planning-only digital service-resource capacity across both onboard cells")
       ->check(CLI::PositiveNumber);
   add_option(*ntn_position_plan_subcmd,
              "--access_slot_us",

@@ -550,6 +550,18 @@ srs_cu_cp::cu_cp_configuration srsran::generate_cu_cp_config(const cu_cp_unit_co
       cu_cfg.mobility_config.ntn_onboard_position_plan.satellite_id;
   out_cfg.mobility.onboard_position_plan.plan_json_file =
       cu_cfg.mobility_config.ntn_onboard_position_plan.plan_json_file;
+  out_cfg.mobility.onboard_position_plan.expected_catalog_id =
+      cu_cfg.mobility_config.ntn_onboard_position_plan.expected_catalog_id;
+  out_cfg.mobility.onboard_position_plan.expected_catalog_hash =
+      cu_cfg.mobility_config.ntn_onboard_position_plan.expected_catalog_hash;
+  out_cfg.mobility.onboard_position_plan.expected_identity_registry_version =
+      cu_cfg.mobility_config.ntn_onboard_position_plan.expected_identity_registry_version;
+  out_cfg.mobility.onboard_position_plan.expected_identity_registry_hash =
+      cu_cfg.mobility_config.ntn_onboard_position_plan.expected_identity_registry_hash;
+  out_cfg.mobility.onboard_position_plan.expected_access_profile_id =
+      cu_cfg.mobility_config.ntn_onboard_position_plan.expected_access_profile_id;
+  out_cfg.mobility.onboard_position_plan.expected_access_profile_hash =
+      cu_cfg.mobility_config.ntn_onboard_position_plan.expected_access_profile_hash;
   out_cfg.mobility.onboard_position_plan.reload_period =
       std::chrono::milliseconds{cu_cfg.mobility_config.ntn_onboard_position_plan.reload_period_ms};
   out_cfg.mobility.onboard_position_plan.du_prepare_guard =
@@ -575,6 +587,10 @@ srs_cu_cp::cu_cp_configuration srsran::generate_cu_cp_config(const cu_cp_unit_co
       cu_cfg.mobility_config.ntn_onboard_position_plan.max_analog_ports_per_cell;
   out_cfg.mobility.onboard_position_plan.max_analog_ports_per_satellite =
       cu_cfg.mobility_config.ntn_onboard_position_plan.max_analog_ports_per_satellite;
+  out_cfg.mobility.onboard_position_plan.max_digital_ports_per_cell =
+      cu_cfg.mobility_config.ntn_onboard_position_plan.max_digital_ports_per_cell;
+  out_cfg.mobility.onboard_position_plan.max_digital_ports_per_satellite =
+      cu_cfg.mobility_config.ntn_onboard_position_plan.max_digital_ports_per_satellite;
   out_cfg.mobility.onboard_position_plan.access_slot =
       std::chrono::microseconds{cu_cfg.mobility_config.ntn_onboard_position_plan.access_slot_us};
   out_cfg.mobility.onboard_position_plan.subvisit_duration =

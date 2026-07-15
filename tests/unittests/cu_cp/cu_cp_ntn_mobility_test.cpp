@@ -99,9 +99,41 @@ ntn_location_mobility_config make_ntn_mobility_config()
   return cfg;
 }
 
+void bind_onboard_planning_context(ntn_versioned_position_plan& plan)
+{
+  plan.schema_version            = 2;
+  plan.planning_run_id           = "planning-run-2026-07-15";
+  plan.catalog_id                = "global-land-l1-v1";
+  plan.catalog_hash              = "sha256:b39fe9c3ee9a9355b3546036b7f16e0fb858c953f8558cc4295122f2169fbe7a";
+  plan.identity_registry_version = "mc-ntn-onboard-cell-registry-v1";
+  plan.identity_registry_hash    = "sha256:7475821350e104b57a70d979d630f4b29a6cecb89ca0eca7b16dddf2ffee6a4a";
+  plan.access_profile_id         = "ntn-access-16a-64d-v1";
+  plan.access_profile_hash       = "sha256:bb79577c791d26260828959cecd6b7658d9c5d69eefcd99f833f5e76d081e320";
+  for (ntn_l1_position& position : plan.visible_l1_positions) {
+    position.child_mask = 0x7f;
+  }
+}
+
+void bind_onboard_planning_context(ntn_onboard_position_plan_source_config& source)
+{
+  source.expected_catalog_id                = "global-land-l1-v1";
+  source.expected_catalog_hash              = "sha256:b39fe9c3ee9a9355b3546036b7f16e0fb858c953f8558cc4295122f2169fbe7a";
+  source.expected_identity_registry_version = "mc-ntn-onboard-cell-registry-v1";
+  source.expected_identity_registry_hash    = "sha256:7475821350e104b57a70d979d630f4b29a6cecb89ca0eca7b16dddf2ffee6a4a";
+  source.expected_access_profile_id         = "ntn-access-16a-64d-v1";
+  source.expected_access_profile_hash       = "sha256:bb79577c791d26260828959cecd6b7658d9c5d69eefcd99f833f5e76d081e320";
+}
+
 std::filesystem::path write_onboard_position_plan_for_runtime_test(const ntn_versioned_position_plan& plan)
 {
   nlohmann::json root;
+  if (plan.schema_version == 2) {
+    root["schema_version"]    = plan.schema_version;
+    root["planning_run_id"]   = plan.planning_run_id;
+    root["catalog"]           = {{"id", plan.catalog_id}, {"sha256", plan.catalog_hash}};
+    root["identity_registry"] = {{"version", plan.identity_registry_version}, {"sha256", plan.identity_registry_hash}};
+    root["access_profile"]    = {{"id", plan.access_profile_id}, {"sha256", plan.access_profile_hash}};
+  }
   root["satellite_id"]             = plan.satellite_id;
   root["catalog_version"]          = plan.catalog_version;
   root["schedule_version"]         = plan.schedule_version;
@@ -119,9 +151,13 @@ std::filesystem::path write_onboard_position_plan_for_runtime_test(const ntn_ver
     root["onboard_cells"].push_back({{"nci", cell.nci.value()}, {"pci", cell.pci}});
   }
   for (const auto& position : plan.visible_l1_positions) {
-    root["visible_l1_positions"].push_back({{"position_id", position.position_id},
-                                              {"latitude_deg", position.latitude_deg},
-                                              {"longitude_deg", position.longitude_deg}});
+    nlohmann::json encoded_position = {{"position_id", position.position_id},
+                                       {"latitude_deg", position.latitude_deg},
+                                       {"longitude_deg", position.longitude_deg}};
+    if (plan.schema_version == 2) {
+      encoded_position["child_mask"] = position.child_mask;
+    }
+    root["visible_l1_positions"].push_back(std::move(encoded_position));
   }
 
   const auto unique_suffix = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -1355,7 +1391,7 @@ TEST(cu_cp_ntn_mobility_test, versioned_two_cell_calendar_is_prepared_and_activa
   const int64_t activation_ms = ((now_ms + 1000 + 639) / 640) * 640;
 
   ntn_versioned_position_plan plan;
-  plan.satellite_id     = "P01-S001";
+  plan.satellite_id         = "P01-S01";
   plan.catalog_version  = 10;
   plan.schedule_version = 20;
   plan.valid_from       = std::chrono::system_clock::time_point{std::chrono::milliseconds{now_ms - 100}};
@@ -1364,6 +1400,7 @@ TEST(cu_cp_ntn_mobility_test, versioned_two_cell_calendar_is_prepared_and_activa
   plan.onboard_cells[0] = {first_nci, shared_pci};
   plan.onboard_cells[1] = {second_nci, shared_pci};
   plan.visible_l1_positions = {{"G000001", 10.0, 20.0}, {"G000002", 10.1, 20.1}};
+  bind_onboard_planning_context(plan);
   plan.content_hash          = compute_ntn_position_plan_content_hash(plan);
   const std::filesystem::path plan_path = write_onboard_position_plan_for_runtime_test(plan);
   temporary_plan_file_guard   plan_file_guard(plan_path);
@@ -1377,6 +1414,7 @@ TEST(cu_cp_ntn_mobility_test, versioned_two_cell_calendar_is_prepared_and_activa
   source.plan_json_file       = plan_path.string();
   source.cell_ncis            = {first_nci, second_nci};
   source.cell_pcis            = {shared_pci, shared_pci};
+  bind_onboard_planning_context(source);
   env_params.ntn_onboard_position_plan = source;
 
   {
@@ -1421,7 +1459,7 @@ TEST(cu_cp_ntn_mobility_test, query_with_incomplete_calendar_feedback_is_rejecte
   const int64_t activation_ms = ((now_ms + 3000 + 639) / 640) * 640;
 
   ntn_versioned_position_plan plan;
-  plan.satellite_id         = "P01-S001";
+  plan.satellite_id         = "P01-S01";
   plan.catalog_version      = 13;
   plan.schedule_version     = 23;
   plan.valid_from           = std::chrono::system_clock::time_point{std::chrono::milliseconds{now_ms - 100}};
@@ -1430,6 +1468,7 @@ TEST(cu_cp_ntn_mobility_test, query_with_incomplete_calendar_feedback_is_rejecte
   plan.onboard_cells[0]     = {first_nci, shared_pci};
   plan.onboard_cells[1]     = {second_nci, shared_pci};
   plan.visible_l1_positions = {{"G000001", 10.0, 20.0}, {"G000002", 10.1, 20.1}};
+  bind_onboard_planning_context(plan);
   plan.content_hash         = compute_ntn_position_plan_content_hash(plan);
   const std::filesystem::path plan_path = write_onboard_position_plan_for_runtime_test(plan);
   temporary_plan_file_guard   plan_file_guard(plan_path);
@@ -1444,6 +1483,7 @@ TEST(cu_cp_ntn_mobility_test, query_with_incomplete_calendar_feedback_is_rejecte
   source.plan_json_file                = plan_path.string();
   source.cell_ncis                     = {first_nci, second_nci};
   source.cell_pcis                     = {shared_pci, shared_pci};
+  bind_onboard_planning_context(source);
   env_params.ntn_onboard_position_plan = source;
 
   cu_cp_test_environment env(std::move(env_params));
@@ -1483,7 +1523,7 @@ TEST(cu_cp_ntn_mobility_test, ready_query_feedback_is_not_rolled_back_by_late_re
   const int64_t activation_ms = ((now_ms + 4000 + 639) / 640) * 640;
 
   ntn_versioned_position_plan plan;
-  plan.satellite_id         = "P01-S001";
+  plan.satellite_id         = "P01-S01";
   plan.catalog_version      = 14;
   plan.schedule_version     = 24;
   plan.valid_from           = std::chrono::system_clock::time_point{std::chrono::milliseconds{now_ms - 100}};
@@ -1492,6 +1532,7 @@ TEST(cu_cp_ntn_mobility_test, ready_query_feedback_is_not_rolled_back_by_late_re
   plan.onboard_cells[0]     = {first_nci, shared_pci};
   plan.onboard_cells[1]     = {second_nci, shared_pci};
   plan.visible_l1_positions = {{"G000001", 10.0, 20.0}, {"G000002", 10.1, 20.1}};
+  bind_onboard_planning_context(plan);
   plan.content_hash         = compute_ntn_position_plan_content_hash(plan);
   const std::filesystem::path plan_path = write_onboard_position_plan_for_runtime_test(plan);
   temporary_plan_file_guard   plan_file_guard(plan_path);
@@ -1506,6 +1547,7 @@ TEST(cu_cp_ntn_mobility_test, ready_query_feedback_is_not_rolled_back_by_late_re
   source.plan_json_file                = plan_path.string();
   source.cell_ncis                     = {first_nci, second_nci};
   source.cell_pcis                     = {shared_pci, shared_pci};
+  bind_onboard_planning_context(source);
   env_params.ntn_onboard_position_plan = source;
 
   cu_cp_test_environment env(std::move(env_params));
@@ -1573,7 +1615,7 @@ TEST(cu_cp_ntn_mobility_test, late_ready_prepare_query_does_not_timeout_plan_tha
   constexpr int64_t prepare_guard_ms = 1500;
 
   ntn_versioned_position_plan plan;
-  plan.satellite_id         = "P01-S001";
+  plan.satellite_id         = "P01-S01";
   plan.catalog_version      = 15;
   plan.schedule_version     = 25;
   plan.valid_from           = std::chrono::system_clock::time_point{std::chrono::milliseconds{now_ms - 100}};
@@ -1582,6 +1624,7 @@ TEST(cu_cp_ntn_mobility_test, late_ready_prepare_query_does_not_timeout_plan_tha
   plan.onboard_cells[0]     = {first_nci, shared_pci};
   plan.onboard_cells[1]     = {second_nci, shared_pci};
   plan.visible_l1_positions = {{"G000001", 10.0, 20.0}, {"G000002", 10.1, 20.1}};
+  bind_onboard_planning_context(plan);
   plan.content_hash         = compute_ntn_position_plan_content_hash(plan);
   const std::filesystem::path plan_path = write_onboard_position_plan_for_runtime_test(plan);
   temporary_plan_file_guard   plan_file_guard(plan_path);
@@ -1596,6 +1639,7 @@ TEST(cu_cp_ntn_mobility_test, late_ready_prepare_query_does_not_timeout_plan_tha
   source.plan_json_file                = plan_path.string();
   source.cell_ncis                     = {first_nci, second_nci};
   source.cell_pcis                     = {shared_pci, shared_pci};
+  bind_onboard_planning_context(source);
   env_params.ntn_onboard_position_plan = source;
 
   cu_cp_test_environment env(std::move(env_params));
@@ -1668,7 +1712,7 @@ TEST(cu_cp_ntn_mobility_test, du_ready_response_after_prepare_guard_is_rejected_
   constexpr int64_t prepare_guard_ms = 1000;
 
   ntn_versioned_position_plan plan;
-  plan.satellite_id     = "P01-S001";
+  plan.satellite_id         = "P01-S01";
   plan.catalog_version  = 11;
   plan.schedule_version = 21;
   plan.valid_from       = std::chrono::system_clock::time_point{std::chrono::milliseconds{now_ms - 100}};
@@ -1677,6 +1721,7 @@ TEST(cu_cp_ntn_mobility_test, du_ready_response_after_prepare_guard_is_rejected_
   plan.onboard_cells[0] = {first_nci, shared_pci};
   plan.onboard_cells[1] = {second_nci, shared_pci};
   plan.visible_l1_positions = {{"G000001", 10.0, 20.0}, {"G000002", 10.1, 20.1}};
+  bind_onboard_planning_context(plan);
   plan.content_hash          = compute_ntn_position_plan_content_hash(plan);
   const std::filesystem::path plan_path = write_onboard_position_plan_for_runtime_test(plan);
   temporary_plan_file_guard   plan_file_guard(plan_path);
@@ -1690,6 +1735,7 @@ TEST(cu_cp_ntn_mobility_test, du_ready_response_after_prepare_guard_is_rejected_
   source.plan_json_file       = plan_path.string();
   source.cell_ncis            = {first_nci, second_nci};
   source.cell_pcis            = {shared_pci, shared_pci};
+  bind_onboard_planning_context(source);
   env_params.ntn_onboard_position_plan = source;
 
   cu_cp_test_environment env(std::move(env_params));
@@ -1750,7 +1796,7 @@ TEST(cu_cp_ntn_mobility_test, lost_application_query_does_not_block_apply_deadli
   const int64_t activation_ms = ((now_ms + 1200 + 639) / 640) * 640;
 
   ntn_versioned_position_plan plan;
-  plan.satellite_id     = "P01-S001";
+  plan.satellite_id         = "P01-S01";
   plan.catalog_version  = 12;
   plan.schedule_version = 22;
   plan.valid_from       = std::chrono::system_clock::time_point{std::chrono::milliseconds{now_ms - 100}};
@@ -1759,6 +1805,7 @@ TEST(cu_cp_ntn_mobility_test, lost_application_query_does_not_block_apply_deadli
   plan.onboard_cells[0] = {first_nci, shared_pci};
   plan.onboard_cells[1] = {second_nci, shared_pci};
   plan.visible_l1_positions = {{"G000001", 10.0, 20.0}, {"G000002", 10.1, 20.1}};
+  bind_onboard_planning_context(plan);
   plan.content_hash          = compute_ntn_position_plan_content_hash(plan);
   const std::filesystem::path plan_path = write_onboard_position_plan_for_runtime_test(plan);
   temporary_plan_file_guard   plan_file_guard(plan_path);
@@ -1775,6 +1822,7 @@ TEST(cu_cp_ntn_mobility_test, lost_application_query_does_not_block_apply_deadli
   source.plan_json_file       = plan_path.string();
   source.cell_ncis            = {first_nci, second_nci};
   source.cell_pcis            = {shared_pci, shared_pci};
+  bind_onboard_planning_context(source);
   env_params.ntn_onboard_position_plan = source;
 
   cu_cp_test_environment env(std::move(env_params));

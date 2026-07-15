@@ -299,7 +299,7 @@ static f1ap_ntn_access_calendar_update make_ntn_calendar_prepare(span<const du_c
 {
   f1ap_ntn_access_calendar_update request;
   request.operation                = f1ap_ntn_access_calendar_operation::prepare;
-  request.satellite_id             = "P01-S001";
+  request.satellite_id             = "P01-S01";
   request.catalog_version          = 10;
   request.schedule_version         = 20;
   request.source_content_hash      = "sha256:source";

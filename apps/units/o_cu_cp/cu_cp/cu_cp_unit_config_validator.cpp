@@ -28,6 +28,8 @@
 #include "srsran/ran/nr_cgi.h"
 #include "srsran/rlc/rlc_config.h"
 #include "srsran/scheduler/ntn_access_calendar.h"
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <limits>
 #include <map>
@@ -36,9 +38,38 @@
 
 using namespace srsran;
 
+static std::string normalize_sha256_digest(std::string value)
+{
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return std::tolower(c); });
+  if (value.rfind("sha256:", 0) != 0) {
+    value.insert(0, "sha256:");
+  }
+  return value;
+}
+
+static bool is_sha256_digest(const std::string& value)
+{
+  const std::string normalized = normalize_sha256_digest(value);
+  return normalized.size() == 71 &&
+         std::all_of(normalized.begin() + 7, normalized.end(), [](unsigned char c) { return std::isxdigit(c); });
+}
+
+static bool is_canonical_ntn_satellite_id(const std::string& value)
+{
+  return value.size() == 7 && value[0] == 'P' && std::isdigit(static_cast<unsigned char>(value[1])) &&
+         std::isdigit(static_cast<unsigned char>(value[2])) && value[3] == '-' && value[4] == 'S' &&
+         std::isdigit(static_cast<unsigned char>(value[5])) && std::isdigit(static_cast<unsigned char>(value[6]));
+}
+
 static bool validate_mobility_appconfig(gnb_id_t gnb_id, const cu_cp_unit_mobility_config& config)
 {
   const auto& ntn_cfg = config.ntn_location_mobility;
+  const auto& position_plan_cfg = config.ntn_onboard_position_plan;
+  if (position_plan_cfg.du_execution_enabled && ntn_cfg.enabled) {
+    fmt::print("Invalid CU-CP configuration. Executing onboard position plans and legacy NTN location mobility "
+               "cannot both be identity-authoritative\n");
+    return false;
+  }
   if (ntn_cfg.enabled) {
     if (ntn_cfg.beam_table_json_file.empty()) {
       fmt::print("Invalid CU-CP configuration. NTN location mobility requires beam_table_json_file\n");
@@ -159,18 +190,49 @@ static bool validate_mobility_appconfig(gnb_id_t gnb_id, const cu_cp_unit_mobili
     }
   }
 
-  const auto& position_plan_cfg = config.ntn_onboard_position_plan;
   if (position_plan_cfg.du_execution_enabled && !position_plan_cfg.enabled) {
     fmt::print("Invalid CU-CP configuration. NTN DU calendar execution requires the onboard position plan\n");
     return false;
   }
   if (position_plan_cfg.enabled) {
-    if (position_plan_cfg.satellite_id.empty() || position_plan_cfg.plan_json_file.empty()) {
-      fmt::print("Invalid CU-CP configuration. NTN onboard position plan requires satellite_id and plan_json_file\n");
+    if (!is_canonical_ntn_satellite_id(position_plan_cfg.satellite_id) || position_plan_cfg.plan_json_file.empty()) {
+      fmt::print("Invalid CU-CP configuration. NTN onboard position plan requires canonical Pxx-Syy satellite_id and "
+                 "plan_json_file\n");
       return false;
     }
     if (position_plan_cfg.cell_ncis.size() != 2 || position_plan_cfg.cell_pcis.size() != 2) {
       fmt::print("Invalid CU-CP configuration. NTN onboard position plan requires exactly two cell_ncis and cell_pcis\n");
+      return false;
+    }
+    const bool has_any_planning_context      = !position_plan_cfg.expected_catalog_id.empty() ||
+                                               !position_plan_cfg.expected_catalog_hash.empty() ||
+                                               !position_plan_cfg.expected_identity_registry_version.empty() ||
+                                               !position_plan_cfg.expected_identity_registry_hash.empty() ||
+                                               !position_plan_cfg.expected_access_profile_id.empty() ||
+                                               !position_plan_cfg.expected_access_profile_hash.empty();
+    const bool has_complete_planning_context = !position_plan_cfg.expected_catalog_id.empty() &&
+                                               is_sha256_digest(position_plan_cfg.expected_catalog_hash) &&
+                                               !position_plan_cfg.expected_identity_registry_version.empty() &&
+                                               is_sha256_digest(position_plan_cfg.expected_identity_registry_hash) &&
+                                               !position_plan_cfg.expected_access_profile_id.empty() &&
+                                               is_sha256_digest(position_plan_cfg.expected_access_profile_hash);
+    if ((position_plan_cfg.du_execution_enabled || has_any_planning_context) && !has_complete_planning_context) {
+      fmt::print("Invalid CU-CP configuration. NTN schema-v2 planning context requires complete catalog, identity "
+                 "registry and access-profile identifiers with SHA-256 digests\n");
+      return false;
+    }
+    if (position_plan_cfg.du_execution_enabled &&
+        (position_plan_cfg.expected_access_profile_id != "ntn-access-16a-64d-v1" ||
+         normalize_sha256_digest(position_plan_cfg.expected_access_profile_hash) !=
+             "sha256:bb79577c791d26260828959cecd6b7658d9c5d69eefcd99f833f5e76d081e320" ||
+         position_plan_cfg.max_l1_positions_per_cell != 128 ||
+         position_plan_cfg.max_l1_positions_per_satellite != 256 || position_plan_cfg.max_analog_ports_per_cell != 16 ||
+         position_plan_cfg.max_analog_ports_per_satellite != 32 || position_plan_cfg.max_digital_ports_per_cell != 64 ||
+         position_plan_cfg.max_digital_ports_per_satellite != 128 || position_plan_cfg.access_slot_us != 10000 ||
+         position_plan_cfg.subvisit_duration_us != 2500 || position_plan_cfg.max_ssb_interval_ms != 80 ||
+         position_plan_cfg.max_prach_interval_ms != 640 || position_plan_cfg.activation_alignment_ms != 640)) {
+      fmt::print("Invalid CU-CP configuration. NTN DU execution requires the bound ntn-access-16a-64d-v1 "
+                 "resource profile\n");
       return false;
     }
     for (uint64_t nci : position_plan_cfg.cell_ncis) {
@@ -190,11 +252,11 @@ static bool validate_mobility_appconfig(gnb_id_t gnb_id, const cu_cp_unit_mobili
       }
     }
 
-    if (position_plan_cfg.max_l1_positions_per_cell == 0 ||
-        position_plan_cfg.max_l1_positions_per_satellite == 0 ||
+    if (position_plan_cfg.max_l1_positions_per_cell == 0 || position_plan_cfg.max_l1_positions_per_satellite == 0 ||
         position_plan_cfg.max_analog_ports_per_cell == 0 ||
         position_plan_cfg.max_analog_ports_per_cell >= std::numeric_limits<uint16_t>::max() ||
-        position_plan_cfg.max_analog_ports_per_satellite == 0 || position_plan_cfg.access_slot_us == 0 ||
+        position_plan_cfg.max_analog_ports_per_satellite == 0 || position_plan_cfg.max_digital_ports_per_cell == 0 ||
+        position_plan_cfg.max_digital_ports_per_satellite == 0 || position_plan_cfg.access_slot_us == 0 ||
         position_plan_cfg.subvisit_duration_us == 0 || position_plan_cfg.max_ssb_interval_ms == 0 ||
         position_plan_cfg.max_prach_interval_ms == 0 || position_plan_cfg.activation_alignment_ms == 0) {
       fmt::print("Invalid CU-CP configuration. NTN onboard position-plan capacities and timing values must be positive\n");
@@ -217,6 +279,11 @@ static bool validate_mobility_appconfig(gnb_id_t gnb_id, const cu_cp_unit_mobili
     if (static_cast<uint64_t>(position_plan_cfg.max_analog_ports_per_satellite) >
         2ULL * position_plan_cfg.max_analog_ports_per_cell) {
       fmt::print("Invalid CU-CP configuration. NTN satellite analog-port capacity exceeds its two-cell capacity\n");
+      return false;
+    }
+    if (static_cast<uint64_t>(position_plan_cfg.max_digital_ports_per_satellite) >
+        2ULL * position_plan_cfg.max_digital_ports_per_cell) {
+      fmt::print("Invalid CU-CP configuration. NTN satellite digital-port capacity exceeds its two-cell capacity\n");
       return false;
     }
 

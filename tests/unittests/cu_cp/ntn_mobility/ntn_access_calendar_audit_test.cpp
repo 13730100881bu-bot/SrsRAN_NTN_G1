@@ -30,6 +30,10 @@ using namespace srsran::srs_cu_cp;
 
 namespace {
 
+constexpr const char* catalog_hash        = "sha256:b39fe9c3ee9a9355b3546036b7f16e0fb858c953f8558cc4295122f2169fbe7a";
+constexpr const char* registry_hash       = "sha256:7475821350e104b57a70d979d630f4b29a6cecb89ca0eca7b16dddf2ffee6a4a";
+constexpr const char* access_profile_hash = "sha256:bb79577c791d26260828959cecd6b7658d9c5d69eefcd99f833f5e76d081e320";
+
 std::chrono::system_clock::time_point at_ms(int64_t milliseconds)
 {
   return std::chrono::system_clock::time_point{std::chrono::milliseconds{milliseconds}};
@@ -39,7 +43,13 @@ ntn_onboard_position_plan_config make_config()
 {
   ntn_onboard_position_plan_config config;
   config.enabled          = true;
-  config.satellite_id     = "P01-S001";
+  config.satellite_id                       = "P01-S01";
+  config.expected_catalog_id                = "global-land-l1-v1";
+  config.expected_catalog_hash              = catalog_hash;
+  config.expected_identity_registry_version = "mc-ntn-onboard-cell-registry-v1";
+  config.expected_identity_registry_hash    = registry_hash;
+  config.expected_access_profile_id         = "ntn-access-16a-64d-v1";
+  config.expected_access_profile_hash       = access_profile_hash;
   config.onboard_cells[0] = {nr_cell_identity::create(0x123450001ULL).value(), 101};
   config.onboard_cells[1] = {nr_cell_identity::create(0x123450002ULL).value(), 202};
   return config;
@@ -48,7 +58,15 @@ ntn_onboard_position_plan_config make_config()
 ntn_versioned_position_plan make_plan(unsigned count)
 {
   ntn_versioned_position_plan plan;
-  plan.satellite_id     = "P01-S001";
+  plan.schema_version            = 2;
+  plan.planning_run_id           = "planning-run-2026-07-15";
+  plan.catalog_id                = "global-land-l1-v1";
+  plan.catalog_hash              = catalog_hash;
+  plan.identity_registry_version = "mc-ntn-onboard-cell-registry-v1";
+  plan.identity_registry_hash    = registry_hash;
+  plan.access_profile_id         = "ntn-access-16a-64d-v1";
+  plan.access_profile_hash       = access_profile_hash;
+  plan.satellite_id              = "P01-S01";
   plan.catalog_version  = 1;
   plan.schedule_version = 7;
   plan.valid_from       = at_ms(640);
@@ -56,9 +74,10 @@ ntn_versioned_position_plan make_plan(unsigned count)
   plan.activation_epoch = at_ms(1920);
   plan.onboard_cells    = make_config().onboard_cells;
   for (unsigned i = 0; i != count; ++i) {
-    plan.visible_l1_positions.push_back(
-        {fmt::format("G{:06}", i + 1), 10.0 + static_cast<double>(i / 32) * 0.05,
-         20.0 + static_cast<double>(i % 32) * 0.05});
+    plan.visible_l1_positions.push_back({fmt::format("G{:06}", i + 1),
+                                         10.0 + static_cast<double>(i / 32) * 0.05,
+                                         20.0 + static_cast<double>(i % 32) * 0.05,
+                                         0x7f});
   }
   plan.content_hash = compute_ntn_position_plan_content_hash(plan);
   return plan;

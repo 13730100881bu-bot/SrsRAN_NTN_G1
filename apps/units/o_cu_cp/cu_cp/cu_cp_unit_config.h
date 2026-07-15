@@ -269,6 +269,12 @@ struct cu_cp_unit_ntn_onboard_position_plan_config {
   bool                  du_execution_enabled = false;
   std::string           satellite_id;
   std::string           plan_json_file;
+  std::string           expected_catalog_id;
+  std::string           expected_catalog_hash;
+  std::string           expected_identity_registry_version;
+  std::string           expected_identity_registry_hash;
+  std::string           expected_access_profile_id;
+  std::string           expected_access_profile_hash;
   unsigned              reload_period_ms = 0;
   unsigned              du_prepare_guard_ms = 1000;
   unsigned              du_prepare_horizon_ms = 4000;
@@ -279,6 +285,8 @@ struct cu_cp_unit_ntn_onboard_position_plan_config {
   unsigned              max_l1_positions_per_satellite = 256;
   unsigned              max_analog_ports_per_cell      = 16;
   unsigned              max_analog_ports_per_satellite = 32;
+  unsigned              max_digital_ports_per_cell      = 64;
+  unsigned              max_digital_ports_per_satellite = 128;
   unsigned              access_slot_us                 = 10000;
   unsigned              subvisit_duration_us           = 2500;
   unsigned              max_ssb_interval_ms            = 80;

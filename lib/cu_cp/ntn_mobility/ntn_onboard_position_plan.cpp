@@ -98,6 +98,72 @@ bool is_valid_l1_id(const std::string& value)
          std::all_of(value.begin() + 1, value.end(), [](unsigned char c) { return std::isdigit(c); });
 }
 
+bool is_valid_satellite_id(const std::string& value)
+{
+  return value.size() == 7 && value[0] == 'P' && std::isdigit(static_cast<unsigned char>(value[1])) &&
+         std::isdigit(static_cast<unsigned char>(value[2])) && value[3] == '-' && value[4] == 'S' &&
+         std::isdigit(static_cast<unsigned char>(value[5])) && std::isdigit(static_cast<unsigned char>(value[6]));
+}
+
+bool is_sha256_digest(const std::string& value)
+{
+  const std::string normalized = normalize_hash(value);
+  return normalized.size() == 71 &&
+         std::all_of(normalized.begin() + 7, normalized.end(), [](unsigned char c) { return std::isxdigit(c); });
+}
+
+std::optional<std::string> validate_exact_object_keys(const nlohmann::json&              value,
+                                                      const char*                        context,
+                                                      std::initializer_list<const char*> required,
+                                                      std::initializer_list<const char*> optional = {})
+{
+  if (!value.is_object()) {
+    return fmt::format("{} must be an object", context);
+  }
+
+  std::set<std::string> allowed;
+  for (const char* key : required) {
+    allowed.emplace(key);
+  }
+  for (const char* key : optional) {
+    allowed.emplace(key);
+  }
+  for (auto it = value.begin(); it != value.end(); ++it) {
+    if (allowed.count(it.key()) == 0) {
+      return fmt::format("unknown field '{}.{}'", context, it.key());
+    }
+  }
+  for (const char* key : required) {
+    if (!value.contains(key)) {
+      return fmt::format("missing field '{}.{}'", context, key);
+    }
+  }
+  return std::nullopt;
+}
+
+expected<uint64_t, std::string> parse_json_uint64(const nlohmann::json& value, const std::string& context)
+{
+  if (!value.is_number_unsigned()) {
+    return make_unexpected(fmt::format("{} must be an unsigned integer", context));
+  }
+  return value.get<uint64_t>();
+}
+
+expected<int64_t, std::string> parse_json_int64(const nlohmann::json& value, const std::string& context)
+{
+  if (!value.is_number_integer()) {
+    return make_unexpected(fmt::format("{} must be an integer", context));
+  }
+  if (value.is_number_unsigned()) {
+    const uint64_t parsed = value.get<uint64_t>();
+    if (parsed > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+      return make_unexpected(fmt::format("{} exceeds the signed 64-bit range", context));
+    }
+    return static_cast<int64_t>(parsed);
+  }
+  return value.get<int64_t>();
+}
+
 bool cell_identity_less(const ntn_onboard_cell_identity& lhs, const ntn_onboard_cell_identity& rhs)
 {
   if (lhs.nci != rhs.nci) {
@@ -356,6 +422,12 @@ const char* srsran::srs_cu_cp::to_string(ntn_position_plan_reject_reason reason)
       return "feature_disabled";
     case ntn_position_plan_reject_reason::parse_error:
       return "parse_error";
+    case ntn_position_plan_reject_reason::unsupported_schema:
+      return "unsupported_schema";
+    case ntn_position_plan_reject_reason::unbound_planning_context:
+      return "unbound_planning_context";
+    case ntn_position_plan_reject_reason::planning_context_mismatch:
+      return "planning_context_mismatch";
     case ntn_position_plan_reject_reason::invalid_satellite_id:
       return "invalid_satellite_id";
     case ntn_position_plan_reject_reason::non_monotonic_version:
@@ -372,6 +444,8 @@ const char* srsran::srs_cu_cp::to_string(ntn_position_plan_reject_reason reason)
       return "invalid_l1_id";
     case ntn_position_plan_reject_reason::duplicate_l1_id:
       return "duplicate_l1_id";
+    case ntn_position_plan_reject_reason::invalid_child_mask:
+      return "invalid_child_mask";
     case ntn_position_plan_reject_reason::invalid_l1_position:
       return "invalid_l1_position";
     case ntn_position_plan_reject_reason::identity_mismatch:
@@ -511,7 +585,35 @@ ntn_position_plan_reject_reason ntn_onboard_position_plan_controller::validate_p
   if (!cfg.enabled) {
     return ntn_position_plan_reject_reason::feature_disabled;
   }
-  if (cfg.satellite_id.empty() || plan.satellite_id != cfg.satellite_id) {
+  if (plan.schema_version != 1 && plan.schema_version != 2) {
+    return ntn_position_plan_reject_reason::unsupported_schema;
+  }
+  if (plan.schema_version == 1 && cfg.require_external_apply) {
+    return ntn_position_plan_reject_reason::unbound_planning_context;
+  }
+  if (plan.schema_version == 2) {
+    const bool context_is_complete = !plan.planning_run_id.empty() && !plan.catalog_id.empty() &&
+                                     is_sha256_digest(plan.catalog_hash) && !plan.identity_registry_version.empty() &&
+                                     is_sha256_digest(plan.identity_registry_hash) && !plan.access_profile_id.empty() &&
+                                     is_sha256_digest(plan.access_profile_hash);
+    const bool context_matches =
+        !cfg.expected_catalog_id.empty() && !cfg.expected_catalog_hash.empty() &&
+        !cfg.expected_identity_registry_version.empty() && !cfg.expected_identity_registry_hash.empty() &&
+        !cfg.expected_access_profile_id.empty() && !cfg.expected_access_profile_hash.empty() &&
+        plan.catalog_id == cfg.expected_catalog_id &&
+        normalize_hash(plan.catalog_hash) == normalize_hash(cfg.expected_catalog_hash) &&
+        plan.identity_registry_version == cfg.expected_identity_registry_version &&
+        normalize_hash(plan.identity_registry_hash) == normalize_hash(cfg.expected_identity_registry_hash) &&
+        plan.access_profile_id == cfg.expected_access_profile_id &&
+        normalize_hash(plan.access_profile_hash) == normalize_hash(cfg.expected_access_profile_hash);
+    const bool local_profile_matches =
+        normalize_hash(cfg.expected_access_profile_hash) == compute_ntn_access_profile_hash(cfg);
+    if (!context_is_complete || !context_matches || !local_profile_matches) {
+      return ntn_position_plan_reject_reason::planning_context_mismatch;
+    }
+  }
+  if (!is_valid_satellite_id(cfg.satellite_id) || !is_valid_satellite_id(plan.satellite_id) ||
+      plan.satellite_id != cfg.satellite_id) {
     return ntn_position_plan_reject_reason::invalid_satellite_id;
   }
   if (plan.content_hash.empty() || normalize_hash(plan.content_hash) != compute_ntn_position_plan_content_hash(plan)) {
@@ -558,6 +660,10 @@ ntn_position_plan_reject_reason ntn_onboard_position_plan_controller::validate_p
     }
     if (!l1_ids.insert(position.position_id).second) {
       return ntn_position_plan_reject_reason::duplicate_l1_id;
+    }
+    if ((plan.schema_version == 2 && (position.child_mask == 0 || position.child_mask > 0x7fU)) ||
+        (plan.schema_version == 1 && position.child_mask != 0)) {
+      return ntn_position_plan_reject_reason::invalid_child_mask;
     }
     if (!std::isfinite(position.latitude_deg) || !std::isfinite(position.longitude_deg) ||
         position.latitude_deg < -90.0 || position.latitude_deg > 90.0 || position.longitude_deg < -180.0 ||
@@ -1203,10 +1309,43 @@ void ntn_onboard_position_plan_controller::record_external_rejection(ntn_positio
   reject(reason, schedule_version);
 }
 
+std::string srsran::srs_cu_cp::compute_ntn_access_profile_hash(const ntn_onboard_position_plan_config& config)
+{
+  std::ostringstream canonical;
+  canonical.imbue(std::locale::classic());
+  canonical << "access_profile_id=" << config.expected_access_profile_id << '\n';
+  canonical << "max_l1_positions_per_cell=" << config.max_l1_positions_per_cell << '\n';
+  canonical << "max_l1_positions_per_satellite=" << config.max_l1_positions_per_satellite << '\n';
+  canonical << "analog_ports_per_cell=" << config.max_analog_ports_per_cell << '\n';
+  canonical << "analog_ports_per_satellite=" << config.max_analog_ports_per_satellite << '\n';
+  canonical << "digital_ports_per_cell=" << config.max_digital_ports_per_cell << '\n';
+  canonical << "digital_ports_per_satellite=" << config.max_digital_ports_per_satellite << '\n';
+  canonical << "access_slot_us=" << config.access_slot.count() << '\n';
+  canonical << "subvisit_duration_us=" << config.subvisit_duration.count() << '\n';
+  canonical << "max_ssb_interval_us=" << config.max_ssb_interval.count() << '\n';
+  canonical << "max_prach_interval_us=" << config.max_prach_interval.count() << '\n';
+  canonical << "activation_alignment_ms=" << config.activation_alignment.count() << '\n';
+  canonical << "cell_access_slot_stride=" << config.cell_access_slot_stride << '\n';
+  canonical << "subvisits_per_access_slot=" << config.subvisits_per_access_slot << '\n';
+  for (size_t index = 0; index != config.access_phases.size(); ++index) {
+    canonical << "phase=" << index << ',' << config.access_phases[index].downlink_port_mask << ','
+              << config.access_phases[index].uplink_port_mask << '\n';
+  }
+  return sha256_with_prefix(canonical.str());
+}
+
 std::string srsran::srs_cu_cp::compute_ntn_position_plan_content_hash(const ntn_versioned_position_plan& plan)
 {
   std::ostringstream canonical;
   canonical.imbue(std::locale::classic());
+  if (plan.schema_version == 2) {
+    canonical << "schema_version=2\n";
+    canonical << "planning_run_id=" << plan.planning_run_id << '\n';
+    canonical << "catalog=" << plan.catalog_id << ',' << normalize_hash(plan.catalog_hash) << '\n';
+    canonical << "identity_registry=" << plan.identity_registry_version << ','
+              << normalize_hash(plan.identity_registry_hash) << '\n';
+    canonical << "access_profile=" << plan.access_profile_id << ',' << normalize_hash(plan.access_profile_hash) << '\n';
+  }
   canonical << "satellite_id=" << plan.satellite_id << '\n';
   canonical << "catalog_version=" << plan.catalog_version << '\n';
   canonical << "schedule_version=" << plan.schedule_version << '\n';
@@ -1231,7 +1370,11 @@ std::string srsran::srs_cu_cp::compute_ntn_position_plan_content_hash(const ntn_
   });
   canonical << std::setprecision(std::numeric_limits<double>::max_digits10);
   for (const ntn_l1_position& position : positions) {
-    canonical << "l1=" << position.position_id << ',' << position.latitude_deg << ',' << position.longitude_deg << '\n';
+    canonical << "l1=" << position.position_id << ',' << position.latitude_deg << ',' << position.longitude_deg;
+    if (plan.schema_version == 2) {
+      canonical << ',' << static_cast<unsigned>(position.child_mask);
+    }
+    canonical << '\n';
   }
 
   return sha256_with_prefix(canonical.str());
@@ -1278,13 +1421,103 @@ srsran::srs_cu_cp::parse_ntn_position_plan_json(const std::string& json_text)
     }
 
     ntn_versioned_position_plan result;
+    if (root.contains("schema_version")) {
+      auto schema_version = parse_json_uint64(root.at("schema_version"), "schema_version");
+      if (!schema_version.has_value() || schema_version.value() > std::numeric_limits<unsigned>::max()) {
+        return make_unexpected(schema_version.has_value() ? std::string{"schema_version exceeds unsigned range"}
+                                                          : schema_version.error());
+      }
+      result.schema_version = static_cast<unsigned>(schema_version.value());
+    }
+    if (result.schema_version != 1 && result.schema_version != 2) {
+      return make_unexpected(fmt::format("unsupported schema_version {}", result.schema_version));
+    }
+
+    std::optional<std::string> key_error;
+    if (result.schema_version == 1) {
+      key_error = validate_exact_object_keys(root,
+                                             "root",
+                                             {"satellite_id",
+                                              "catalog_version",
+                                              "schedule_version",
+                                              "content_hash",
+                                              "valid_from_unix_ms",
+                                              "valid_until_unix_ms",
+                                              "activation_epoch_unix_ms",
+                                              "onboard_cells",
+                                              "visible_l1_positions"},
+                                             {"schema_version"});
+    } else {
+      key_error = validate_exact_object_keys(root,
+                                             "root",
+                                             {"schema_version",
+                                              "planning_run_id",
+                                              "catalog",
+                                              "identity_registry",
+                                              "access_profile",
+                                              "satellite_id",
+                                              "catalog_version",
+                                              "schedule_version",
+                                              "content_hash",
+                                              "valid_from_unix_ms",
+                                              "valid_until_unix_ms",
+                                              "activation_epoch_unix_ms",
+                                              "onboard_cells",
+                                              "visible_l1_positions"});
+    }
+    if (key_error.has_value()) {
+      return make_unexpected(std::move(key_error.value()));
+    }
+
+    if (result.schema_version == 2) {
+      const nlohmann::json& catalog  = root.at("catalog");
+      const nlohmann::json& registry = root.at("identity_registry");
+      const nlohmann::json& profile  = root.at("access_profile");
+      if (auto error = validate_exact_object_keys(catalog, "catalog", {"id", "sha256"}); error.has_value()) {
+        return make_unexpected(std::move(error.value()));
+      }
+      if (auto error = validate_exact_object_keys(registry, "identity_registry", {"version", "sha256"});
+          error.has_value()) {
+        return make_unexpected(std::move(error.value()));
+      }
+      if (auto error = validate_exact_object_keys(profile, "access_profile", {"id", "sha256"}); error.has_value()) {
+        return make_unexpected(std::move(error.value()));
+      }
+      result.planning_run_id           = root.at("planning_run_id").get<std::string>();
+      result.catalog_id                = catalog.at("id").get<std::string>();
+      result.catalog_hash              = catalog.at("sha256").get<std::string>();
+      result.identity_registry_version = registry.at("version").get<std::string>();
+      result.identity_registry_hash    = registry.at("sha256").get<std::string>();
+      result.access_profile_id         = profile.at("id").get<std::string>();
+      result.access_profile_hash       = profile.at("sha256").get<std::string>();
+    }
+    auto catalog_version  = parse_json_uint64(root.at("catalog_version"), "catalog_version");
+    auto schedule_version = parse_json_uint64(root.at("schedule_version"), "schedule_version");
+    auto valid_from       = parse_json_int64(root.at("valid_from_unix_ms"), "valid_from_unix_ms");
+    auto valid_until      = parse_json_int64(root.at("valid_until_unix_ms"), "valid_until_unix_ms");
+    auto activation_epoch = parse_json_int64(root.at("activation_epoch_unix_ms"), "activation_epoch_unix_ms");
+    if (!catalog_version.has_value()) {
+      return make_unexpected(catalog_version.error());
+    }
+    if (!schedule_version.has_value()) {
+      return make_unexpected(schedule_version.error());
+    }
+    if (!valid_from.has_value()) {
+      return make_unexpected(valid_from.error());
+    }
+    if (!valid_until.has_value()) {
+      return make_unexpected(valid_until.error());
+    }
+    if (!activation_epoch.has_value()) {
+      return make_unexpected(activation_epoch.error());
+    }
     result.satellite_id      = root.at("satellite_id").get<std::string>();
-    result.catalog_version   = root.at("catalog_version").get<uint64_t>();
-    result.schedule_version  = root.at("schedule_version").get<uint64_t>();
+    result.catalog_version   = catalog_version.value();
+    result.schedule_version  = schedule_version.value();
     result.content_hash      = root.at("content_hash").get<std::string>();
-    result.valid_from        = from_unix_milliseconds(root.at("valid_from_unix_ms").get<int64_t>());
-    result.valid_until       = from_unix_milliseconds(root.at("valid_until_unix_ms").get<int64_t>());
-    result.activation_epoch  = from_unix_milliseconds(root.at("activation_epoch_unix_ms").get<int64_t>());
+    result.valid_from        = from_unix_milliseconds(valid_from.value());
+    result.valid_until       = from_unix_milliseconds(valid_until.value());
+    result.activation_epoch  = from_unix_milliseconds(activation_epoch.value());
 
     const nlohmann::json& cells = root.at("onboard_cells");
     if (!cells.is_array() || cells.size() != 2) {
@@ -1292,15 +1525,21 @@ srsran::srs_cu_cp::parse_ntn_position_plan_json(const std::string& json_text)
     }
     for (size_t i = 0; i != cells.size(); ++i) {
       const std::string context = fmt::format("onboard_cells[{}]", i);
+      if (auto error = validate_exact_object_keys(cells[i], context.c_str(), {"nci", "pci"}); error.has_value()) {
+        return make_unexpected(std::move(error.value()));
+      }
       auto nci = parse_nci(cells[i].at("nci"), context.c_str());
       if (!nci.has_value()) {
         return make_unexpected(nci.error());
       }
-      const uint64_t pci = cells[i].at("pci").get<uint64_t>();
-      if (pci > MAX_PCI) {
+      auto pci = parse_json_uint64(cells[i].at("pci"), fmt::format("{}.pci", context));
+      if (!pci.has_value()) {
+        return make_unexpected(pci.error());
+      }
+      if (pci.value() > MAX_PCI) {
         return make_unexpected(fmt::format("{}.pci is outside 0..{}", context, MAX_PCI));
       }
-      result.onboard_cells[i] = {nci.value(), static_cast<pci_t>(pci)};
+      result.onboard_cells[i] = {nci.value(), static_cast<pci_t>(pci.value())};
     }
 
     const nlohmann::json& positions = root.at("visible_l1_positions");
@@ -1309,10 +1548,30 @@ srsran::srs_cu_cp::parse_ntn_position_plan_json(const std::string& json_text)
     }
     result.visible_l1_positions.reserve(positions.size());
     for (size_t i = 0; i != positions.size(); ++i) {
+      const std::string context = fmt::format("visible_l1_positions[{}]", i);
+      const auto        error =
+          result.schema_version == 2
+              ? validate_exact_object_keys(
+                    positions[i], context.c_str(), {"position_id", "latitude_deg", "longitude_deg", "child_mask"})
+              : validate_exact_object_keys(
+                    positions[i], context.c_str(), {"position_id", "latitude_deg", "longitude_deg"});
+      if (error.has_value()) {
+        return make_unexpected(error.value());
+      }
       ntn_l1_position position;
       position.position_id  = positions[i].at("position_id").get<std::string>();
       position.latitude_deg = positions[i].at("latitude_deg").get<double>();
       position.longitude_deg = positions[i].at("longitude_deg").get<double>();
+      if (result.schema_version == 2) {
+        auto child_mask = parse_json_uint64(positions[i].at("child_mask"), fmt::format("{}.child_mask", context));
+        if (!child_mask.has_value()) {
+          return make_unexpected(child_mask.error());
+        }
+        if (child_mask.value() == 0 || child_mask.value() > 0x7fU) {
+          return make_unexpected(fmt::format("{}.child_mask must be in 1..127", context));
+        }
+        position.child_mask = static_cast<uint8_t>(child_mask.value());
+      }
       result.visible_l1_positions.push_back(std::move(position));
     }
     return result;

@@ -33,6 +33,10 @@ using namespace srsran::srs_cu_cp;
 
 namespace {
 
+constexpr const char* catalog_hash        = "sha256:b39fe9c3ee9a9355b3546036b7f16e0fb858c953f8558cc4295122f2169fbe7a";
+constexpr const char* registry_hash       = "sha256:7475821350e104b57a70d979d630f4b29a6cecb89ca0eca7b16dddf2ffee6a4a";
+constexpr const char* access_profile_hash = "sha256:bb79577c791d26260828959cecd6b7658d9c5d69eefcd99f833f5e76d081e320";
+
 std::chrono::system_clock::time_point at_ms(int64_t milliseconds)
 {
   return std::chrono::system_clock::time_point{std::chrono::milliseconds{milliseconds}};
@@ -47,7 +51,13 @@ ntn_onboard_position_plan_config make_config(bool enabled = true)
 {
   ntn_onboard_position_plan_config config;
   config.enabled          = enabled;
-  config.satellite_id     = "P01-S001";
+  config.satellite_id                       = "P01-S01";
+  config.expected_catalog_id                = "global-land-l1-v1";
+  config.expected_catalog_hash              = catalog_hash;
+  config.expected_identity_registry_version = "mc-ntn-onboard-cell-registry-v1";
+  config.expected_identity_registry_hash    = registry_hash;
+  config.expected_access_profile_id         = "ntn-access-16a-64d-v1";
+  config.expected_access_profile_hash       = access_profile_hash;
   config.onboard_cells[0] = make_cell(0x123450001ULL, 101);
   config.onboard_cells[1] = make_cell(0x123450002ULL, 202);
   return config;
@@ -59,7 +69,15 @@ ntn_versioned_position_plan make_plan(unsigned count,
                                       uint64_t catalog_version = 1)
 {
   ntn_versioned_position_plan plan;
-  plan.satellite_id     = "P01-S001";
+  plan.schema_version            = 2;
+  plan.planning_run_id           = "planning-run-2026-07-15";
+  plan.catalog_id                = "global-land-l1-v1";
+  plan.catalog_hash              = catalog_hash;
+  plan.identity_registry_version = "mc-ntn-onboard-cell-registry-v1";
+  plan.identity_registry_hash    = registry_hash;
+  plan.access_profile_id         = "ntn-access-16a-64d-v1";
+  plan.access_profile_hash       = access_profile_hash;
+  plan.satellite_id              = "P01-S01";
   plan.catalog_version  = catalog_version;
   plan.schedule_version = schedule_version;
   plan.valid_from       = at_ms(640);
@@ -67,9 +85,10 @@ ntn_versioned_position_plan make_plan(unsigned count,
   plan.activation_epoch = at_ms(activation_ms);
   plan.onboard_cells    = make_config().onboard_cells;
   for (unsigned i = 0; i != count; ++i) {
-    plan.visible_l1_positions.push_back(
-        {fmt::format("G{:06}", i + 1), 10.0 + static_cast<double>(i / 32) * 0.05,
-         20.0 + static_cast<double>(i % 32) * 0.05});
+    plan.visible_l1_positions.push_back({fmt::format("G{:06}", i + 1),
+                                         10.0 + static_cast<double>(i / 32) * 0.05,
+                                         20.0 + static_cast<double>(i % 32) * 0.05,
+                                         0x7f});
   }
   plan.content_hash = compute_ntn_position_plan_content_hash(plan);
   return plan;
@@ -158,7 +177,13 @@ TEST(ntn_onboard_position_plan, empty_visible_inventory_produces_a_checked_expli
 TEST(ntn_onboard_position_plan, management_center_json_parses_and_keeps_opaque_cell_identities)
 {
   const ntn_versioned_position_plan plan = make_plan(2);
+  ASSERT_EQ(plan.content_hash, "sha256:fab0688dc8a51850384f568ec35ef1464284d9e45ffd0dd82e24d8280269423e");
   nlohmann::json root;
+  root["schema_version"]    = plan.schema_version;
+  root["planning_run_id"]   = plan.planning_run_id;
+  root["catalog"]           = {{"id", plan.catalog_id}, {"sha256", plan.catalog_hash}};
+  root["identity_registry"] = {{"version", plan.identity_registry_version}, {"sha256", plan.identity_registry_hash}};
+  root["access_profile"]    = {{"id", plan.access_profile_id}, {"sha256", plan.access_profile_hash}};
   root["satellite_id"]             = plan.satellite_id;
   root["catalog_version"]          = plan.catalog_version;
   root["schedule_version"]         = plan.schedule_version;
@@ -171,8 +196,9 @@ TEST(ntn_onboard_position_plan, management_center_json_parses_and_keeps_opaque_c
   }
   for (const auto& position : plan.visible_l1_positions) {
     root["visible_l1_positions"].push_back({{"position_id", position.position_id},
-                                              {"latitude_deg", position.latitude_deg},
-                                              {"longitude_deg", position.longitude_deg}});
+                                            {"latitude_deg", position.latitude_deg},
+                                            {"longitude_deg", position.longitude_deg},
+                                            {"child_mask", position.child_mask}});
   }
 
   auto parsed = parse_ntn_position_plan_json(root.dump());
@@ -185,10 +211,146 @@ TEST(ntn_onboard_position_plan, management_center_json_parses_and_keeps_opaque_c
   EXPECT_TRUE(controller.submit(parsed.value(), at_ms(1280)).accepted);
 }
 
+TEST(ntn_onboard_position_plan, schema_v2_json_rejects_unknown_missing_and_invalid_child_fields)
+{
+  const ntn_versioned_position_plan plan = make_plan(1);
+  nlohmann::json                    root = {
+      {"schema_version", plan.schema_version},
+      {"planning_run_id", plan.planning_run_id},
+      {"catalog", {{"id", plan.catalog_id}, {"sha256", plan.catalog_hash}}},
+      {"identity_registry", {{"version", plan.identity_registry_version}, {"sha256", plan.identity_registry_hash}}},
+      {"access_profile", {{"id", plan.access_profile_id}, {"sha256", plan.access_profile_hash}}},
+      {"satellite_id", plan.satellite_id},
+      {"catalog_version", plan.catalog_version},
+      {"schedule_version", plan.schedule_version},
+      {"content_hash", plan.content_hash},
+      {"valid_from_unix_ms", 640},
+      {"valid_until_unix_ms", 64000},
+      {"activation_epoch_unix_ms", 1920},
+      {"onboard_cells",
+       {{{"nci", plan.onboard_cells[0].nci.value()}, {"pci", plan.onboard_cells[0].pci}},
+        {{"nci", plan.onboard_cells[1].nci.value()}, {"pci", plan.onboard_cells[1].pci}}}},
+      {"visible_l1_positions",
+       {{{"position_id", plan.visible_l1_positions[0].position_id},
+         {"latitude_deg", plan.visible_l1_positions[0].latitude_deg},
+         {"longitude_deg", plan.visible_l1_positions[0].longitude_deg},
+         {"child_mask", plan.visible_l1_positions[0].child_mask}}}}};
+
+  auto invalid                     = root;
+  invalid["catalog"]["unexpected"] = true;
+  auto parsed                      = parse_ntn_position_plan_json(invalid.dump());
+  ASSERT_FALSE(parsed.has_value());
+  EXPECT_NE(parsed.error().find("unknown field 'catalog.unexpected'"), std::string::npos);
+
+  invalid                                   = root;
+  invalid["onboard_cells"][0]["unexpected"] = true;
+  parsed                                    = parse_ntn_position_plan_json(invalid.dump());
+  ASSERT_FALSE(parsed.has_value());
+  EXPECT_NE(parsed.error().find("unknown field 'onboard_cells[0].unexpected'"), std::string::npos);
+
+  invalid = root;
+  invalid["visible_l1_positions"][0].erase("child_mask");
+  parsed = parse_ntn_position_plan_json(invalid.dump());
+  ASSERT_FALSE(parsed.has_value());
+  EXPECT_NE(parsed.error().find("missing field 'visible_l1_positions[0].child_mask'"), std::string::npos);
+
+  invalid                                          = root;
+  invalid["visible_l1_positions"][0]["child_mask"] = 128;
+  parsed                                           = parse_ntn_position_plan_json(invalid.dump());
+  ASSERT_FALSE(parsed.has_value());
+  EXPECT_NE(parsed.error().find("child_mask must be in 1..127"), std::string::npos);
+
+  invalid                                          = root;
+  invalid["visible_l1_positions"][0]["child_mask"] = 1.5;
+  parsed                                           = parse_ntn_position_plan_json(invalid.dump());
+  ASSERT_FALSE(parsed.has_value());
+  EXPECT_NE(parsed.error().find("child_mask must be an unsigned integer"), std::string::npos);
+
+  invalid                    = root;
+  invalid["catalog_version"] = 1.5;
+  parsed                     = parse_ntn_position_plan_json(invalid.dump());
+  ASSERT_FALSE(parsed.has_value());
+  EXPECT_NE(parsed.error().find("catalog_version must be an unsigned integer"), std::string::npos);
+
+  invalid                            = root;
+  invalid["onboard_cells"][0]["pci"] = -1;
+  parsed                             = parse_ntn_position_plan_json(invalid.dump());
+  ASSERT_FALSE(parsed.has_value());
+  EXPECT_NE(parsed.error().find("pci must be an unsigned integer"), std::string::npos);
+
+  invalid                             = root;
+  invalid["activation_epoch_unix_ms"] = 1920.5;
+  parsed                              = parse_ntn_position_plan_json(invalid.dump());
+  ASSERT_FALSE(parsed.has_value());
+  EXPECT_NE(parsed.error().find("activation_epoch_unix_ms must be an integer"), std::string::npos);
+}
+
+TEST(ntn_onboard_position_plan, schema_v1_is_dry_run_only_and_schema_v2_binds_planning_context)
+{
+  ntn_versioned_position_plan legacy = make_plan(2);
+  legacy.schema_version              = 1;
+  legacy.planning_run_id.clear();
+  legacy.catalog_id.clear();
+  legacy.catalog_hash.clear();
+  legacy.identity_registry_version.clear();
+  legacy.identity_registry_hash.clear();
+  legacy.access_profile_id.clear();
+  legacy.access_profile_hash.clear();
+  for (ntn_l1_position& position : legacy.visible_l1_positions) {
+    position.child_mask = 0;
+  }
+  legacy.content_hash = compute_ntn_position_plan_content_hash(legacy);
+
+  ntn_onboard_position_plan_controller dry_run_controller(make_config());
+  EXPECT_TRUE(dry_run_controller.submit(legacy, at_ms(1280)).accepted);
+  EXPECT_TRUE(dry_run_controller.advance_time(legacy.activation_epoch));
+  ASSERT_TRUE(dry_run_controller.active_plan().has_value());
+  EXPECT_EQ(dry_run_controller.active_plan()->source.schema_version, 1U);
+  EXPECT_FALSE(dry_run_controller.active_has_external_apply_evidence());
+
+  ntn_onboard_position_plan_config execution_config = make_config();
+  execution_config.require_external_apply           = true;
+  ntn_onboard_position_plan_controller execution_controller(execution_config);
+  const auto                           legacy_result = execution_controller.submit(legacy, at_ms(1280));
+  EXPECT_FALSE(legacy_result.accepted);
+  EXPECT_EQ(legacy_result.reason, ntn_position_plan_reject_reason::unbound_planning_context);
+
+  ntn_versioned_position_plan mismatched = make_plan(2);
+  mismatched.catalog_id                  = "different-catalog";
+  mismatched.content_hash                = compute_ntn_position_plan_content_hash(mismatched);
+  ntn_onboard_position_plan_controller mismatch_controller(make_config());
+  const auto                           mismatch_result = mismatch_controller.submit(mismatched, at_ms(1280));
+  EXPECT_FALSE(mismatch_result.accepted);
+  EXPECT_EQ(mismatch_result.reason, ntn_position_plan_reject_reason::planning_context_mismatch);
+
+  ntn_versioned_position_plan unsupported = make_plan(2);
+  unsupported.schema_version              = 3;
+  unsupported.content_hash                = compute_ntn_position_plan_content_hash(unsupported);
+  ntn_onboard_position_plan_controller unsupported_controller(make_config());
+  const auto                           unsupported_result = unsupported_controller.submit(unsupported, at_ms(1280));
+  EXPECT_FALSE(unsupported_result.accepted);
+  EXPECT_EQ(unsupported_result.reason, ntn_position_plan_reject_reason::unsupported_schema);
+}
+
+TEST(ntn_onboard_position_plan, access_profile_hash_binds_the_complete_local_resource_model)
+{
+  ntn_onboard_position_plan_config config = make_config();
+  EXPECT_EQ(compute_ntn_access_profile_hash(config), access_profile_hash);
+
+  ntn_onboard_position_plan_controller accepted_controller(config);
+  EXPECT_TRUE(accepted_controller.submit(make_plan(2), at_ms(1280)).accepted);
+
+  ++config.max_digital_ports_per_cell;
+  ntn_onboard_position_plan_controller drifted_controller(config);
+  const auto                           drifted = drifted_controller.submit(make_plan(2), at_ms(1280));
+  EXPECT_FALSE(drifted.accepted);
+  EXPECT_EQ(drifted.reason, ntn_position_plan_reject_reason::planning_context_mismatch);
+}
+
 TEST(ntn_onboard_position_plan, web_exporter_and_cpp_share_the_same_canonical_hash_golden_vector)
 {
   ntn_versioned_position_plan plan;
-  plan.satellite_id      = "P01-S001";
+  plan.satellite_id         = "P01-S01";
   plan.catalog_version   = 10;
   plan.schedule_version  = 20;
   plan.valid_from        = at_ms(1780000000000LL);
@@ -198,7 +360,7 @@ TEST(ntn_onboard_position_plan, web_exporter_and_cpp_share_the_same_canonical_ha
   plan.visible_l1_positions = {{"G000002", 56.7654, -158.36066}, {"G000001", 10.0, 20.0}};
 
   EXPECT_EQ(compute_ntn_position_plan_content_hash(plan),
-            "sha256:9fc109aa6a2ec0029667603257afaf05f2dcac46e8fbb228121b5fa1bd27c720");
+            "sha256:0e92970559dc95a87d3413e9300cf99ad257ea85e43e66898146a1af86d8c8b8");
 }
 
 TEST(ntn_onboard_position_plan, partition_is_deterministic_balanced_and_assigns_every_l1_exactly_once)
@@ -294,6 +456,10 @@ TEST(ntn_onboard_position_plan, rejects_satellite_hash_version_validity_activati
        ntn_position_plan_reject_reason::invalid_satellite_id,
        [](auto& plan) { plan.satellite_id = "P99-S999"; },
        true},
+      {"legacy_satellite_spelling",
+       ntn_position_plan_reject_reason::invalid_satellite_id,
+       [](auto& plan) { plan.satellite_id = "P01-S001"; },
+       true},
       {"hash",
        ntn_position_plan_reject_reason::invalid_hash,
        [](auto& plan) { plan.visible_l1_positions.front().latitude_deg += 1.0; },
@@ -336,6 +502,10 @@ TEST(ntn_onboard_position_plan, rejects_satellite_hash_version_validity_activati
       {"l1_duplicate",
        ntn_position_plan_reject_reason::duplicate_l1_id,
        [](auto& plan) { plan.visible_l1_positions[1].position_id = plan.visible_l1_positions[0].position_id; },
+       true},
+      {"child_mask",
+       ntn_position_plan_reject_reason::invalid_child_mask,
+       [](auto& plan) { plan.visible_l1_positions.front().child_mask = 0; },
        true}};
 
   for (const test_case& item : cases) {
@@ -618,7 +788,7 @@ TEST(ntn_onboard_position_plan, initial_access_event_rejects_wrong_version_owner
   ASSERT_FALSE(valid_event.position_id.empty());
 
   ntn_initial_access_plan_event wrong_satellite = valid_event;
-  wrong_satellite.satellite_id                  = "P01-S002";
+  wrong_satellite.satellite_id                  = "P01-S02";
   EXPECT_EQ(controller.audit_initial_access_event(wrong_satellite).reason,
             ntn_initial_access_plan_reason::satellite_mismatch);
 

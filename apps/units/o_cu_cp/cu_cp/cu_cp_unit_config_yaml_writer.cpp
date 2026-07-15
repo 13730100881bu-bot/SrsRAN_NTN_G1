@@ -276,6 +276,12 @@ build_cu_cp_ntn_onboard_position_plan_section(const cu_cp_unit_ntn_onboard_posit
   node["du_execution_enabled"] = config.du_execution_enabled;
   node["satellite_id"]     = config.satellite_id;
   node["plan_json_file"]   = config.plan_json_file;
+  node["expected_catalog_id"]                = config.expected_catalog_id;
+  node["expected_catalog_hash"]              = config.expected_catalog_hash;
+  node["expected_identity_registry_version"] = config.expected_identity_registry_version;
+  node["expected_identity_registry_hash"]    = config.expected_identity_registry_hash;
+  node["expected_access_profile_id"]         = config.expected_access_profile_id;
+  node["expected_access_profile_hash"]       = config.expected_access_profile_hash;
   node["reload_period_ms"] = config.reload_period_ms;
   node["du_prepare_guard_ms"] = config.du_prepare_guard_ms;
   node["du_prepare_horizon_ms"] = config.du_prepare_horizon_ms;
@@ -288,6 +294,8 @@ build_cu_cp_ntn_onboard_position_plan_section(const cu_cp_unit_ntn_onboard_posit
   node["max_l1_positions_per_satellite"] = config.max_l1_positions_per_satellite;
   node["max_analog_ports_per_cell"]      = config.max_analog_ports_per_cell;
   node["max_analog_ports_per_satellite"] = config.max_analog_ports_per_satellite;
+  node["max_digital_ports_per_cell"]       = config.max_digital_ports_per_cell;
+  node["max_digital_ports_per_satellite"]  = config.max_digital_ports_per_satellite;
   node["access_slot_us"]                  = config.access_slot_us;
   node["subvisit_duration_us"]            = config.subvisit_duration_us;
   node["max_ssb_interval_ms"]             = config.max_ssb_interval_ms;

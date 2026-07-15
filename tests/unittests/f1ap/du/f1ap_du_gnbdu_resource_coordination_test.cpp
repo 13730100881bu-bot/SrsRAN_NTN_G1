@@ -52,7 +52,7 @@ static f1ap_ntn_rnti_lease_pool_update make_lease_update()
 static f1ap_ntn_access_calendar_update make_access_calendar_update()
 {
   f1ap_ntn_access_calendar_update update;
-  update.satellite_id             = "P01-S001";
+  update.satellite_id             = "P01-S01";
   update.catalog_version          = 10;
   update.schedule_version         = 21;
   update.source_content_hash      = std::string(64, 'a');

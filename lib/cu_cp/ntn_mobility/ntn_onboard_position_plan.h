@@ -41,6 +41,8 @@ struct ntn_l1_position {
   std::string position_id;
   double      latitude_deg  = 0.0;
   double      longitude_deg = 0.0;
+  /// Seven-bit mask of the catalog-owned L2 children. Zero is reserved for legacy unbound schema-v1 input.
+  uint8_t child_mask = 0;
 };
 
 /// Stable identity of one long-lived onboard NR logical cell.
@@ -51,6 +53,15 @@ struct ntn_onboard_cell_identity {
 
 /// Versioned management-center input for one satellite.
 struct ntn_versioned_position_plan {
+  /// Missing in legacy JSON and interpreted as schema v1. Execution requires schema v2.
+  unsigned                                 schema_version = 1;
+  std::string                              planning_run_id;
+  std::string                              catalog_id;
+  std::string                              catalog_hash;
+  std::string                              identity_registry_version;
+  std::string                              identity_registry_hash;
+  std::string                              access_profile_id;
+  std::string                              access_profile_hash;
   std::string satellite_id;
   uint64_t    catalog_version  = 0;
   uint64_t    schedule_version = 0;
@@ -111,6 +122,9 @@ enum class ntn_position_plan_reject_reason {
   none,
   feature_disabled,
   parse_error,
+  unsupported_schema,
+  unbound_planning_context,
+  planning_context_mismatch,
   invalid_satellite_id,
   non_monotonic_version,
   invalid_hash,
@@ -119,6 +133,7 @@ enum class ntn_position_plan_reject_reason {
   invalid_activation_epoch,
   invalid_l1_id,
   duplicate_l1_id,
+  invalid_child_mask,
   invalid_l1_position,
   identity_mismatch,
   schedule_overflow,
@@ -160,23 +175,48 @@ struct ntn_access_calendar_audit {
   unsigned                        resource_conflicts   = 0;
 };
 
+struct ntn_access_calendar_phase {
+  uint16_t downlink_port_mask = 0;
+  uint16_t uplink_port_mask   = 0;
+};
+
 /// Configurable planning parameters. These are not protocol or hardware constants.
 struct ntn_onboard_position_plan_config {
   bool                                      enabled = false;
   /// When enabled, a pending plan may become active only after matching DU/MAC applied feedback.
   bool                                      require_external_apply = false;
   std::string                               satellite_id;
+  /// Expected management-center planning context for schema-v2 plans. Values are compared exactly, hashes
+  /// case-insensitively after adding the optional sha256: prefix.
+  std::string                               expected_catalog_id;
+  std::string                               expected_catalog_hash;
+  std::string                               expected_identity_registry_version;
+  std::string                               expected_identity_registry_hash;
+  std::string                               expected_access_profile_id;
+  std::string                               expected_access_profile_hash;
   std::array<ntn_onboard_cell_identity, 2> onboard_cells{};
   unsigned                                  max_l1_positions_per_cell = 128;
   unsigned                                  max_l1_positions_per_satellite = 256;
   unsigned                                  max_analog_ports_per_cell = 16;
   unsigned                                  max_analog_ports_per_satellite = 32;
+  unsigned                                  max_digital_ports_per_cell      = 64;
+  unsigned                                  max_digital_ports_per_satellite = 128;
   std::chrono::microseconds                 access_slot{10000};
   std::chrono::microseconds                 subvisit_duration{2500};
   std::chrono::microseconds                 max_ssb_interval{80000};
   std::chrono::microseconds                 max_prach_interval{640000};
   std::chrono::milliseconds                 activation_alignment{640};
+  unsigned                                  cell_access_slot_stride   = 2;
+  unsigned                                  subvisits_per_access_slot = 4;
+  std::array<ntn_access_calendar_phase, 3>  access_phases{{
+      {0x07ff, 0xf800},
+      {0x07ff, 0xf800},
+      {0x03ff, 0xfc00},
+  }};
 };
+
+/// Hash of the complete local access-profile parameters used to interpret a management-center plan.
+std::string compute_ntn_access_profile_hash(const ntn_onboard_position_plan_config& config);
 
 struct ntn_activated_position_plan {
   ntn_versioned_position_plan                 source;
