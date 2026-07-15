@@ -112,6 +112,7 @@ make_gnb_du_resource_coordination_response(const f1ap_message&      request,
                                            bool                     ntn_calendar_query_reports_zero_intents,
                                            bool                     ntn_calendar_prepare_rejects,
                                            bool                     ntn_calendar_prepare_reports_ready,
+                                           bool                     ntn_resource_audit_rejects,
                                            std::array<uint16_t, 2>& last_ntn_calendar_intents_per_cell)
 {
   record_ntn_calendar_prepare(request, last_ntn_calendar_intents_per_cell);
@@ -123,6 +124,8 @@ make_gnb_du_resource_coordination_response(const f1ap_message&      request,
       decode_f1ap_ntn_access_calendar_update(asn1_req->eutra_nr_cell_res_coordination_req_container);
   const std::optional<f1ap_ntn_sib19_broadcast_update> sib19_update =
       decode_f1ap_ntn_sib19_broadcast_update(asn1_req->eutra_nr_cell_res_coordination_req_container);
+  const std::optional<f1ap_ntn_resource_audit_request> audit_request =
+      decode_f1ap_ntn_resource_audit_request(asn1_req->eutra_nr_cell_res_coordination_req_container);
 
   byte_buffer response_container;
   if (calendar_update.has_value()) {
@@ -171,6 +174,14 @@ make_gnb_du_resource_coordination_response(const f1ap_message&      request,
                                : f1ap_ntn_sib19_broadcast_result_status::applied;
     result.reject_reason = sib19_update->operation == f1ap_ntn_sib19_broadcast_operation::clear ? "cleared" : "applied";
     response_container   = encode_f1ap_ntn_sib19_broadcast_result(result);
+  } else if (audit_request.has_value()) {
+    f1ap_ntn_resource_audit_result result;
+    result.generation_id             = audit_request->generation_id;
+    result.accepted                  = !ntn_resource_audit_rejects;
+    result.rnti_snapshot_complete    = false;
+    result.ue_slot_snapshot_complete = false;
+    result.reject_reason = ntn_resource_audit_rejects ? "rejected_by_mock_du" : "snapshot_unavailable_in_mock_du";
+    response_container               = encode_f1ap_ntn_resource_audit_result(result);
   } else {
     f1ap_ntn_rnti_lease_pool_result result;
     result.accepted      = false;
@@ -457,6 +468,7 @@ bool cu_cp_test_environment::wait_for_f1ap_tx_pdu(unsigned du_idx, f1ap_message&
                                                        params.ntn_calendar_query_reports_zero_intents,
                                                        params.ntn_calendar_prepare_rejects,
                                                        params.ntn_calendar_prepare_reports_ready,
+                                                       params.ntn_resource_audit_rejects,
                                                        last_ntn_calendar_intents_per_cell));
       }
       return false;
@@ -490,6 +502,7 @@ void cu_cp_test_environment::respond_to_f1ap_resource_coordination_request(unsig
                                                                       params.ntn_calendar_query_reports_zero_intents,
                                                                       params.ntn_calendar_prepare_rejects,
                                                                       params.ntn_calendar_prepare_reports_ready,
+                                                                      params.ntn_resource_audit_rejects,
                                                                       last_ntn_calendar_intents_per_cell));
 }
 
@@ -513,6 +526,7 @@ void cu_cp_test_environment::drain_f1ap_resource_coordination_requests(unsigned 
                                                        params.ntn_calendar_query_reports_zero_intents,
                                                        params.ntn_calendar_prepare_rejects,
                                                        params.ntn_calendar_prepare_reports_ready,
+                                                       params.ntn_resource_audit_rejects,
                                                        last_ntn_calendar_intents_per_cell));
       }
       return true;

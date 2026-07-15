@@ -41,7 +41,11 @@ public:
 
   void mark_rnti_lease_pool_sent_to_du(const ntn_rnti_lease_pool_update& update);
 
-  void mark_rnti_lease_pool_distribution_result(const ntn_rnti_lease_pool_update&        update,
+  void mark_rnti_lease_pool_ack_unknown(const ntn_rnti_lease_pool_update& update, const std::string& reason);
+
+  /// Applies a DU result only when its generation and lease set exactly match the sent update.
+  /// Returns false without changing lease states when the result is stale or malformed.
+  bool mark_rnti_lease_pool_distribution_result(const ntn_rnti_lease_pool_update&        update,
                                                 const f1ap_ntn_rnti_lease_pool_result& result);
 
   bool is_access_rnti_pool_ready(du_index_t              du_index,
@@ -54,6 +58,12 @@ public:
                                      pci_t                   pci,
                                      const std::string&      analog_beam_id,
                                      unsigned                low_watermark) const;
+
+  /// Returns true while an unused pool for the target is waiting for a conclusive DU result.
+  bool has_unresolved_rnti_lease_pool(du_index_t              du_index,
+                                      srsran::du_cell_index_t cell_index,
+                                      pci_t                   pci,
+                                      const std::string&      analog_beam_id) const;
 
   ntn_handover_target_rnti_reservation_result
   reserve_handover_target_rnti(ue_index_t              source_ue_index,
@@ -107,7 +117,7 @@ public:
 
   std::optional<f1ap_ntn_ul_slot_resource_request> get_cached_slot_request(ue_index_t ue_index) const;
 
-  ntn_resource_audit_decision handle_resource_audit_report(const ntn_resource_audit_report& report) const;
+  ntn_resource_audit_decision handle_resource_audit_report(const ntn_resource_audit_report& report);
 
   ntn_resource_repair_record queue_resource_repair(const ntn_resource_repair& repair, uint32_t generation_id);
 
@@ -124,8 +134,8 @@ public:
   ntn_beam_service_resource_snapshot get_snapshot() const;
 
 private:
-  // C-RNTI uniqueness is scoped to a serving cell. The two onboard cells are allowed to reuse the same PCI, so PCI
-  // alone cannot distinguish their independently distributed lease pools.
+  // Ownership remains cell-scoped because the two onboard cells may reuse PCI. However, the current DU RNTI table is
+  // keyed only by C-RNTI, so lease values are kept unique across all cells of one DU and may be reused only across DUs.
   using rnti_key = std::tuple<du_index_t, srsran::du_cell_index_t, pci_t, rnti_t>;
   using repair_key = std::tuple<ntn_resource_repair_action,
                                 ue_index_t,

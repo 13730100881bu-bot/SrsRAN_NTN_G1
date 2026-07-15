@@ -86,6 +86,7 @@ struct cu_cp_test_env_params {
   bool                                                   ntn_calendar_query_reports_zero_intents = false;
   bool                                                   ntn_calendar_prepare_rejects            = false;
   bool                                                   ntn_calendar_prepare_reports_ready      = false;
+  bool                                                   ntn_resource_audit_rejects              = false;
 };
 
 class cu_cp_test_environment

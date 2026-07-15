@@ -30,8 +30,7 @@ static bool is_service_state_slot_eligible(const std::string& state)
   return state == "binding_pending" || state == "service_bound";
 }
 
-bool ntn_beam_service_resource_manager::is_valid_access_ownership_update(
-    const ntn_access_rnti_ownership_update& update)
+bool ntn_beam_service_resource_manager::is_valid_access_ownership_update(const ntn_access_rnti_ownership_update& update)
 {
   return update.ue_index != ue_index_t::invalid && update.du_index != du_index_t::invalid &&
          update.cell_index != srsran::INVALID_DU_CELL_INDEX && update.pci != INVALID_PCI &&
@@ -54,11 +53,17 @@ bool ntn_beam_service_resource_manager::are_slot_requests_equal(const f1ap_ntn_u
 ntn_beam_service_resource_manager::repair_key
 ntn_beam_service_resource_manager::make_repair_key(const ntn_resource_repair& repair)
 {
-  return {repair.action, repair.ue_index, repair.du_index, repair.cell_index, repair.pci, repair.rnti, repair.analog_beam_id};
+  return {repair.action,
+          repair.ue_index,
+          repair.du_index,
+          repair.cell_index,
+          repair.pci,
+          repair.rnti,
+          repair.analog_beam_id};
 }
 
-ntn_resource_repair_record
-ntn_beam_service_resource_manager::make_repair_record(const ntn_resource_repair& repair, uint32_t generation_id)
+ntn_resource_repair_record ntn_beam_service_resource_manager::make_repair_record(const ntn_resource_repair& repair,
+                                                                                 uint32_t generation_id)
 {
   ntn_resource_repair_record record;
   record.action         = repair.action;
@@ -84,8 +89,8 @@ void ntn_beam_service_resource_manager::set_authoritative_rnti_lease_validation_
   authoritative_rnti_lease_validation_enabled = enabled;
 }
 
-ntn_rnti_lease_pool_update_result ntn_beam_service_resource_manager::reserve_rnti_leases(
-    const ntn_rnti_lease_pool_update& update)
+ntn_rnti_lease_pool_update_result
+ntn_beam_service_resource_manager::reserve_rnti_leases(const ntn_rnti_lease_pool_update& update)
 {
   if (!is_valid_lease_pool_update(update)) {
     return {};
@@ -101,8 +106,21 @@ ntn_rnti_lease_pool_update_result ntn_beam_service_resource_manager::reserve_rnt
       return result;
     }
     const rnti_key key{update.du_index, update.cell_index, update.pci, rnti};
+    const bool used_in_du_lease_namespace = std::any_of(rnti_leases_by_key.begin(),
+                                                        rnti_leases_by_key.end(),
+                                                        [du_index = update.du_index, rnti](const auto& entry) {
+                                                          return std::get<0>(entry.first) == du_index &&
+                                                                 std::get<3>(entry.first) == rnti;
+                                                        });
+    const bool used_in_du_owner_namespace = std::any_of(access_owner_by_rnti.begin(),
+                                                        access_owner_by_rnti.end(),
+                                                        [du_index = update.du_index, rnti](const auto& entry) {
+                                                          return std::get<0>(entry.first) == du_index &&
+                                                                 std::get<3>(entry.first) == rnti;
+                                                        });
     if (!leases_in_update.emplace(rnti).second || rnti_leases_by_key.find(key) != rnti_leases_by_key.end() ||
-        access_owner_by_rnti.find(key) != access_owner_by_rnti.end()) {
+        access_owner_by_rnti.find(key) != access_owner_by_rnti.end() || used_in_du_lease_namespace ||
+        used_in_du_owner_namespace) {
       result.accepted = false;
       result.state    = "conflict";
       result.reason   = "duplicate_lease";
@@ -136,37 +154,63 @@ void ntn_beam_service_resource_manager::mark_rnti_lease_pool_sent_to_du(const nt
 {
   for (rnti_t rnti : update.leases) {
     auto lease_it = rnti_leases_by_key.find(rnti_key{update.du_index, update.cell_index, update.pci, rnti});
-    if (lease_it == rnti_leases_by_key.end()) {
+    if (lease_it == rnti_leases_by_key.end() || lease_it->second.generation_id != update.generation_id ||
+        lease_it->second.state != "reserved") {
       continue;
     }
-    lease_it->second.generation_id       = update.generation_id;
     lease_it->second.distribution_state  = "sent_to_du";
     lease_it->second.distribution_reason = "gnb_du_resource_coordination_request";
   }
 }
 
-void ntn_beam_service_resource_manager::mark_rnti_lease_pool_distribution_result(
+void ntn_beam_service_resource_manager::mark_rnti_lease_pool_ack_unknown(const ntn_rnti_lease_pool_update& update,
+                                                                         const std::string& reason)
+{
+  for (rnti_t rnti : update.leases) {
+    auto lease_it = rnti_leases_by_key.find(rnti_key{update.du_index, update.cell_index, update.pci, rnti});
+    if (lease_it == rnti_leases_by_key.end() || lease_it->second.generation_id != update.generation_id ||
+        lease_it->second.state != "reserved" || lease_it->second.distribution_state != "sent_to_du") {
+      continue;
+    }
+    lease_it->second.distribution_reason = reason.empty() ? "ack_unknown" : "ack_unknown:" + reason;
+  }
+}
+
+bool ntn_beam_service_resource_manager::mark_rnti_lease_pool_distribution_result(
     const ntn_rnti_lease_pool_update&        update,
     const f1ap_ntn_rnti_lease_pool_result& result)
 {
+  if (result.generation_id == 0 || result.generation_id != update.generation_id ||
+      (result.accepted && !result.rejected_leases.empty()) || (!result.accepted && !result.accepted_leases.empty())) {
+    return false;
+  }
+
+  const std::set<rnti_t> update_leases(update.leases.begin(), update.leases.end());
+  std::set<rnti_t>       result_leases;
+  const auto             validate_result_lease = [&](rnti_t rnti) {
+    if (update_leases.count(rnti) == 0 || !result_leases.emplace(rnti).second) {
+      return false;
+    }
+    const auto lease_it = rnti_leases_by_key.find(rnti_key{update.du_index, update.cell_index, update.pci, rnti});
+    return lease_it != rnti_leases_by_key.end() && lease_it->second.generation_id == update.generation_id;
+  };
+  if (!std::all_of(result.accepted_leases.begin(), result.accepted_leases.end(), validate_result_lease) ||
+      !std::all_of(result.rejected_leases.begin(), result.rejected_leases.end(), validate_result_lease) ||
+      result_leases.size() != update_leases.size()) {
+    return false;
+  }
+
   for (rnti_t rnti : result.accepted_leases) {
     auto lease_it = rnti_leases_by_key.find(rnti_key{update.du_index, update.cell_index, update.pci, rnti});
-    if (lease_it == rnti_leases_by_key.end()) {
-      continue;
-    }
-    lease_it->second.generation_id       = result.generation_id;
     lease_it->second.distribution_state  = "applied_by_du";
     lease_it->second.distribution_reason = result.reject_reason.empty() ? "du_ack" : result.reject_reason;
   }
   for (rnti_t rnti : result.rejected_leases) {
     auto lease_it = rnti_leases_by_key.find(rnti_key{update.du_index, update.cell_index, update.pci, rnti});
-    if (lease_it == rnti_leases_by_key.end()) {
-      continue;
-    }
-    lease_it->second.generation_id       = result.generation_id;
     lease_it->second.distribution_state  = "rejected_by_du";
     lease_it->second.distribution_reason = result.reject_reason.empty() ? "du_reject" : result.reject_reason;
   }
+  return true;
 }
 
 bool ntn_beam_service_resource_manager::is_access_rnti_pool_ready(du_index_t              du_index,
@@ -197,8 +241,21 @@ bool ntn_beam_service_resource_manager::rnti_pool_below_low_watermark(du_index_t
   return nof_available_leases <= low_watermark;
 }
 
-ntn_handover_target_rnti_reservation_result ntn_beam_service_resource_manager::reserve_handover_target_rnti(
-    ue_index_t              source_ue_index,
+bool ntn_beam_service_resource_manager::has_unresolved_rnti_lease_pool(du_index_t              du_index,
+                                                                       srsran::du_cell_index_t cell_index,
+                                                                       pci_t                   pci,
+                                                                       const std::string&      analog_beam_id) const
+{
+  return std::any_of(rnti_leases_by_key.begin(), rnti_leases_by_key.end(), [&](const auto& entry) {
+    const ntn_rnti_lease& lease = entry.second;
+    return lease.du_index == du_index && lease.cell_index == cell_index && lease.pci == pci &&
+           lease.analog_beam_id == analog_beam_id && lease.state == "reserved" &&
+           (lease.distribution_state == "desired" || lease.distribution_state == "sent_to_du");
+  });
+}
+
+ntn_handover_target_rnti_reservation_result
+ntn_beam_service_resource_manager::reserve_handover_target_rnti(ue_index_t              source_ue_index,
     du_index_t              target_du_index,
     srsran::du_cell_index_t target_cell_index,
     pci_t                   target_pci,
@@ -318,8 +375,8 @@ unsigned ntn_beam_service_resource_manager::expire_rnti_leases_for_analog_beam(c
   return nof_expired;
 }
 
-ntn_access_rnti_ownership_result ntn_beam_service_resource_manager::validate_access_rnti_ownership(
-    const ntn_access_rnti_ownership_update& update) const
+ntn_access_rnti_ownership_result
+ntn_beam_service_resource_manager::validate_access_rnti_ownership(const ntn_access_rnti_ownership_update& update) const
 {
   if (!is_valid_access_ownership_update(update)) {
     return {};
@@ -343,7 +400,7 @@ ntn_access_rnti_ownership_result ntn_beam_service_resource_manager::validate_acc
     if (lease.distribution_state != "applied_by_du") {
       return {false, "conflict", "rnti_pool_unavailable"};
     }
-    if (lease.state != "reserved" && lease.state != "offered_in_rar") {
+    if (lease.state != "reserved" && lease.state != "offered_in_rar" && lease.state != "consumed_by_du") {
       return {false, "conflict", "duplicate_rnti"};
     }
   }
@@ -353,12 +410,13 @@ ntn_access_rnti_ownership_result ntn_beam_service_resource_manager::validate_acc
     return {false, "conflict", "duplicate_crnti"};
   }
 
-  return lease_it != rnti_leases_by_key.end() ? ntn_access_rnti_ownership_result{true, "initial_ul_seen", "lease_validated"}
+  return lease_it != rnti_leases_by_key.end()
+             ? ntn_access_rnti_ownership_result{true, "initial_ul_seen", "lease_validated"}
                                               : ntn_access_rnti_ownership_result{true, "observed", "access_active"};
 }
 
-ntn_access_rnti_ownership_result ntn_beam_service_resource_manager::register_access_rnti_ownership(
-    const ntn_access_rnti_ownership_update& update)
+ntn_access_rnti_ownership_result
+ntn_beam_service_resource_manager::register_access_rnti_ownership(const ntn_access_rnti_ownership_update& update)
 {
   if (!is_valid_access_ownership_update(update)) {
     return {};
@@ -409,7 +467,7 @@ ntn_access_rnti_ownership_result ntn_beam_service_resource_manager::register_acc
     if (lease.distribution_state != "applied_by_du") {
       return make_rejected_access("rnti_pool_unavailable");
     }
-    if (lease.state != "reserved" && lease.state != "offered_in_rar") {
+    if (lease.state != "reserved" && lease.state != "offered_in_rar" && lease.state != "consumed_by_du") {
       return make_rejected_access("duplicate_rnti");
     }
   }
@@ -519,14 +577,16 @@ ntn_slot_resource_update_decision ntn_beam_service_resource_manager::update_digi
     const ntn_beam_placement_plan&               plan)
 {
   if (update.ue_index == ue_index_t::invalid || update.service_du_index == du_index_t::invalid ||
-      !update.has_service_nci || update.digital_beam_id.empty() || !is_service_state_slot_eligible(update.service_state)) {
+      !update.has_service_nci || update.digital_beam_id.empty() ||
+      !is_service_state_slot_eligible(update.service_state)) {
     return clear_digital_service_slot_intent(update.ue_index, "not_service_bound");
   }
 
-  const bool has_paired_uplink_resource =
-      !update.uplink_resource_beam_id.empty() && update.uplink_resource_du_index != du_index_t::invalid &&
+  const bool       has_paired_uplink_resource = !update.uplink_resource_beam_id.empty() &&
+                                                update.uplink_resource_du_index != du_index_t::invalid &&
       update.has_uplink_resource_nci;
-  const du_index_t       slot_du_index = has_paired_uplink_resource ? update.uplink_resource_du_index : update.service_du_index;
+  const du_index_t slot_du_index =
+      has_paired_uplink_resource ? update.uplink_resource_du_index : update.service_du_index;
   const nr_cell_identity slot_nci      = has_paired_uplink_resource ? update.uplink_resource_nci : update.service_nci;
   const std::optional<f1ap_ntn_ul_slot_resource_request> slot_request =
       make_slot_request_for_nci(slot_nci, slot_du_index, plan);
@@ -576,7 +636,9 @@ ntn_slot_resource_update_decision ntn_beam_service_resource_manager::update_digi
 }
 
 ntn_slot_resource_update_decision ntn_beam_service_resource_manager::set_digital_slot_intent_from_request(
-    ue_index_t ue_index, const f1ap_ntn_ul_slot_resource_request& request, std::string reason)
+    ue_index_t                               ue_index,
+    const f1ap_ntn_ul_slot_resource_request& request,
+    std::string                              reason)
 {
   if (ue_index == ue_index_t::invalid || is_empty(request)) {
     return clear_digital_service_slot_intent(ue_index, "empty_slot_request");
@@ -676,8 +738,8 @@ void ntn_beam_service_resource_manager::restore_or_clear_failed_slot_update(
   }
 }
 
-void ntn_beam_service_resource_manager::mark_slot_update_sent_to_du(
-    ue_index_t ue_index, const f1ap_ntn_ul_slot_resource_request& request)
+void ntn_beam_service_resource_manager::mark_slot_update_sent_to_du(ue_index_t                               ue_index,
+                                                                    const f1ap_ntn_ul_slot_resource_request& request)
 {
   auto intent_it = digital_slot_intent_by_ue.find(ue_index);
   if (intent_it == digital_slot_intent_by_ue.end()) {
@@ -700,8 +762,7 @@ void ntn_beam_service_resource_manager::mark_slot_update_result(
   }
 
   if (result.accepted) {
-    const f1ap_ntn_ul_slot_resource_request applied_request =
-        result.applied_request.value_or(attempted_request);
+    const f1ap_ntn_ul_slot_resource_request applied_request = result.applied_request.value_or(attempted_request);
     if (is_empty(applied_request)) {
       cached_slot_requests_by_ue.erase(ue_index);
       applied_slot_requests_by_ue.erase(ue_index);
@@ -736,8 +797,8 @@ void ntn_beam_service_resource_manager::mark_slot_update_result(
   }
 }
 
-void ntn_beam_service_resource_manager::mark_slot_update_applied(
-    ue_index_t ue_index, const f1ap_ntn_ul_slot_resource_request& request)
+void ntn_beam_service_resource_manager::mark_slot_update_applied(ue_index_t                               ue_index,
+                                                                 const f1ap_ntn_ul_slot_resource_request& request)
 {
   if (is_empty(request)) {
     cached_slot_requests_by_ue.erase(ue_index);
@@ -781,7 +842,7 @@ ntn_beam_service_resource_manager::get_cached_slot_request(ue_index_t ue_index) 
 }
 
 ntn_resource_audit_decision
-ntn_beam_service_resource_manager::handle_resource_audit_report(const ntn_resource_audit_report& report) const
+ntn_beam_service_resource_manager::handle_resource_audit_report(const ntn_resource_audit_report& report)
 {
   ntn_resource_audit_decision decision;
   decision.generation_id = report.generation_id;
@@ -799,31 +860,127 @@ ntn_beam_service_resource_manager::handle_resource_audit_report(const ntn_resour
     return decision;
   }
 
-  const auto du_has_applied_rnti = [&report](rnti_t rnti) {
-    return std::find_if(report.rnti_leases.begin(), report.rnti_leases.end(), [rnti](const auto& lease) {
-             return lease.rnti == rnti && lease.distribution_state == "applied_by_du";
-           }) != report.rnti_leases.end();
+  const auto resolve_recovered_audit_rejection = [&]() {
+    if ((!report.rnti_snapshot_complete && !report.ue_slot_snapshot_complete) ||
+        std::any_of(decision.repairs.begin(), decision.repairs.end(), [](const ntn_resource_repair& repair) {
+          return repair.action == ntn_resource_repair_action::mark_resource_conflict;
+        })) {
+      return;
+    }
+    for (auto& entry : resource_repairs_by_key) {
+      ntn_resource_repair_record& record = entry.second;
+      const bool generic_audit_rejection =
+          record.action == ntn_resource_repair_action::mark_resource_conflict &&
+          record.state == "blocked_conflict" && record.du_index == report.du_index &&
+          record.cell_index == report.cell_index && record.pci == report.pci &&
+          record.ue_index == ue_index_t::invalid && record.rnti == rnti_t::INVALID_RNTI &&
+          record.analog_beam_id.empty();
+      if (generic_audit_rejection) {
+        record.generation_id = report.generation_id;
+        record.state         = "resolved";
+        record.reason        = "du_audit_recovered";
+      }
+    }
   };
 
-  std::map<std::string, ntn_resource_repair> rnti_repairs_by_analog;
-  for (const auto& entry : rnti_leases_by_key) {
-    const ntn_rnti_lease& lease = entry.second;
-    if (lease.du_index != report.du_index || lease.cell_index != report.cell_index || lease.pci != report.pci ||
-        lease.distribution_state != "applied_by_du" || du_has_applied_rnti(lease.rnti)) {
-      continue;
+  if (report.rnti_snapshot_complete) {
+    bool                                                  rnti_snapshot_valid = true;
+    std::map<rnti_t, const ntn_resource_audit_rnti_lease*> observed_rntis;
+    for (const ntn_resource_audit_rnti_lease& du_lease : report.rnti_leases) {
+      const bool supported_state =
+          (du_lease.state == "pending" && du_lease.distribution_state == "applied_by_du") ||
+          (du_lease.state == "consumed_by_mac" && du_lease.distribution_state == "applied_by_du") ||
+          (du_lease.state == "expired" && du_lease.distribution_state == "expired_by_du");
+      const bool duplicate_rnti = !observed_rntis.emplace(du_lease.rnti, &du_lease).second;
+      const auto local_lease =
+          rnti_leases_by_key.find(rnti_key{report.du_index, report.cell_index, report.pci, du_lease.rnti});
+      const bool known_rnti = local_lease != rnti_leases_by_key.end();
+      const bool generation_matches =
+          known_rnti && du_lease.generation_id != 0 && du_lease.generation_id == local_lease->second.generation_id;
+      if (duplicate_rnti || !supported_state || !known_rnti || !generation_matches) {
+        ntn_resource_repair repair;
+        repair.action     = ntn_resource_repair_action::mark_resource_conflict;
+        repair.du_index   = report.du_index;
+        repair.cell_index = report.cell_index;
+        repair.pci        = report.pci;
+        repair.rnti       = du_lease.rnti;
+        repair.reason     = duplicate_rnti     ? "duplicate_du_rnti_snapshot"
+                            : !supported_state ? "unsupported_du_rnti_snapshot_state"
+                            : !known_rnti      ? "unknown_du_rnti_snapshot"
+                                               : "stale_du_rnti_snapshot_generation";
+        decision.repairs.push_back(std::move(repair));
+        rnti_snapshot_valid = false;
+        break;
+      }
     }
 
-    ntn_resource_repair& repair = rnti_repairs_by_analog[lease.analog_beam_id];
-    repair.action              = ntn_resource_repair_action::resend_rnti_lease_pool;
-    repair.du_index            = lease.du_index;
-    repair.cell_index          = lease.cell_index;
-    repair.pci                 = lease.pci;
-    repair.analog_beam_id      = lease.analog_beam_id;
-    repair.reason              = "du_missing_applied_rnti_pool";
-    repair.rnti_leases.push_back(lease.rnti);
+    if (rnti_snapshot_valid) {
+      std::map<std::pair<std::string, uint32_t>, ntn_resource_repair> rnti_repairs_by_analog_generation;
+      for (auto& entry : rnti_leases_by_key) {
+        ntn_rnti_lease& lease = entry.second;
+        if (lease.du_index != report.du_index || lease.cell_index != report.cell_index || lease.pci != report.pci) {
+          continue;
+        }
+
+        const auto du_lease_it = observed_rntis.find(lease.rnti);
+        const auto* du_lease   = du_lease_it != observed_rntis.end() ? du_lease_it->second : nullptr;
+        if (du_lease != nullptr) {
+          if (du_lease->state == "pending" && lease.state == "reserved" &&
+              (lease.distribution_state == "sent_to_du" || lease.distribution_state == "applied_by_du")) {
+            lease.distribution_state  = "applied_by_du";
+            lease.distribution_reason = "du_audit_snapshot";
+          } else if (du_lease->state == "consumed_by_mac" &&
+                     (lease.state == "reserved" || lease.state == "offered_in_rar" ||
+                      lease.state == "consumed_by_du")) {
+            lease.state               = "consumed_by_du";
+            lease.reason              = "du_audit_consumed_by_mac";
+            lease.distribution_state  = "applied_by_du";
+            lease.distribution_reason = "du_audit_snapshot";
+          } else if (du_lease->state == "expired" && (lease.state == "reserved" || lease.state == "offered_in_rar" ||
+                                                      lease.state == "consumed_by_du")) {
+            lease.state               = "expired";
+            lease.reason              = "du_lease_expired";
+            lease.distribution_state  = "expired_by_du";
+            lease.distribution_reason = "du_audit_snapshot";
+          }
+        }
+
+        // Only an unused lease is expected to remain in the MAC pending pool. Once consumed, observed on Initial UL,
+        // committed or expired, it must never be reinserted by the audit repair loop.
+        const bool ack_unknown = lease.distribution_state == "sent_to_du" &&
+                                 lease.distribution_reason.rfind("ack_unknown", 0) == 0;
+        if (lease.state != "reserved" || (lease.distribution_state != "applied_by_du" && !ack_unknown)) {
+          continue;
+        }
+        const bool du_has_pending_lease = du_lease != nullptr && du_lease->state == "pending" &&
+                                          du_lease->distribution_state == "applied_by_du";
+        if (du_has_pending_lease) {
+          continue;
+        }
+
+        ntn_resource_repair& repair =
+            rnti_repairs_by_analog_generation[{lease.analog_beam_id, lease.generation_id}];
+        repair.action                   = ntn_resource_repair_action::resend_rnti_lease_pool;
+        repair.du_index                 = lease.du_index;
+        repair.cell_index               = lease.cell_index;
+        repair.pci                      = lease.pci;
+        repair.analog_beam_id           = lease.analog_beam_id;
+        repair.reason                   = ack_unknown ? "du_missing_ack_unknown_rnti_pool" :
+                                                        "du_missing_applied_rnti_pool";
+        repair.rnti_lease_generation_id = lease.generation_id;
+        repair.rnti_leases.push_back(lease.rnti);
+      }
+      for (auto& repair : rnti_repairs_by_analog_generation) {
+        decision.repairs.push_back(std::move(repair.second));
+      }
+    }
   }
-  for (auto& repair : rnti_repairs_by_analog) {
-    decision.repairs.push_back(std::move(repair.second));
+
+  if (!report.ue_slot_snapshot_complete) {
+    decision.nof_mismatches = decision.repairs.size();
+    decision.nof_repairs    = decision.repairs.size();
+    resolve_recovered_audit_rejection();
+    return decision;
   }
 
   const auto du_has_matching_slot = [&report](ue_index_t                                      ue_index,
@@ -913,11 +1070,12 @@ ntn_beam_service_resource_manager::handle_resource_audit_report(const ntn_resour
 
   decision.nof_mismatches = decision.repairs.size();
   decision.nof_repairs    = decision.repairs.size();
+  resolve_recovered_audit_rejection();
   return decision;
 }
 
-ntn_resource_repair_record
-ntn_beam_service_resource_manager::queue_resource_repair(const ntn_resource_repair& repair, uint32_t generation_id)
+ntn_resource_repair_record ntn_beam_service_resource_manager::queue_resource_repair(const ntn_resource_repair& repair,
+                                                                                    uint32_t generation_id)
 {
   static constexpr unsigned max_repair_retries = 1;
 
@@ -1067,6 +1225,8 @@ ntn_beam_service_resource_snapshot ntn_beam_service_resource_manager::get_snapsh
       }
     } else if (entry.second.state == "offered_in_rar") {
       ++snapshot.nof_rnti_leases_offered_in_rar;
+    } else if (entry.second.state == "consumed_by_du") {
+      ++snapshot.nof_rnti_leases_consumed_by_du;
     } else if (entry.second.state == "initial_ul_seen") {
       ++snapshot.nof_rnti_leases_initial_ul_seen;
     } else if (entry.second.state == "committed") {

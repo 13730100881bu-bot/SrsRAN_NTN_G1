@@ -486,6 +486,7 @@ struct cu_cp_ntn_runtime_status {
   unsigned nof_ntn_rnti_leases_applied_by_du       = 0;
   unsigned nof_ntn_rnti_leases_rejected_by_du      = 0;
   unsigned nof_ntn_rnti_leases_offered_in_rar      = 0;
+  unsigned nof_ntn_rnti_leases_consumed_by_du      = 0;
   unsigned nof_ntn_rnti_leases_initial_ul_seen     = 0;
   unsigned nof_ntn_rnti_leases_committed           = 0;
   unsigned nof_ntn_rnti_leases_released            = 0;
@@ -504,6 +505,9 @@ struct cu_cp_ntn_runtime_status {
   unsigned nof_ntn_resource_audit_mismatches        = 0;
   unsigned nof_ntn_resource_audit_repair_actions    = 0;
   unsigned nof_ntn_resource_audit_failures          = 0;
+  unsigned nof_ntn_resource_audit_rnti_incomplete   = 0;
+  unsigned nof_ntn_resource_audit_ue_slot_incomplete = 0;
+  std::string last_ntn_resource_audit_reason        = "none";
   unsigned nof_ntn_service_pair_resource_audit_targets    = 0;
   unsigned nof_ntn_service_pair_resource_audit_mismatches = 0;
   unsigned nof_ntn_service_pair_resource_audit_repairs    = 0;

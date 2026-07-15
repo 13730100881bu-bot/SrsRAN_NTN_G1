@@ -123,9 +123,11 @@ TEST(ntn_beam_service_resource_manager, validates_access_rnti_against_authoritat
   lease_pool.cell_index     = to_du_cell_index(1);
   lease_pool.pci            = pci_t{1};
   lease_pool.analog_beam_id = "ANALOG-ACCESS-001";
+  lease_pool.generation_id  = 1;
   lease_pool.leases.push_back(to_rnti(0x4701));
   ASSERT_TRUE(manager.reserve_rnti_leases(lease_pool).accepted);
   f1ap_ntn_rnti_lease_pool_result lease_result;
+  lease_result.generation_id   = lease_pool.generation_id;
   lease_result.accepted        = true;
   lease_result.accepted_leases = lease_pool.leases;
   manager.mark_rnti_lease_pool_distribution_result(lease_pool, lease_result);
@@ -156,7 +158,7 @@ TEST(ntn_beam_service_resource_manager, validates_access_rnti_against_authoritat
   EXPECT_EQ(snapshot.nof_rnti_leases_committed, 1U);
 }
 
-TEST(ntn_beam_service_resource_manager, tracks_rnti_lease_pool_distribution_to_du)
+TEST(ntn_beam_service_resource_manager, malformed_rnti_ack_is_rejected_atomically_and_can_be_repaired)
 {
   ntn_beam_service_resource_manager manager;
 
@@ -184,10 +186,96 @@ TEST(ntn_beam_service_resource_manager, tracks_rnti_lease_pool_distribution_to_d
   result.accepted_leases  = {to_rnti(0x4701)};
   result.rejected_leases  = {to_rnti(0x4702)};
 
-  manager.mark_rnti_lease_pool_distribution_result(lease_pool, result);
+  EXPECT_FALSE(manager.mark_rnti_lease_pool_distribution_result(lease_pool, result));
   snapshot = manager.get_snapshot();
-  EXPECT_EQ(snapshot.nof_rnti_leases_applied_by_du, 1U);
-  EXPECT_EQ(snapshot.nof_rnti_leases_rejected_by_du, 1U);
+  EXPECT_EQ(snapshot.nof_rnti_leases_sent_to_du, 2U);
+  EXPECT_EQ(snapshot.nof_rnti_leases_applied_by_du, 0U);
+  EXPECT_EQ(snapshot.nof_rnti_leases_rejected_by_du, 0U);
+
+  result.accepted        = true;
+  result.accepted_leases = {to_rnti(0x4701), to_rnti(0x4701)};
+  result.rejected_leases.clear();
+  EXPECT_FALSE(manager.mark_rnti_lease_pool_distribution_result(lease_pool, result));
+  manager.mark_rnti_lease_pool_ack_unknown(lease_pool, "invalid_du_result");
+
+  ntn_resource_audit_report report;
+  report.du_index               = lease_pool.du_index;
+  report.cell_index             = lease_pool.cell_index;
+  report.pci                    = lease_pool.pci;
+  report.generation_id          = 88;
+  report.rnti_snapshot_complete = true;
+  const ntn_resource_audit_decision decision = manager.handle_resource_audit_report(report);
+  ASSERT_EQ(decision.repairs.size(), 1U);
+  EXPECT_EQ(decision.repairs.front().rnti_lease_generation_id, lease_pool.generation_id);
+  EXPECT_EQ(decision.repairs.front().rnti_leases, lease_pool.leases);
+
+  result.accepted = false;
+  result.accepted_leases.clear();
+  result.rejected_leases = lease_pool.leases;
+  EXPECT_TRUE(manager.mark_rnti_lease_pool_distribution_result(lease_pool, result));
+  snapshot = manager.get_snapshot();
+  EXPECT_EQ(snapshot.nof_rnti_leases_sent_to_du, 0U);
+  EXPECT_EQ(snapshot.nof_rnti_leases_rejected_by_du, 2U);
+}
+
+TEST(ntn_beam_service_resource_manager, stale_rnti_ack_generation_does_not_override_in_flight_pool)
+{
+  ntn_beam_service_resource_manager manager;
+  const ntn_rnti_lease_pool_update  lease_pool = make_target_handover_lease_pool();
+  ASSERT_TRUE(manager.reserve_rnti_leases(lease_pool).accepted);
+  manager.mark_rnti_lease_pool_sent_to_du(lease_pool);
+
+  f1ap_ntn_rnti_lease_pool_result stale_result;
+  stale_result.generation_id   = lease_pool.generation_id + 1;
+  stale_result.accepted        = true;
+  stale_result.accepted_leases = lease_pool.leases;
+  EXPECT_FALSE(manager.mark_rnti_lease_pool_distribution_result(lease_pool, stale_result));
+
+  const auto snapshot = manager.get_snapshot();
+  EXPECT_EQ(snapshot.nof_rnti_leases_sent_to_du, lease_pool.leases.size());
+  EXPECT_EQ(snapshot.nof_rnti_leases_applied_by_du, 0U);
+  for (const auto& lease : snapshot.rnti_leases) {
+    EXPECT_EQ(lease.generation_id, lease_pool.generation_id);
+  }
+}
+
+TEST(ntn_beam_service_resource_manager, in_flight_pool_waits_for_ack_but_ack_unknown_pool_uses_same_generation_repair)
+{
+  ntn_beam_service_resource_manager manager;
+  const ntn_rnti_lease_pool_update  lease_pool = make_target_handover_lease_pool();
+  ASSERT_TRUE(manager.reserve_rnti_leases(lease_pool).accepted);
+  EXPECT_TRUE(manager.has_unresolved_rnti_lease_pool(
+      lease_pool.du_index, lease_pool.cell_index, lease_pool.pci, lease_pool.analog_beam_id));
+  manager.mark_rnti_lease_pool_sent_to_du(lease_pool);
+
+  ntn_resource_audit_report report;
+  report.du_index               = lease_pool.du_index;
+  report.cell_index             = lease_pool.cell_index;
+  report.pci                    = lease_pool.pci;
+  report.generation_id          = 100;
+  report.rnti_snapshot_complete = true;
+
+  EXPECT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+
+  manager.mark_rnti_lease_pool_ack_unknown(lease_pool, "du_response_missing");
+  EXPECT_TRUE(manager.has_unresolved_rnti_lease_pool(
+      lease_pool.du_index, lease_pool.cell_index, lease_pool.pci, lease_pool.analog_beam_id));
+  const ntn_resource_audit_decision repair_decision = manager.handle_resource_audit_report(report);
+  ASSERT_EQ(repair_decision.repairs.size(), 1U);
+  EXPECT_EQ(repair_decision.repairs.front().action, ntn_resource_repair_action::resend_rnti_lease_pool);
+  EXPECT_EQ(repair_decision.repairs.front().reason, "du_missing_ack_unknown_rnti_pool");
+  EXPECT_EQ(repair_decision.repairs.front().rnti_lease_generation_id, lease_pool.generation_id);
+  EXPECT_EQ(repair_decision.repairs.front().rnti_leases, lease_pool.leases);
+
+  for (rnti_t rnti : lease_pool.leases) {
+    report.rnti_leases.push_back({rnti, "pending", "applied_by_du", lease_pool.generation_id});
+  }
+  EXPECT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+  const auto snapshot = manager.get_snapshot();
+  EXPECT_EQ(snapshot.nof_rnti_leases_sent_to_du, 0U);
+  EXPECT_EQ(snapshot.nof_rnti_leases_applied_by_du, lease_pool.leases.size());
+  EXPECT_FALSE(manager.has_unresolved_rnti_lease_pool(
+      lease_pool.du_index, lease_pool.cell_index, lease_pool.pci, lease_pool.analog_beam_id));
 }
 
 TEST(ntn_beam_service_resource_manager, access_pool_is_ready_only_after_du_applies_usable_lease)
@@ -329,7 +417,7 @@ TEST(ntn_beam_service_resource_manager, low_watermark_counts_only_applied_unused
   EXPECT_TRUE(manager.rnti_pool_below_low_watermark(uint_to_du_index(0), to_du_cell_index(1), pci_t{1}, "ANALOG-ACCESS-001", 1));
 }
 
-TEST(ntn_beam_service_resource_manager, shared_pci_cells_can_reuse_same_rnti_without_cross_cell_conflict)
+TEST(ntn_beam_service_resource_manager, same_du_cells_cannot_reuse_rnti_even_when_pci_is_shared)
 {
   ntn_beam_service_resource_manager manager;
   manager.set_authoritative_rnti_lease_validation_enabled(true);
@@ -347,36 +435,29 @@ TEST(ntn_beam_service_resource_manager, shared_pci_cells_can_reuse_same_rnti_wit
   second_pool.cell_index                 = to_du_cell_index(2);
   second_pool.analog_beam_id             = "ANALOG-ACCESS-002";
   second_pool.generation_id              = 102;
-  apply_lease_pool(manager, second_pool);
+  const ntn_rnti_lease_pool_update_result result = manager.reserve_rnti_leases(second_pool);
+  EXPECT_FALSE(result.accepted);
+  EXPECT_EQ(result.state, "conflict");
+  EXPECT_EQ(result.reason, "duplicate_lease");
+}
 
-  EXPECT_TRUE(manager
-                  .mark_rnti_offered_in_rar(
-                      first_pool.du_index, first_pool.cell_index, first_pool.pci, first_pool.leases.front())
-                  .accepted);
-  EXPECT_TRUE(manager
-                  .mark_rnti_offered_in_rar(
-                      second_pool.du_index, second_pool.cell_index, second_pool.pci, second_pool.leases.front())
-                  .accepted);
+TEST(ntn_beam_service_resource_manager, different_dus_can_reuse_same_cell_scoped_rnti)
+{
+  ntn_beam_service_resource_manager manager;
 
-  ntn_access_rnti_ownership_update first_ownership;
-  first_ownership.ue_index       = uint_to_ue_index(1);
-  first_ownership.du_index       = first_pool.du_index;
-  first_ownership.cell_index     = first_pool.cell_index;
-  first_ownership.pci            = first_pool.pci;
-  first_ownership.rnti           = first_pool.leases.front();
-  first_ownership.analog_beam_id = first_pool.analog_beam_id;
-  ASSERT_TRUE(manager.register_access_rnti_ownership(first_ownership).accepted);
+  ntn_rnti_lease_pool_update first_pool;
+  first_pool.du_index       = uint_to_du_index(0);
+  first_pool.cell_index     = to_du_cell_index(1);
+  first_pool.pci            = pci_t{101};
+  first_pool.analog_beam_id = "ANALOG-ACCESS-001";
+  first_pool.generation_id  = 101;
+  first_pool.leases         = {to_rnti(0x4701)};
+  ASSERT_TRUE(manager.reserve_rnti_leases(first_pool).accepted);
 
-  ntn_access_rnti_ownership_update second_ownership = first_ownership;
-  second_ownership.ue_index                         = uint_to_ue_index(2);
-  second_ownership.cell_index                       = second_pool.cell_index;
-  second_ownership.analog_beam_id                   = second_pool.analog_beam_id;
-  EXPECT_TRUE(manager.register_access_rnti_ownership(second_ownership).accepted);
-
-  const ntn_beam_service_resource_snapshot snapshot = manager.get_snapshot();
-  EXPECT_EQ(snapshot.nof_access_rnti_owned, 2U);
-  EXPECT_EQ(snapshot.nof_access_rnti_conflicts, 0U);
-  EXPECT_EQ(snapshot.nof_rnti_leases_initial_ul_seen, 2U);
+  ntn_rnti_lease_pool_update second_pool = first_pool;
+  second_pool.du_index                   = uint_to_du_index(1);
+  second_pool.generation_id              = 102;
+  EXPECT_TRUE(manager.reserve_rnti_leases(second_pool).accepted);
 }
 
 TEST(ntn_beam_service_resource_manager, reserves_applied_rnti_lease_for_connected_handover_target)
@@ -725,12 +806,241 @@ TEST(ntn_beam_service_resource_manager, audit_missing_applied_rnti_pool_requests
   report.cell_index = lease_pool.cell_index;
   report.pci        = lease_pool.pci;
   report.generation_id = 10;
+  report.rnti_snapshot_complete = true;
 
   const ntn_resource_audit_decision decision = manager.handle_resource_audit_report(report);
   EXPECT_EQ(decision.nof_mismatches, 1U);
   ASSERT_EQ(decision.repairs.size(), 1U);
   EXPECT_EQ(decision.repairs.front().action, ntn_resource_repair_action::resend_rnti_lease_pool);
   EXPECT_EQ(decision.repairs.front().reason, "du_missing_applied_rnti_pool");
+}
+
+TEST(ntn_beam_service_resource_manager, when_audit_domain_is_incomplete_then_empty_snapshot_does_not_trigger_repair)
+{
+  ntn_beam_service_resource_manager manager;
+  const ntn_rnti_lease_pool_update  lease_pool = make_target_handover_lease_pool();
+  apply_lease_pool(manager, lease_pool);
+
+  f1ap_ntn_ul_slot_resource_request slot_request;
+  slot_request.sr_slot_offset = 3U;
+  slot_request.sr_slot_period = 40U;
+  manager.set_digital_slot_intent_from_request(uint_to_ue_index(9), slot_request, "loaded_service_calendar");
+  manager.mark_slot_update_applied(uint_to_ue_index(9), slot_request);
+
+  ntn_resource_audit_report report;
+  report.du_index      = lease_pool.du_index;
+  report.cell_index    = lease_pool.cell_index;
+  report.pci           = lease_pool.pci;
+  report.generation_id = 11;
+
+  const ntn_resource_audit_decision decision = manager.handle_resource_audit_report(report);
+  EXPECT_EQ(decision.nof_mismatches, 0U);
+  EXPECT_TRUE(decision.repairs.empty());
+}
+
+TEST(ntn_beam_service_resource_manager, when_du_reports_pending_and_consumed_leases_then_state_is_reconciled)
+{
+  ntn_beam_service_resource_manager manager;
+  manager.set_authoritative_rnti_lease_validation_enabled(true);
+
+  ntn_rnti_lease_pool_update lease_pool;
+  lease_pool.du_index       = uint_to_du_index(0);
+  lease_pool.cell_index     = to_du_cell_index(1);
+  lease_pool.pci            = pci_t{101};
+  lease_pool.analog_beam_id = "ANALOG-ACCESS-001";
+  lease_pool.generation_id  = 77;
+  lease_pool.leases         = {to_rnti(0x4701), to_rnti(0x4702)};
+  apply_lease_pool(manager, lease_pool);
+
+  ntn_resource_audit_report report;
+  report.du_index               = lease_pool.du_index;
+  report.cell_index             = lease_pool.cell_index;
+  report.pci                    = lease_pool.pci;
+  report.generation_id          = 12;
+  report.rnti_snapshot_complete = true;
+  report.rnti_leases.push_back({lease_pool.leases[0], "consumed_by_mac", "applied_by_du", lease_pool.generation_id});
+  report.rnti_leases.push_back({lease_pool.leases[1], "pending", "applied_by_du", lease_pool.generation_id});
+
+  const ntn_resource_audit_decision decision = manager.handle_resource_audit_report(report);
+  EXPECT_TRUE(decision.repairs.empty());
+
+  const ntn_beam_service_resource_snapshot snapshot = manager.get_snapshot();
+  EXPECT_EQ(snapshot.nof_rnti_leases_consumed_by_du, 1U);
+  EXPECT_EQ(snapshot.nof_rnti_leases_available, 1U);
+  const auto consumed_it = std::find_if(snapshot.rnti_leases.begin(),
+                                        snapshot.rnti_leases.end(),
+                                        [](const auto& lease) { return lease.rnti == to_rnti(0x4701); });
+  ASSERT_NE(consumed_it, snapshot.rnti_leases.end());
+  EXPECT_EQ(consumed_it->state, "consumed_by_du");
+  EXPECT_EQ(consumed_it->reason, "du_audit_consumed_by_mac");
+
+  ntn_access_rnti_ownership_update ownership;
+  ownership.ue_index       = uint_to_ue_index(9);
+  ownership.du_index       = lease_pool.du_index;
+  ownership.cell_index     = lease_pool.cell_index;
+  ownership.pci            = lease_pool.pci;
+  ownership.rnti           = lease_pool.leases[0];
+  ownership.analog_beam_id = lease_pool.analog_beam_id;
+  EXPECT_TRUE(manager.register_access_rnti_ownership(ownership).accepted);
+
+  ntn_resource_audit_report after_initial_ul = report;
+  after_initial_ul.rnti_leases.clear();
+  after_initial_ul.rnti_leases.push_back({lease_pool.leases[1], "pending", "applied_by_du", lease_pool.generation_id});
+  EXPECT_TRUE(manager.handle_resource_audit_report(after_initial_ul).repairs.empty());
+}
+
+TEST(ntn_beam_service_resource_manager, when_du_reports_expired_lease_then_same_rnti_is_not_reinserted)
+{
+  ntn_beam_service_resource_manager manager;
+  manager.set_authoritative_rnti_lease_validation_enabled(true);
+  const ntn_rnti_lease_pool_update lease_pool = make_target_handover_lease_pool();
+  apply_lease_pool(manager, lease_pool);
+
+  ntn_resource_audit_report report;
+  report.du_index               = lease_pool.du_index;
+  report.cell_index             = lease_pool.cell_index;
+  report.pci                    = lease_pool.pci;
+  report.generation_id          = 13;
+  report.rnti_snapshot_complete = true;
+  for (rnti_t rnti : lease_pool.leases) {
+    report.rnti_leases.push_back({rnti, "expired", "expired_by_du", lease_pool.generation_id});
+  }
+
+  const ntn_resource_audit_decision decision = manager.handle_resource_audit_report(report);
+  EXPECT_TRUE(decision.repairs.empty());
+  const ntn_beam_service_resource_snapshot snapshot = manager.get_snapshot();
+  EXPECT_EQ(snapshot.nof_rnti_leases_expired, lease_pool.leases.size());
+  EXPECT_EQ(snapshot.nof_rnti_leases_available, 0U);
+
+  ntn_access_rnti_ownership_update ownership;
+  ownership.ue_index                            = uint_to_ue_index(9);
+  ownership.du_index                            = lease_pool.du_index;
+  ownership.cell_index                          = lease_pool.cell_index;
+  ownership.pci                                 = lease_pool.pci;
+  ownership.rnti                                = lease_pool.leases.front();
+  ownership.analog_beam_id                      = lease_pool.analog_beam_id;
+  const ntn_access_rnti_ownership_result access = manager.register_access_rnti_ownership(ownership);
+  EXPECT_FALSE(access.accepted);
+  EXPECT_EQ(access.reason, "expired_rnti");
+}
+
+TEST(ntn_beam_service_resource_manager, when_complete_snapshot_has_duplicate_rnti_then_resource_domain_is_blocked)
+{
+  ntn_beam_service_resource_manager manager;
+  const ntn_rnti_lease_pool_update  lease_pool = make_target_handover_lease_pool();
+  apply_lease_pool(manager, lease_pool);
+
+  ntn_resource_audit_report report;
+  report.du_index               = lease_pool.du_index;
+  report.cell_index             = lease_pool.cell_index;
+  report.pci                    = lease_pool.pci;
+  report.generation_id          = 14;
+  report.rnti_snapshot_complete = true;
+  report.rnti_leases.push_back({lease_pool.leases.front(), "pending", "applied_by_du", lease_pool.generation_id});
+  report.rnti_leases.push_back({lease_pool.leases.front(), "pending", "applied_by_du", lease_pool.generation_id});
+
+  const ntn_resource_audit_decision decision = manager.handle_resource_audit_report(report);
+  ASSERT_EQ(decision.repairs.size(), 1U);
+  EXPECT_EQ(decision.repairs.front().action, ntn_resource_repair_action::mark_resource_conflict);
+  EXPECT_EQ(decision.repairs.front().reason, "duplicate_du_rnti_snapshot");
+}
+
+TEST(ntn_beam_service_resource_manager, when_complete_snapshot_has_unknown_rnti_then_resource_domain_is_blocked)
+{
+  ntn_beam_service_resource_manager manager;
+  const ntn_rnti_lease_pool_update  lease_pool = make_target_handover_lease_pool();
+  apply_lease_pool(manager, lease_pool);
+
+  ntn_resource_audit_report report;
+  report.du_index               = lease_pool.du_index;
+  report.cell_index             = lease_pool.cell_index;
+  report.pci                    = lease_pool.pci;
+  report.generation_id          = 15;
+  report.rnti_snapshot_complete = true;
+  report.rnti_leases.push_back({lease_pool.leases.front(), "pending", "applied_by_du", lease_pool.generation_id});
+  report.rnti_leases.push_back({to_rnti(0x5001), "pending", "applied_by_du", lease_pool.generation_id});
+
+  const ntn_resource_audit_decision decision = manager.handle_resource_audit_report(report);
+  ASSERT_EQ(decision.repairs.size(), 1U);
+  EXPECT_EQ(decision.repairs.front().action, ntn_resource_repair_action::mark_resource_conflict);
+  EXPECT_EQ(decision.repairs.front().rnti, to_rnti(0x5001));
+  EXPECT_EQ(decision.repairs.front().reason, "unknown_du_rnti_snapshot");
+}
+
+TEST(ntn_beam_service_resource_manager, accepted_complete_audit_resolves_prior_generic_audit_rejection)
+{
+  ntn_beam_service_resource_manager manager;
+
+  ntn_resource_audit_report rejected;
+  rejected.du_index       = uint_to_du_index(0);
+  rejected.cell_index     = to_du_cell_index(1);
+  rejected.pci            = pci_t{1};
+  rejected.generation_id  = 20;
+  rejected.accepted       = false;
+  rejected.reject_reason  = "unknown_cell";
+  const auto reject_decision = manager.handle_resource_audit_report(rejected);
+  ASSERT_EQ(reject_decision.repairs.size(), 1U);
+  EXPECT_EQ(manager.queue_resource_repair(reject_decision.repairs.front(), rejected.generation_id).state,
+            "blocked_conflict");
+  EXPECT_TRUE(manager.has_blocking_resource_repair());
+
+  ntn_resource_audit_report recovered = rejected;
+  recovered.generation_id             = 21;
+  recovered.accepted                  = true;
+  recovered.rnti_snapshot_complete    = true;
+  recovered.reject_reason.clear();
+  EXPECT_TRUE(manager.handle_resource_audit_report(recovered).repairs.empty());
+  EXPECT_FALSE(manager.has_blocking_resource_repair());
+
+  const auto snapshot = manager.get_snapshot();
+  ASSERT_EQ(snapshot.resource_repairs.size(), 1U);
+  EXPECT_EQ(snapshot.resource_repairs.front().state, "resolved");
+  EXPECT_EQ(snapshot.resource_repairs.front().reason, "du_audit_recovered");
+}
+
+TEST(ntn_beam_service_resource_manager, when_sent_generation_is_pending_in_complete_snapshot_then_it_is_applied)
+{
+  ntn_beam_service_resource_manager manager;
+  const ntn_rnti_lease_pool_update  lease_pool = make_target_handover_lease_pool();
+  ASSERT_TRUE(manager.reserve_rnti_leases(lease_pool).accepted);
+  manager.mark_rnti_lease_pool_sent_to_du(lease_pool);
+
+  ntn_resource_audit_report report;
+  report.du_index               = lease_pool.du_index;
+  report.cell_index             = lease_pool.cell_index;
+  report.pci                    = lease_pool.pci;
+  report.generation_id          = 16;
+  report.rnti_snapshot_complete = true;
+  for (rnti_t rnti : lease_pool.leases) {
+    report.rnti_leases.push_back({rnti, "pending", "applied_by_du", lease_pool.generation_id});
+  }
+
+  const ntn_resource_audit_decision decision = manager.handle_resource_audit_report(report);
+  EXPECT_TRUE(decision.repairs.empty());
+  const ntn_beam_service_resource_snapshot snapshot = manager.get_snapshot();
+  EXPECT_EQ(snapshot.nof_rnti_leases_sent_to_du, 0U);
+  EXPECT_EQ(snapshot.nof_rnti_leases_applied_by_du, lease_pool.leases.size());
+  EXPECT_EQ(snapshot.nof_rnti_leases_available, lease_pool.leases.size());
+}
+
+TEST(ntn_beam_service_resource_manager, when_complete_snapshot_generation_is_stale_then_resource_domain_is_blocked)
+{
+  ntn_beam_service_resource_manager manager;
+  const ntn_rnti_lease_pool_update  lease_pool = make_target_handover_lease_pool();
+  apply_lease_pool(manager, lease_pool);
+
+  ntn_resource_audit_report report;
+  report.du_index               = lease_pool.du_index;
+  report.cell_index             = lease_pool.cell_index;
+  report.pci                    = lease_pool.pci;
+  report.generation_id          = 17;
+  report.rnti_snapshot_complete = true;
+  report.rnti_leases.push_back({lease_pool.leases.front(), "pending", "applied_by_du", lease_pool.generation_id + 1});
+
+  const ntn_resource_audit_decision decision = manager.handle_resource_audit_report(report);
+  ASSERT_EQ(decision.repairs.size(), 1U);
+  EXPECT_EQ(decision.repairs.front().action, ntn_resource_repair_action::mark_resource_conflict);
+  EXPECT_EQ(decision.repairs.front().reason, "stale_du_rnti_snapshot_generation");
 }
 
 TEST(ntn_beam_service_resource_manager, audit_unknown_du_slot_assignment_requests_clear)
@@ -742,6 +1052,7 @@ TEST(ntn_beam_service_resource_manager, audit_unknown_du_slot_assignment_request
   report.cell_index    = to_du_cell_index(1);
   report.pci           = pci_t{1};
   report.generation_id = 11;
+  report.ue_slot_snapshot_complete = true;
 
   ntn_resource_audit_ue_slot du_slot;
   du_slot.ue_index = uint_to_ue_index(7);
@@ -778,6 +1089,7 @@ TEST(ntn_beam_service_resource_manager, audit_missing_du_slot_assignment_request
   report.cell_index    = to_du_cell_index(1);
   report.pci           = pci_t{1};
   report.generation_id = 12;
+  report.ue_slot_snapshot_complete = true;
 
   const ntn_resource_audit_decision decision = manager.handle_resource_audit_report(report);
   EXPECT_EQ(decision.nof_mismatches, 1U);
@@ -822,6 +1134,7 @@ TEST(ntn_beam_service_resource_manager, service_pair_audit_missing_ul_slot_reque
   report.cell_index    = to_du_cell_index(7);
   report.pci           = pci_t{7};
   report.generation_id = 42;
+  report.ue_slot_snapshot_complete = true;
 
   const ntn_resource_audit_decision decision = manager.handle_resource_audit_report(report);
   EXPECT_EQ(decision.nof_mismatches, 1U);
@@ -875,6 +1188,7 @@ TEST(ntn_beam_service_resource_manager, service_pair_audit_does_not_misrepair_fr
   downlink_report.cell_index    = to_du_cell_index(1);
   downlink_report.pci           = pci_t{1};
   downlink_report.generation_id = 43;
+  downlink_report.ue_slot_snapshot_complete = true;
 
   const ntn_resource_audit_decision decision = manager.handle_resource_audit_report(downlink_report);
   EXPECT_EQ(decision.nof_mismatches, 0U);
@@ -890,6 +1204,7 @@ TEST(ntn_beam_service_resource_manager, service_pair_audit_unknown_ul_slot_reque
   report.cell_index    = to_du_cell_index(7);
   report.pci           = pci_t{7};
   report.generation_id = 44;
+  report.ue_slot_snapshot_complete = true;
 
   ntn_resource_audit_ue_slot du_slot;
   du_slot.ue_index = uint_to_ue_index(7);

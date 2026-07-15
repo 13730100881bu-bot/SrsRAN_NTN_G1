@@ -2513,6 +2513,37 @@ TEST(cu_cp_ntn_mobility_test, ntn_repair_apply_resources_triggers_one_shot_audit
   EXPECT_EQ(response.reason, "resources_repair_requested");
   EXPECT_GT(response.audit_targets, 0U);
   EXPECT_GT(after.nof_ntn_resource_audit_queries_sent, before.nof_ntn_resource_audit_queries_sent);
+  EXPECT_GT(after.nof_ntn_resource_audit_responses_accepted, before.nof_ntn_resource_audit_responses_accepted);
+  EXPECT_GT(after.nof_ntn_resource_audit_rnti_incomplete, before.nof_ntn_resource_audit_rnti_incomplete);
+  EXPECT_GT(after.nof_ntn_resource_audit_ue_slot_incomplete, before.nof_ntn_resource_audit_ue_slot_incomplete);
+  EXPECT_EQ(after.nof_ntn_resource_audit_mismatches, before.nof_ntn_resource_audit_mismatches);
+}
+
+TEST(cu_cp_ntn_mobility_test, explicit_du_audit_rejection_reaches_conflict_accounting)
+{
+  cu_cp_test_env_params params;
+  params.ntn_location_mobility     = make_access_service_layer_ntn_mobility_config();
+  params.ntn_resource_audit_rejects = true;
+  cu_cp_test_environment env(std::move(params));
+  env.run_ng_setup();
+
+  cu_cp_ntn_command_handler& ntn_handler = env.get_cu_cp().get_command_handler().get_ntn_command_handler();
+  const std::optional<service_bound_ntn_ue_context> ue = setup_service_bound_ntn_ue(env, ntn_handler, true);
+  ASSERT_TRUE(ue.has_value());
+
+  const cu_cp_ntn_runtime_status before = ntn_handler.get_current_ntn_runtime_status();
+  ntn_repair_command             command;
+  command.mode  = ntn_repair_mode::apply;
+  command.scope = ntn_repair_scope::resources;
+  ASSERT_TRUE(ntn_handler.handle_ntn_repair_command(command).accepted);
+  env.drain_f1ap_resource_coordination_requests(ue->du_idx);
+
+  const cu_cp_ntn_runtime_status after = ntn_handler.get_current_ntn_runtime_status();
+  EXPECT_GT(after.nof_ntn_resource_audit_failures, before.nof_ntn_resource_audit_failures);
+  EXPECT_GT(after.nof_ntn_resource_audit_mismatches, before.nof_ntn_resource_audit_mismatches);
+  EXPECT_GT(after.nof_ntn_resource_audit_repair_actions, before.nof_ntn_resource_audit_repair_actions);
+  EXPECT_GT(after.nof_ntn_resource_repairs_blocked_conflict, before.nof_ntn_resource_repairs_blocked_conflict);
+  EXPECT_EQ(after.last_ntn_resource_audit_reason, "rejected_by_mock_du");
 }
 
 TEST(cu_cp_ntn_mobility_test, ntn_repair_apply_sib19_refresh_keeps_unchanged_payload_deduplicated)

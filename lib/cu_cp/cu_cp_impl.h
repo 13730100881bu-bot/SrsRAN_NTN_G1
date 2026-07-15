@@ -759,6 +759,9 @@ private:
   unsigned                                                             nof_ntn_resource_audit_mismatches = 0;
   unsigned                                                             nof_ntn_resource_audit_repair_actions = 0;
   unsigned                                                             nof_ntn_resource_audit_failures = 0;
+  unsigned                                                             nof_ntn_resource_audit_rnti_incomplete = 0;
+  unsigned                                                             nof_ntn_resource_audit_ue_slot_incomplete = 0;
+  std::string                                                          last_ntn_resource_audit_reason = "none";
   unsigned                                                             nof_ntn_service_pair_resource_audit_targets = 0;
   unsigned                                                             nof_ntn_service_pair_resource_audit_mismatches = 0;
   unsigned                                                             nof_ntn_service_pair_resource_audit_repairs = 0;

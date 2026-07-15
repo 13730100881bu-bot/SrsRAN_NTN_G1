@@ -1153,6 +1153,15 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_service_area_paging_counters)
   command_handler.ntn.runtime.nof_ntn_service_pair_resource_audit_skipped    = 191;
   command_handler.ntn.runtime.last_ntn_service_pair_resource_audit_reason =
       "du_missing_service_pair_ul_sr_srs_assignment";
+  command_handler.ntn.runtime.ntn_resource_audit_generation             = 194;
+  command_handler.ntn.runtime.nof_ntn_resource_audit_queries_sent       = 195;
+  command_handler.ntn.runtime.nof_ntn_resource_audit_responses_accepted = 196;
+  command_handler.ntn.runtime.nof_ntn_resource_audit_mismatches         = 197;
+  command_handler.ntn.runtime.nof_ntn_resource_audit_repair_actions     = 198;
+  command_handler.ntn.runtime.nof_ntn_resource_audit_failures           = 199;
+  command_handler.ntn.runtime.nof_ntn_resource_audit_rnti_incomplete    = 200;
+  command_handler.ntn.runtime.nof_ntn_resource_audit_ue_slot_incomplete = 201;
+  command_handler.ntn.runtime.last_ntn_resource_audit_reason             = "ue_slot_snapshot_incomplete";
   command_handler.ntn.runtime.nof_ntn_inactive_contexts                 = 97;
   command_handler.ntn.runtime.nof_ntn_inactive_contexts_expired         = 98;
   command_handler.ntn.runtime.nof_ntn_inactive_suspend_requested        = 99;
@@ -1193,6 +1202,7 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_service_area_paging_counters)
   command_handler.ntn.resource_snapshot.nof_rnti_leases_applied_by_du  = 29;
   command_handler.ntn.resource_snapshot.nof_rnti_leases_rejected_by_du = 30;
   command_handler.ntn.resource_snapshot.nof_rnti_leases_offered_in_rar = 31;
+  command_handler.ntn.resource_snapshot.nof_rnti_leases_consumed_by_du = 42;
   command_handler.ntn.resource_snapshot.nof_rnti_leases_initial_ul_seen = 32;
   command_handler.ntn.resource_snapshot.nof_rnti_leases_committed      = 33;
   command_handler.ntn.resource_snapshot.nof_rnti_leases_released       = 34;
@@ -1331,7 +1341,10 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_service_area_paging_counters)
             std::string::npos);
   ASSERT_NE(output.find("NTN resource manager: rnti_owned=22 rnti_conflicts=23 digital_slot_active=24 sent=37 applied=38 rejected=39 cleared=25 cleared_by_du=40 rollback=41"),
             std::string::npos);
-  ASSERT_NE(output.find("NTN RNTI leases: reserved=26 available=27 sent=28 applied=29 rejected=30 offered=31 initial_ul=32 committed=33 released=34 expired=35 conflicts=36"),
+  ASSERT_NE(output.find("NTN RNTI leases: reserved=26 available=27 sent=28 applied=29 rejected=30 offered=31 consumed=42 initial_ul=32 committed=33 released=34 expired=35 conflicts=36"),
+            std::string::npos);
+  ASSERT_NE(output.find("NTN resource audit: generation=194 queries=195 accepted=196 mismatches=197 repairs=198 "
+                        "failures=199 rnti_incomplete=200 ue_slot_incomplete=201 reason=ue_slot_snapshot_incomplete"),
             std::string::npos);
   ASSERT_NE(output.find("NTN resource repairs: queued=45 sent=46 applied=47 failed=48 retry_exhausted=49 conflicts=50"),
             std::string::npos);

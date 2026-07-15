@@ -152,6 +152,7 @@ struct ntn_resource_audit_rnti_lease {
   rnti_t      rnti = rnti_t::INVALID_RNTI;
   std::string state;
   std::string distribution_state;
+  uint32_t    generation_id = 0;
 };
 
 /// DU-observed per-UE SR/SRS slot-resource state returned by an NTN resource audit.
@@ -168,6 +169,10 @@ struct ntn_resource_audit_report {
   pci_t                                 pci = INVALID_PCI;
   uint32_t                              generation_id = 0;
   bool                                  accepted = true;
+  /// True only when the DU returned an authoritative, complete lease snapshot for the requested cell.
+  bool                                  rnti_snapshot_complete = false;
+  /// True only when the DU returned an authoritative, complete per-UE SR/SRS snapshot for the requested cell.
+  bool                                  ue_slot_snapshot_complete = false;
   std::string                           reject_reason;
   std::vector<ntn_resource_audit_rnti_lease> rnti_leases;
   std::vector<ntn_resource_audit_ue_slot>    ue_slots;
@@ -198,6 +203,7 @@ struct ntn_resource_repair {
   nr_cell_identity           uplink_resource_nci = nr_cell_identity::min();
   bool                       has_uplink_resource_nci = false;
   std::string                reason;
+  uint32_t                   rnti_lease_generation_id = 0;
   std::vector<rnti_t>        rnti_leases;
   std::optional<f1ap_ntn_ul_slot_resource_request> slot_request;
 };
@@ -252,6 +258,7 @@ struct ntn_beam_service_resource_snapshot {
   unsigned nof_rnti_leases_rejected_by_du  = 0;
   unsigned nof_rnti_leases_available       = 0;
   unsigned nof_rnti_leases_offered_in_rar  = 0;
+  unsigned nof_rnti_leases_consumed_by_du  = 0;
   unsigned nof_rnti_leases_initial_ul_seen = 0;
   unsigned nof_rnti_leases_committed       = 0;
   unsigned nof_rnti_leases_released        = 0;
