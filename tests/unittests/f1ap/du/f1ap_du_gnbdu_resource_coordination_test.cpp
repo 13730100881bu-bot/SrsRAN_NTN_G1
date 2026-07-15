@@ -27,6 +27,7 @@
 #include "srsran/f1ap/ntn_rnti_lease_pool.h"
 #include <gtest/gtest.h>
 #include <array>
+#include <vector>
 
 using namespace srsran;
 using namespace srsran::srs_du;
@@ -84,6 +85,89 @@ static f1ap_ntn_access_calendar_update make_access_calendar_update()
                             f1ap_ntn_access_calendar_intent::no_resource_port});
   update.cells = {std::move(first), std::move(second)};
   return update;
+}
+
+static f1ap_ntn_resource_audit_result make_resource_audit_result()
+{
+  f1ap_ntn_resource_audit_result result;
+  result.generation_id             = 91;
+  result.accepted                  = true;
+  result.rnti_snapshot_complete    = true;
+  result.ue_slot_snapshot_complete = true;
+  result.reject_reason             = "accepted";
+  result.rnti_leases.push_back({to_rnti(0x4701), "pending", "applied_by_du", 17});
+  return result;
+}
+
+static byte_buffer make_legacy_v1_resource_audit_result(const f1ap_ntn_resource_audit_result& result)
+{
+  // Encode the actual V1 layout: it has neither completeness flags nor per-lease generation IDs.
+  std::vector<uint8_t> legacy    = {'N', 'T', 'A', 'U', 'D', 'R', '0', '1'};
+  const auto           write_u8  = [&legacy](uint8_t value) { legacy.push_back(value); };
+  const auto           write_u16 = [&legacy](uint16_t value) {
+    legacy.push_back(static_cast<uint8_t>((value >> 8U) & 0xffU));
+    legacy.push_back(static_cast<uint8_t>(value & 0xffU));
+  };
+  const auto write_u32 = [&legacy](uint32_t value) {
+    legacy.push_back(static_cast<uint8_t>((value >> 24U) & 0xffU));
+    legacy.push_back(static_cast<uint8_t>((value >> 16U) & 0xffU));
+    legacy.push_back(static_cast<uint8_t>((value >> 8U) & 0xffU));
+    legacy.push_back(static_cast<uint8_t>(value & 0xffU));
+  };
+  const auto write_string = [&legacy, &write_u16](const std::string& value) {
+    write_u16(static_cast<uint16_t>(value.size()));
+    legacy.insert(legacy.end(), value.begin(), value.end());
+  };
+
+  write_u32(result.generation_id);
+  write_u8(result.accepted ? 1 : 0);
+  write_string(result.reject_reason);
+  write_u16(static_cast<uint16_t>(result.rnti_leases.size()));
+  for (const auto& lease : result.rnti_leases) {
+    write_u16(to_value(lease.rnti));
+    write_string(lease.state);
+    write_string(lease.distribution_state);
+  }
+  // The legacy fixture intentionally carries no UE-slot entries.
+  write_u16(0);
+  return byte_buffer::create(span<const uint8_t>(legacy.data(), legacy.size())).value();
+}
+
+TEST(f1ap_ntn_resource_audit_codec_test, when_v2_result_is_round_tripped_then_snapshot_completeness_is_preserved)
+{
+  const f1ap_ntn_resource_audit_result result = make_resource_audit_result();
+
+  const auto decoded = decode_f1ap_ntn_resource_audit_result(encode_f1ap_ntn_resource_audit_result(result));
+
+  ASSERT_TRUE(decoded.has_value());
+  EXPECT_TRUE(decoded->accepted);
+  EXPECT_TRUE(decoded->rnti_snapshot_complete);
+  EXPECT_TRUE(decoded->ue_slot_snapshot_complete);
+  ASSERT_EQ(decoded->rnti_leases.size(), 1U);
+  EXPECT_EQ(decoded->rnti_leases.front().generation_id, 17U);
+  EXPECT_EQ(decoded->rnti_leases.front().state, "pending");
+  EXPECT_EQ(decoded->rnti_leases.front().distribution_state, "applied_by_du");
+}
+
+TEST(f1ap_ntn_resource_audit_codec_test, when_v1_result_is_decoded_then_both_snapshots_fail_safe_to_incomplete)
+{
+  const auto decoded =
+      decode_f1ap_ntn_resource_audit_result(make_legacy_v1_resource_audit_result(make_resource_audit_result()));
+
+  ASSERT_TRUE(decoded.has_value());
+  EXPECT_TRUE(decoded->accepted);
+  EXPECT_FALSE(decoded->rnti_snapshot_complete);
+  EXPECT_FALSE(decoded->ue_slot_snapshot_complete);
+  ASSERT_EQ(decoded->rnti_leases.size(), 1U);
+  EXPECT_EQ(decoded->rnti_leases.front().generation_id, 0U);
+}
+
+TEST(f1ap_ntn_resource_audit_codec_test, when_v2_result_has_unknown_completeness_bits_then_decode_fails)
+{
+  byte_buffer malformed = encode_f1ap_ntn_resource_audit_result(make_resource_audit_result());
+  malformed[13] |= 0x80U;
+
+  EXPECT_FALSE(decode_f1ap_ntn_resource_audit_result(malformed).has_value());
 }
 
 static f1ap_message make_resource_coordination_request(uint16_t transaction_id,
@@ -255,7 +339,10 @@ TEST_F(f1ap_du_gnbdu_resource_coordination_test, valid_audit_request_is_forwarde
   f1ap_ntn_resource_audit_result next_result;
   next_result.generation_id = request.generation_id;
   next_result.accepted      = true;
-  next_result.rnti_leases.push_back({to_rnti(0x4701), "reserved", "applied_by_du"});
+  next_result.rnti_snapshot_complete    = true;
+  next_result.ue_slot_snapshot_complete = false;
+  next_result.reject_reason             = "ue_slot_snapshot_incomplete";
+  next_result.rnti_leases.push_back({to_rnti(0x4701), "pending", "applied_by_du", 23});
   f1ap_du_cfg_handler.next_ntn_resource_audit_result = next_result;
 
   f1ap->handle_message(make_resource_coordination_request(9, request));
@@ -268,8 +355,12 @@ TEST_F(f1ap_du_gnbdu_resource_coordination_test, valid_audit_request_is_forwarde
   auto decoded = decode_f1ap_ntn_resource_audit_result(asn1_resp->eutra_nr_cell_res_coordination_req_ack_container);
   ASSERT_TRUE(decoded.has_value());
   EXPECT_TRUE(decoded->accepted);
+  EXPECT_TRUE(decoded->rnti_snapshot_complete);
+  EXPECT_FALSE(decoded->ue_slot_snapshot_complete);
+  EXPECT_EQ(decoded->reject_reason, "ue_slot_snapshot_incomplete");
   ASSERT_EQ(decoded->rnti_leases.size(), 1U);
   EXPECT_EQ(decoded->rnti_leases.front().rnti, to_rnti(0x4701));
+  EXPECT_EQ(decoded->rnti_leases.front().generation_id, 23U);
 }
 
 TEST_F(f1ap_du_gnbdu_resource_coordination_test, valid_sib19_update_is_forwarded_to_du_configurator_and_acked)

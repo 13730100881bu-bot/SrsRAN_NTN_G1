@@ -313,6 +313,8 @@ public:
   std::optional<mac_ue_delete_request>                      last_ue_delete_msg{};
   std::optional<mac_dl_buffer_state_indication_message>     last_dl_bs;
   std::optional<mac_ntn_rnti_lease_pool_update>             last_ntn_rnti_lease_pool_update;
+  std::optional<du_cell_index_t>                            last_ntn_rnti_lease_pool_snapshot_cell;
+  mac_ntn_rnti_lease_pool_snapshot                          next_ntn_rnti_lease_pool_snapshot;
   std::optional<mac_ntn_access_calendar_update>              last_ntn_access_calendar_update;
   mac_ntn_access_calendar_result                             next_ntn_access_calendar_result;
   byte_buffer                                               last_pushed_ul_ccch_msg;
@@ -334,6 +336,11 @@ public:
     result.reason          = "accepted";
     result.accepted_leases = request.leases;
     return result;
+  }
+  mac_ntn_rnti_lease_pool_snapshot get_ntn_rnti_lease_pool_snapshot(du_cell_index_t cell_index) override
+  {
+    last_ntn_rnti_lease_pool_snapshot_cell = cell_index;
+    return next_ntn_rnti_lease_pool_snapshot;
   }
   mac_ntn_access_calendar_result
   apply_ntn_access_calendar_update(const mac_ntn_access_calendar_update& request) override

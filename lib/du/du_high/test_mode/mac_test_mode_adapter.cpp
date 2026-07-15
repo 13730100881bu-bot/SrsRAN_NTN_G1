@@ -554,6 +554,31 @@ mac_test_mode_adapter::apply_ntn_rnti_lease_pool_update(const mac_ntn_rnti_lease
   return mac_adapted->apply_ntn_rnti_lease_pool_update(request);
 }
 
+mac_ntn_rnti_lease_pool_snapshot mac_test_mode_adapter::get_ntn_rnti_lease_pool_snapshot(du_cell_index_t cell_index)
+{
+  if (mac_adapted == nullptr) {
+    mac_ntn_rnti_lease_pool_snapshot result;
+    result.cell_index = cell_index;
+    return result;
+  }
+
+  return mac_adapted->get_ntn_rnti_lease_pool_snapshot(cell_index);
+}
+
+mac_ntn_access_calendar_result
+mac_test_mode_adapter::apply_ntn_access_calendar_update(const mac_ntn_access_calendar_update& request)
+{
+  if (mac_adapted == nullptr) {
+    mac_ntn_access_calendar_result result;
+    result.reason           = "test_mode_mac_not_connected";
+    result.schedule_version = request.schedule_version;
+    result.calendar_hash    = request.calendar_hash;
+    return result;
+  }
+
+  return mac_adapted->apply_ntn_access_calendar_update(request);
+}
+
 void mac_test_mode_adapter::handle_dl_buffer_state_update(const mac_dl_buffer_state_indication_message& dl_bs)
 {
   mac_dl_buffer_state_indication_message dl_bs_copy = dl_bs;

@@ -103,6 +103,30 @@ f1ap_gnb_du_resource_coordination_response gnb_du_resource_coordination_procedur
   response.audit_result = decode_f1ap_ntn_resource_audit_result(asn1_resp->eutra_nr_cell_res_coordination_req_ack_container);
   response.sib19_result =
       decode_f1ap_ntn_sib19_broadcast_result(asn1_resp->eutra_nr_cell_res_coordination_req_ack_container);
+  if (response.result.has_value() && request.ntn_rnti_lease_update.du_index != du_index_t::invalid &&
+      response.result->generation_id != request.ntn_rnti_lease_update.generation_id) {
+    logger.warning("\"{}\": discarded RNTI lease result generation={} expected={}",
+                   name(),
+                   response.result->generation_id,
+                   request.ntn_rnti_lease_update.generation_id);
+    response.result.reset();
+  }
+  if (response.audit_result.has_value() && request.ntn_resource_audit_request.du_index != du_index_t::invalid &&
+      response.audit_result->generation_id != request.ntn_resource_audit_request.generation_id) {
+    logger.warning("\"{}\": discarded audit result generation={} expected={}",
+                   name(),
+                   response.audit_result->generation_id,
+                   request.ntn_resource_audit_request.generation_id);
+    response.audit_result.reset();
+  }
+  if (response.sib19_result.has_value() && request.ntn_sib19_broadcast_update.du_index != du_index_t::invalid &&
+      response.sib19_result->generation_id != request.ntn_sib19_broadcast_update.generation_id) {
+    logger.warning("\"{}\": discarded SIB19 result generation={} expected={}",
+                   name(),
+                   response.sib19_result->generation_id,
+                   request.ntn_sib19_broadcast_update.generation_id);
+    response.sib19_result.reset();
+  }
   response.success      = (response.calendar_result.has_value() && response.calendar_result->accepted()) ||
                      (response.result.has_value() && response.result->accepted) ||
                      (response.audit_result.has_value() && response.audit_result->accepted) ||

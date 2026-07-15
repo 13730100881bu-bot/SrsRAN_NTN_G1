@@ -111,6 +111,181 @@ TEST_F(du_manager_du_config_update_test, check_if_slot_time_mapping_is_available
   ASSERT_EQ(resp.value().sl_tx, slot_point(1, 1));
 }
 
+static f1ap_ntn_rnti_lease_pool_update make_ntn_rnti_lease_pool_update(const du_cell_config& cell)
+{
+  f1ap_ntn_rnti_lease_pool_update request;
+  request.gnb_du_id     = int_to_gnb_du_id(1);
+  request.cell_index    = to_du_cell_index(0);
+  request.cell_cgi      = cell.nr_cgi;
+  request.pci           = cell.pci;
+  request.generation_id = 77;
+  request.expiry_ms     = 30000;
+  request.operation     = f1ap_ntn_rnti_lease_pool_operation::replace;
+  request.leases        = {to_rnti(0x4701), to_rnti(0x4702)};
+  return request;
+}
+
+static f1ap_ntn_resource_audit_request make_ntn_resource_audit_request(const du_cell_config& cell)
+{
+  f1ap_ntn_resource_audit_request request;
+  request.cell_index    = to_du_cell_index(0);
+  request.pci           = cell.pci;
+  request.generation_id = 77;
+  return request;
+}
+
+class du_manager_ntn_rnti_lease_test : public du_manager_procedure_tester, public ::testing::Test
+{};
+
+TEST_F(du_manager_ntn_rnti_lease_test, when_lease_pool_target_is_valid_then_generation_and_expiry_are_forwarded_to_mac)
+{
+  const f1ap_ntn_rnti_lease_pool_update request = make_ntn_rnti_lease_pool_update(cell_cfgs[0]);
+
+  async_task<f1ap_ntn_rnti_lease_pool_result> procedure = du_mng->handle_ntn_rnti_lease_pool_update_request(request);
+  lazy_task_launcher<f1ap_ntn_rnti_lease_pool_result> task(procedure);
+
+  ASSERT_TRUE(task.ready());
+  EXPECT_TRUE(task.get().accepted);
+  ASSERT_TRUE(dependencies.mac.last_ntn_rnti_lease_pool_update.has_value());
+  const mac_ntn_rnti_lease_pool_update& mac_request = *dependencies.mac.last_ntn_rnti_lease_pool_update;
+  EXPECT_EQ(mac_request.cell_index, request.cell_index);
+  EXPECT_EQ(mac_request.generation_id, request.generation_id);
+  EXPECT_EQ(mac_request.expiry_ms, request.expiry_ms);
+  EXPECT_EQ(mac_request.leases, request.leases);
+}
+
+TEST_F(du_manager_ntn_rnti_lease_test, when_lease_pool_stable_identity_mismatches_then_mac_is_not_updated)
+{
+  f1ap_ntn_rnti_lease_pool_update request = make_ntn_rnti_lease_pool_update(cell_cfgs[0]);
+  request.cell_cgi.nci                    = nr_cell_identity::create(request.cell_cgi.nci.value() + 1).value();
+
+  async_task<f1ap_ntn_rnti_lease_pool_result> procedure = du_mng->handle_ntn_rnti_lease_pool_update_request(request);
+  lazy_task_launcher<f1ap_ntn_rnti_lease_pool_result> task(procedure);
+
+  ASSERT_TRUE(task.ready());
+  EXPECT_FALSE(task.get().accepted);
+  EXPECT_EQ(task.get().reject_reason, "identity_mismatch");
+  EXPECT_EQ(task.get().rejected_leases, request.leases);
+  EXPECT_FALSE(dependencies.mac.last_ntn_rnti_lease_pool_update.has_value());
+}
+
+TEST_F(du_manager_ntn_rnti_lease_test, when_lease_pool_targets_another_du_then_mac_is_not_updated)
+{
+  f1ap_ntn_rnti_lease_pool_update request = make_ntn_rnti_lease_pool_update(cell_cfgs[0]);
+  request.gnb_du_id                       = int_to_gnb_du_id(2);
+
+  async_task<f1ap_ntn_rnti_lease_pool_result> procedure = du_mng->handle_ntn_rnti_lease_pool_update_request(request);
+  lazy_task_launcher<f1ap_ntn_rnti_lease_pool_result> task(procedure);
+
+  ASSERT_TRUE(task.ready());
+  EXPECT_FALSE(task.get().accepted);
+  EXPECT_EQ(task.get().reject_reason, "gnb_du_id_mismatch");
+  EXPECT_EQ(task.get().rejected_leases, request.leases);
+  EXPECT_FALSE(dependencies.mac.last_ntn_rnti_lease_pool_update.has_value());
+}
+
+TEST_F(du_manager_ntn_rnti_lease_test, when_audit_target_is_valid_then_complete_mac_lease_snapshot_is_returned)
+{
+  mac_ntn_rnti_lease_pool_snapshot& snapshot = dependencies.mac.next_ntn_rnti_lease_pool_snapshot;
+  snapshot.cell_index                        = to_du_cell_index(0);
+  snapshot.complete                          = true;
+  snapshot.lease_mode_enabled                = true;
+  snapshot.leases.push_back({to_rnti(0x4701), 77, "pending", "applied_by_du"});
+  snapshot.leases.push_back({to_rnti(0x4702), 77, "consumed_by_mac", "applied_by_du"});
+  const f1ap_ntn_resource_audit_request request = make_ntn_resource_audit_request(cell_cfgs[0]);
+
+  async_task<f1ap_ntn_resource_audit_result>         procedure = du_mng->handle_ntn_resource_audit_request(request);
+  lazy_task_launcher<f1ap_ntn_resource_audit_result> task(procedure);
+
+  ASSERT_TRUE(task.ready());
+  const f1ap_ntn_resource_audit_result result = task.get();
+  EXPECT_TRUE(result.accepted);
+  EXPECT_TRUE(result.rnti_snapshot_complete);
+  EXPECT_FALSE(result.ue_slot_snapshot_complete);
+  EXPECT_EQ(result.reject_reason, "ue_slot_snapshot_incomplete");
+  EXPECT_EQ(result.generation_id, request.generation_id);
+  ASSERT_EQ(result.rnti_leases.size(), 2U);
+  EXPECT_EQ(result.rnti_leases[0].rnti, to_rnti(0x4701));
+  EXPECT_EQ(result.rnti_leases[0].generation_id, 77U);
+  EXPECT_EQ(result.rnti_leases[0].state, "pending");
+  EXPECT_EQ(result.rnti_leases[1].generation_id, 77U);
+  EXPECT_EQ(result.rnti_leases[1].state, "consumed_by_mac");
+  EXPECT_EQ(result.rnti_leases[1].distribution_state, "applied_by_du");
+  ASSERT_TRUE(dependencies.mac.last_ntn_rnti_lease_pool_snapshot_cell.has_value());
+  EXPECT_EQ(*dependencies.mac.last_ntn_rnti_lease_pool_snapshot_cell, request.cell_index);
+}
+
+TEST_F(du_manager_ntn_rnti_lease_test, when_mac_snapshot_is_incomplete_then_audit_is_accepted_without_fake_entries)
+{
+  mac_ntn_rnti_lease_pool_snapshot& snapshot = dependencies.mac.next_ntn_rnti_lease_pool_snapshot;
+  snapshot.cell_index                        = to_du_cell_index(0);
+  snapshot.complete                          = false;
+  snapshot.leases.push_back({to_rnti(0x4701), 77, "pending", "applied_by_du"});
+  const f1ap_ntn_resource_audit_request request = make_ntn_resource_audit_request(cell_cfgs[0]);
+
+  async_task<f1ap_ntn_resource_audit_result>         procedure = du_mng->handle_ntn_resource_audit_request(request);
+  lazy_task_launcher<f1ap_ntn_resource_audit_result> task(procedure);
+
+  ASSERT_TRUE(task.ready());
+  const f1ap_ntn_resource_audit_result result = task.get();
+  EXPECT_TRUE(result.accepted);
+  EXPECT_FALSE(result.rnti_snapshot_complete);
+  EXPECT_FALSE(result.ue_slot_snapshot_complete);
+  EXPECT_EQ(result.reject_reason, "rnti_and_ue_slot_snapshots_incomplete");
+  EXPECT_TRUE(result.rnti_leases.empty());
+  EXPECT_TRUE(result.ue_slots.empty());
+}
+
+TEST_F(du_manager_ntn_rnti_lease_test, when_complete_mac_snapshot_targets_another_cell_then_audit_is_rejected)
+{
+  mac_ntn_rnti_lease_pool_snapshot& snapshot    = dependencies.mac.next_ntn_rnti_lease_pool_snapshot;
+  snapshot.cell_index                           = to_du_cell_index(1);
+  snapshot.complete                             = true;
+  const f1ap_ntn_resource_audit_request request = make_ntn_resource_audit_request(cell_cfgs[0]);
+
+  async_task<f1ap_ntn_resource_audit_result>         procedure = du_mng->handle_ntn_resource_audit_request(request);
+  lazy_task_launcher<f1ap_ntn_resource_audit_result> task(procedure);
+
+  ASSERT_TRUE(task.ready());
+  const f1ap_ntn_resource_audit_result result = task.get();
+  EXPECT_FALSE(result.accepted);
+  EXPECT_FALSE(result.rnti_snapshot_complete);
+  EXPECT_EQ(result.reject_reason, "snapshot_cell_mismatch");
+  EXPECT_TRUE(result.rnti_leases.empty());
+}
+
+TEST_F(du_manager_ntn_rnti_lease_test, when_audit_cell_is_unknown_then_request_is_rejected_without_mac_snapshot)
+{
+  f1ap_ntn_resource_audit_request request = make_ntn_resource_audit_request(cell_cfgs[0]);
+  request.cell_index                      = to_du_cell_index(1);
+
+  async_task<f1ap_ntn_resource_audit_result>         procedure = du_mng->handle_ntn_resource_audit_request(request);
+  lazy_task_launcher<f1ap_ntn_resource_audit_result> task(procedure);
+
+  ASSERT_TRUE(task.ready());
+  const f1ap_ntn_resource_audit_result result = task.get();
+  EXPECT_FALSE(result.accepted);
+  EXPECT_EQ(result.reject_reason, "unknown_cell");
+  EXPECT_FALSE(result.rnti_snapshot_complete);
+  EXPECT_FALSE(dependencies.mac.last_ntn_rnti_lease_pool_snapshot_cell.has_value());
+}
+
+TEST_F(du_manager_ntn_rnti_lease_test, when_audit_pci_mismatches_then_request_is_rejected_without_mac_snapshot)
+{
+  f1ap_ntn_resource_audit_request request = make_ntn_resource_audit_request(cell_cfgs[0]);
+  request.pci                             = static_cast<pci_t>(request.pci + 1);
+
+  async_task<f1ap_ntn_resource_audit_result>         procedure = du_mng->handle_ntn_resource_audit_request(request);
+  lazy_task_launcher<f1ap_ntn_resource_audit_result> task(procedure);
+
+  ASSERT_TRUE(task.ready());
+  const f1ap_ntn_resource_audit_result result = task.get();
+  EXPECT_FALSE(result.accepted);
+  EXPECT_EQ(result.reject_reason, "pci_mismatch");
+  EXPECT_FALSE(result.rnti_snapshot_complete);
+  EXPECT_FALSE(dependencies.mac.last_ntn_rnti_lease_pool_snapshot_cell.has_value());
+}
+
 static std::vector<du_cell_config> make_two_ntn_calendar_cells()
 {
   std::vector<du_cell_config> cells(2, config_helpers::make_default_du_cell_config());

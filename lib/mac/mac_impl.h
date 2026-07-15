@@ -74,30 +74,12 @@ public:
   mac_ntn_rnti_lease_pool_result apply_ntn_rnti_lease_pool_update(
       const mac_ntn_rnti_lease_pool_update& request) override
   {
-    mac_ntn_rnti_lease_pool_result result;
-    if (request.cell_index == INVALID_DU_CELL_INDEX) {
-      result.reason = "invalid_cell";
-      return result;
-    }
-    if (request.operation == mac_ntn_rnti_lease_pool_operation::replace ||
-        request.operation == mac_ntn_rnti_lease_pool_operation::clear) {
-      rnti_table.clear_ntn_rnti_leases(request.cell_index);
-    }
-    if (request.operation != mac_ntn_rnti_lease_pool_operation::clear) {
-      rnti_table.set_ntn_rnti_lease_mode(request.cell_index, true);
-      for (rnti_t lease : request.leases) {
-        if (rnti_table.add_ntn_rnti_lease(request.cell_index, lease)) {
-          result.accepted_leases.push_back(lease);
-        } else {
-          result.rejected_leases.push_back(lease);
-        }
-      }
-    } else {
-      rnti_table.set_ntn_rnti_lease_mode(request.cell_index, false);
-    }
-    result.accepted = result.rejected_leases.empty();
-    result.reason   = result.accepted ? "accepted" : "rejected_lease";
-    return result;
+    return rnti_table.apply_ntn_rnti_lease_pool_update(request);
+  }
+
+  mac_ntn_rnti_lease_pool_snapshot get_ntn_rnti_lease_pool_snapshot(du_cell_index_t cell_index) override
+  {
+    return rnti_table.get_ntn_rnti_lease_pool_snapshot(cell_index);
   }
 
   mac_ntn_access_calendar_result

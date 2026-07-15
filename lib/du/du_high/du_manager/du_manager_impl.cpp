@@ -198,8 +198,35 @@ du_manager_impl::handle_cu_context_update_request(const gnbcu_config_update_requ
 async_task<f1ap_ntn_rnti_lease_pool_result>
 du_manager_impl::handle_ntn_rnti_lease_pool_update_request(const f1ap_ntn_rnti_lease_pool_update& request)
 {
+  auto launch_result = [](f1ap_ntn_rnti_lease_pool_result result) {
+    return launch_async(
+        [result = std::move(result)](coro_context<async_task<f1ap_ntn_rnti_lease_pool_result>>& ctx) mutable {
+          CORO_BEGIN(ctx);
+          CORO_RETURN(result);
+        });
+  };
+
+  f1ap_ntn_rnti_lease_pool_result result;
+  result.generation_id   = request.generation_id;
+  result.rejected_leases = request.leases;
+  if (request.gnb_du_id != params.ran.gnb_du_id) {
+    result.reject_reason = "gnb_du_id_mismatch";
+    return launch_result(std::move(result));
+  }
+  if (!cell_mng.has_cell(request.cell_index)) {
+    result.reject_reason = "unknown_cell";
+    return launch_result(std::move(result));
+  }
+  const du_cell_config& cell_cfg = cell_mng.get_cell_cfg(request.cell_index);
+  if (cell_cfg.nr_cgi != request.cell_cgi || cell_cfg.pci != request.pci) {
+    result.reject_reason = "identity_mismatch";
+    return launch_result(std::move(result));
+  }
+
   mac_ntn_rnti_lease_pool_update mac_update;
   mac_update.cell_index = request.cell_index;
+  mac_update.generation_id = request.generation_id;
+  mac_update.expiry_ms     = request.expiry_ms;
   switch (request.operation) {
     case f1ap_ntn_rnti_lease_pool_operation::replace:
       mac_update.operation = mac_ntn_rnti_lease_pool_operation::replace;
@@ -215,30 +242,52 @@ du_manager_impl::handle_ntn_rnti_lease_pool_update_request(const f1ap_ntn_rnti_l
 
   const mac_ntn_rnti_lease_pool_result mac_result = params.mac.mgr.apply_ntn_rnti_lease_pool_update(mac_update);
 
-  f1ap_ntn_rnti_lease_pool_result result;
-  result.generation_id    = request.generation_id;
   result.accepted         = mac_result.accepted;
   result.reject_reason    = mac_result.reason;
   result.accepted_leases  = mac_result.accepted_leases;
   result.rejected_leases  = mac_result.rejected_leases;
-
-  return launch_async([result](coro_context<async_task<f1ap_ntn_rnti_lease_pool_result>>& ctx) mutable {
-    CORO_BEGIN(ctx);
-    CORO_RETURN(result);
-  });
+  return launch_result(std::move(result));
 }
 
 async_task<f1ap_ntn_resource_audit_result>
 du_manager_impl::handle_ntn_resource_audit_request(const f1ap_ntn_resource_audit_request& request)
 {
+  auto launch_result = [](f1ap_ntn_resource_audit_result result) {
+    return launch_async(
+        [result = std::move(result)](coro_context<async_task<f1ap_ntn_resource_audit_result>>& ctx) mutable {
+          CORO_BEGIN(ctx);
+          CORO_RETURN(result);
+        });
+  };
+
   f1ap_ntn_resource_audit_result result;
   result.generation_id = request.generation_id;
-  result.accepted      = true;
+  if (!cell_mng.has_cell(request.cell_index)) {
+    result.reject_reason = "unknown_cell";
+    return launch_result(std::move(result));
+  }
+  if (cell_mng.get_cell_cfg(request.cell_index).pci != request.pci) {
+    result.reject_reason = "pci_mismatch";
+    return launch_result(std::move(result));
+  }
 
-  return launch_async([result](coro_context<async_task<f1ap_ntn_resource_audit_result>>& ctx) mutable {
-    CORO_BEGIN(ctx);
-    CORO_RETURN(result);
-  });
+  const mac_ntn_rnti_lease_pool_snapshot snapshot = params.mac.mgr.get_ntn_rnti_lease_pool_snapshot(request.cell_index);
+  if (snapshot.complete && snapshot.cell_index != request.cell_index) {
+    result.reject_reason = "snapshot_cell_mismatch";
+    return launch_result(std::move(result));
+  }
+  result.accepted      = true;
+  result.rnti_snapshot_complete    = snapshot.complete;
+  result.ue_slot_snapshot_complete = false;
+  result.reject_reason = snapshot.complete ? "ue_slot_snapshot_incomplete" : "rnti_and_ue_slot_snapshots_incomplete";
+  if (snapshot.complete) {
+    result.rnti_leases.reserve(snapshot.leases.size());
+    for (const auto& lease : snapshot.leases) {
+      result.rnti_leases.push_back({lease.rnti, lease.state, lease.distribution_state, lease.generation_id});
+    }
+  }
+
+  return launch_result(std::move(result));
 }
 
 async_task<f1ap_ntn_sib19_broadcast_result>

@@ -43,8 +43,10 @@ class mac_positioning_measurement_handler;
 enum class mac_ntn_rnti_lease_pool_operation { replace, add, clear };
 
 struct mac_ntn_rnti_lease_pool_update {
-  du_cell_index_t                      cell_index = INVALID_DU_CELL_INDEX;
-  mac_ntn_rnti_lease_pool_operation    operation  = mac_ntn_rnti_lease_pool_operation::replace;
+  du_cell_index_t                      cell_index    = INVALID_DU_CELL_INDEX;
+  mac_ntn_rnti_lease_pool_operation    operation     = mac_ntn_rnti_lease_pool_operation::replace;
+  uint32_t                             generation_id = 0;
+  uint32_t                             expiry_ms      = 0;
   std::vector<rnti_t>                  leases;
 };
 
@@ -53,6 +55,22 @@ struct mac_ntn_rnti_lease_pool_result {
   std::string         reason;
   std::vector<rnti_t> accepted_leases;
   std::vector<rnti_t> rejected_leases;
+};
+
+/// Read-only state of one CU-CP-provided NTN RNTI lease in MAC.
+struct mac_ntn_rnti_lease_snapshot_entry {
+  rnti_t      rnti          = rnti_t::INVALID_RNTI;
+  uint32_t    generation_id = 0;
+  std::string state;
+  std::string distribution_state;
+};
+
+/// Authoritative MAC snapshot for one cell's NTN RNTI lease pool.
+struct mac_ntn_rnti_lease_pool_snapshot {
+  du_cell_index_t                                cell_index         = INVALID_DU_CELL_INDEX;
+  bool                                           complete           = false;
+  bool                                           lease_mode_enabled = false;
+  std::vector<mac_ntn_rnti_lease_snapshot_entry> leases;
 };
 
 enum class mac_ntn_access_calendar_operation { prepare, query, clear };
@@ -121,6 +139,15 @@ public:
   /// Apply CU-CP-authoritative NTN RNTI leases to MAC before PRACH/RAR.
   virtual mac_ntn_rnti_lease_pool_result apply_ntn_rnti_lease_pool_update(
       const mac_ntn_rnti_lease_pool_update& request) = 0;
+
+  /// Returns a read-only snapshot of pending, consumed and expired NTN leases for one cell.
+  /// An incomplete result means that this MAC implementation cannot provide authoritative audit evidence.
+  virtual mac_ntn_rnti_lease_pool_snapshot get_ntn_rnti_lease_pool_snapshot(du_cell_index_t cell_index)
+  {
+    mac_ntn_rnti_lease_pool_snapshot result;
+    result.cell_index = cell_index;
+    return result;
+  }
 
   /// Prepare, query or clear a versioned two-cell access calendar in the MAC scheduler.
   /// "applied" proves scheduler software state only; it is not RU/RF telemetry.

@@ -479,6 +479,32 @@ TEST_F(f1ap_cu_gnbdu_resource_coordination_test, response_ack_container_complete
   EXPECT_EQ(task.get().result->generation_id, result.generation_id);
 }
 
+TEST_F(f1ap_cu_gnbdu_resource_coordination_test, rnti_lease_result_with_wrong_generation_is_rejected)
+{
+  f1ap_gnb_du_resource_coordination_request request;
+  request.ntn_rnti_lease_update = make_lease_update();
+  start_procedure(request);
+
+  f1ap_ntn_rnti_lease_pool_result result;
+  result.generation_id   = request.ntn_rnti_lease_update.generation_id + 1;
+  result.accepted        = true;
+  result.accepted_leases = request.ntn_rnti_lease_update.leases;
+
+  f1ap_message response;
+  response.pdu.set_successful_outcome().load_info_obj(ASN1_F1AP_ID_GNB_DU_RES_COORDINATION);
+  auto& asn1_resp = response.pdu.successful_outcome().value.gnb_du_res_coordination_resp();
+  asn1_resp->transaction_id = f1ap_pdu_notifier.last_f1ap_msg.pdu.init_msg()
+                                  .value.gnb_du_res_coordination_request()
+                                  ->transaction_id;
+  asn1_resp->eutra_nr_cell_res_coordination_req_ack_container = encode_f1ap_ntn_rnti_lease_pool_result(result);
+
+  f1ap->handle_message(response);
+
+  ASSERT_TRUE(task.ready());
+  EXPECT_FALSE(task.get().success);
+  EXPECT_FALSE(task.get().result.has_value());
+}
+
 TEST_F(f1ap_cu_gnbdu_resource_coordination_test, audit_request_is_sent_and_audit_result_completes_procedure)
 {
   f1ap_gnb_du_resource_coordination_request request;
@@ -511,6 +537,33 @@ TEST_F(f1ap_cu_gnbdu_resource_coordination_test, audit_request_is_sent_and_audit
   ASSERT_TRUE(task.get().audit_result.has_value());
   EXPECT_TRUE(task.get().audit_result->accepted);
   EXPECT_EQ(task.get().audit_result->generation_id, result.generation_id);
+}
+
+TEST_F(f1ap_cu_gnbdu_resource_coordination_test, audit_result_with_wrong_generation_is_rejected)
+{
+  f1ap_gnb_du_resource_coordination_request request;
+  request.ntn_resource_audit_request.du_index      = uint_to_du_index(2);
+  request.ntn_resource_audit_request.cell_index    = to_du_cell_index(1);
+  request.ntn_resource_audit_request.pci           = pci_t{17};
+  request.ntn_resource_audit_request.generation_id = 42;
+  start_procedure(request);
+
+  const auto& asn1_req = f1ap_pdu_notifier.last_f1ap_msg.pdu.init_msg().value.gnb_du_res_coordination_request();
+  f1ap_ntn_resource_audit_result result;
+  result.generation_id = request.ntn_resource_audit_request.generation_id + 1;
+  result.accepted      = true;
+
+  f1ap_message response;
+  response.pdu.set_successful_outcome().load_info_obj(ASN1_F1AP_ID_GNB_DU_RES_COORDINATION);
+  auto& asn1_resp           = response.pdu.successful_outcome().value.gnb_du_res_coordination_resp();
+  asn1_resp->transaction_id = asn1_req->transaction_id;
+  asn1_resp->eutra_nr_cell_res_coordination_req_ack_container = encode_f1ap_ntn_resource_audit_result(result);
+
+  f1ap->handle_message(response);
+
+  ASSERT_TRUE(task.ready());
+  EXPECT_FALSE(task.get().success);
+  EXPECT_FALSE(task.get().audit_result.has_value());
 }
 
 TEST_F(f1ap_cu_gnbdu_resource_coordination_test, sib19_update_request_is_sent_and_result_completes_procedure)
@@ -555,4 +608,36 @@ TEST_F(f1ap_cu_gnbdu_resource_coordination_test, sib19_update_request_is_sent_an
   ASSERT_TRUE(task.ready());
   ASSERT_TRUE(task.get().sib19_result.has_value());
   EXPECT_TRUE(task.get().sib19_result->accepted());
+}
+
+TEST_F(f1ap_cu_gnbdu_resource_coordination_test, sib19_result_with_wrong_generation_is_rejected)
+{
+  f1ap_gnb_du_resource_coordination_request request;
+  request.ntn_sib19_broadcast_update.du_index      = uint_to_du_index(1);
+  request.ntn_sib19_broadcast_update.cell_index    = to_du_cell_index(0);
+  request.ntn_sib19_broadcast_update.pci           = pci_t{42};
+  request.ntn_sib19_broadcast_update.beam_id       = "CN-BEAM-0001";
+  request.ntn_sib19_broadcast_update.nci           = nr_cell_identity::create(0x66c001).value();
+  request.ntn_sib19_broadcast_update.generation_id = 18;
+  request.ntn_sib19_broadcast_update.operation     = f1ap_ntn_sib19_broadcast_operation::clear;
+  request.ntn_sib19_broadcast_update.si_msg_idx    = 0;
+  request.ntn_sib19_broadcast_update.sib_idx       = 19;
+  start_procedure(request);
+
+  const auto& asn1_req = f1ap_pdu_notifier.last_f1ap_msg.pdu.init_msg().value.gnb_du_res_coordination_request();
+  f1ap_ntn_sib19_broadcast_result result;
+  result.generation_id = request.ntn_sib19_broadcast_update.generation_id + 1;
+  result.status        = f1ap_ntn_sib19_broadcast_result_status::clear_applied;
+
+  f1ap_message response;
+  response.pdu.set_successful_outcome().load_info_obj(ASN1_F1AP_ID_GNB_DU_RES_COORDINATION);
+  auto& asn1_resp           = response.pdu.successful_outcome().value.gnb_du_res_coordination_resp();
+  asn1_resp->transaction_id = asn1_req->transaction_id;
+  asn1_resp->eutra_nr_cell_res_coordination_req_ack_container = encode_f1ap_ntn_sib19_broadcast_result(result);
+
+  f1ap->handle_message(response);
+
+  ASSERT_TRUE(task.ready());
+  EXPECT_FALSE(task.get().success);
+  EXPECT_FALSE(task.get().sib19_result.has_value());
 }

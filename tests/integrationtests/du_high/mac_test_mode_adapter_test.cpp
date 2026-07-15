@@ -84,6 +84,33 @@ public:
   mac_pdu_handler&                      get_pdu_handler() override { return *this; }
   mac_paging_information_handler&       get_cell_paging_info_handler() override { return *this; }
 
+  mac_ntn_rnti_lease_pool_result
+  apply_ntn_rnti_lease_pool_update(const mac_ntn_rnti_lease_pool_update& request) override
+  {
+    return {true, "forwarded_by_test_mac", request.leases, {}};
+  }
+
+  mac_ntn_rnti_lease_pool_snapshot get_ntn_rnti_lease_pool_snapshot(du_cell_index_t cell_index) override
+  {
+    mac_ntn_rnti_lease_pool_snapshot result;
+    result.cell_index         = cell_index;
+    result.complete           = true;
+    result.lease_mode_enabled = true;
+    result.leases.push_back({to_rnti(0x4701), 77, "pending", "applied_by_du"});
+    return result;
+  }
+
+  mac_ntn_access_calendar_result
+  apply_ntn_access_calendar_update(const mac_ntn_access_calendar_update& request) override
+  {
+    mac_ntn_access_calendar_result result;
+    result.status           = mac_ntn_access_calendar_status::ready;
+    result.reason           = "forwarded_by_test_mac";
+    result.schedule_version = request.schedule_version;
+    result.calendar_hash    = request.calendar_hash;
+    return result;
+  }
+
   void handle_rach_indication(const mac_rach_indication& rach_ind) override {}
   void handle_crc(const mac_crc_indication_message& msg) override { events.last_crc = msg; }
   void handle_uci(const mac_uci_indication_message& msg) override { events.last_uci = msg; }
@@ -224,6 +251,39 @@ protected:
   {
   }
 };
+
+TEST_F(mac_test_mode_test, ntn_management_requests_are_forwarded_to_adapted_mac)
+{
+  mac_ntn_rnti_lease_pool_update lease_update;
+  lease_update.cell_index    = to_du_cell_index(0);
+  lease_update.operation     = mac_ntn_rnti_lease_pool_operation::replace;
+  lease_update.generation_id = 77;
+  lease_update.expiry_ms     = 1000;
+  lease_update.leases        = {to_rnti(0x4701)};
+
+  const mac_ntn_rnti_lease_pool_result lease_result = adapter.apply_ntn_rnti_lease_pool_update(lease_update);
+  ASSERT_TRUE(lease_result.accepted);
+  EXPECT_EQ(lease_result.reason, "forwarded_by_test_mac");
+  EXPECT_EQ(lease_result.accepted_leases, lease_update.leases);
+
+  const mac_ntn_rnti_lease_pool_snapshot snapshot =
+      adapter.get_ntn_rnti_lease_pool_snapshot(to_du_cell_index(0));
+  ASSERT_TRUE(snapshot.complete);
+  ASSERT_EQ(snapshot.leases.size(), 1U);
+  EXPECT_EQ(snapshot.leases.front().generation_id, lease_update.generation_id);
+
+  mac_ntn_access_calendar_update calendar_update;
+  calendar_update.operation        = mac_ntn_access_calendar_operation::query;
+  calendar_update.schedule_version = 88;
+  calendar_update.calendar_hash    = "calendar-88";
+
+  const mac_ntn_access_calendar_result calendar_result =
+      adapter.apply_ntn_access_calendar_update(calendar_update);
+  EXPECT_EQ(calendar_result.status, mac_ntn_access_calendar_status::ready);
+  EXPECT_EQ(calendar_result.reason, "forwarded_by_test_mac");
+  EXPECT_EQ(calendar_result.schedule_version, calendar_update.schedule_version);
+  EXPECT_EQ(calendar_result.calendar_hash, calendar_update.calendar_hash);
+}
 
 TEST_F(mac_test_mode_test, when_test_mode_ue_has_pucch_grants_then_uci_indications_are_auto_forwarded_to_mac)
 {

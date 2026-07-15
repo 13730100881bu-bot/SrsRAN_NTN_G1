@@ -73,6 +73,7 @@ struct f1ap_ntn_resource_audit_rnti_lease {
   rnti_t      rnti = rnti_t::INVALID_RNTI;
   std::string state;
   std::string distribution_state;
+  uint32_t    generation_id = 0;
 };
 
 struct f1ap_ntn_resource_audit_ue_slot {
@@ -84,6 +85,10 @@ struct f1ap_ntn_resource_audit_ue_slot {
 struct f1ap_ntn_resource_audit_result {
   uint32_t                                      generation_id = 0;
   bool                                          accepted = false;
+  /// True only when rnti_leases contains the complete DU/MAC lease snapshot for the requested cell.
+  bool                                          rnti_snapshot_complete = false;
+  /// True only when ue_slots contains the complete DU per-UE SR/SRS snapshot for the requested cell.
+  bool                                          ue_slot_snapshot_complete = false;
   std::string                                   reject_reason;
   std::vector<f1ap_ntn_resource_audit_rnti_lease> rnti_leases;
   std::vector<f1ap_ntn_resource_audit_ue_slot>    ue_slots;
@@ -731,7 +736,7 @@ decode_f1ap_ntn_resource_audit_request(const byte_buffer& container)
 
 inline byte_buffer encode_f1ap_ntn_resource_audit_result(const f1ap_ntn_resource_audit_result& result)
 {
-  static constexpr std::array<uint8_t, 8> magic = {'N', 'T', 'A', 'U', 'D', 'R', '0', '1'};
+  static constexpr std::array<uint8_t, 8> magic = {'N', 'T', 'A', 'U', 'D', 'R', '0', '2'};
 
   std::vector<uint8_t> payload;
   payload.insert(payload.end(), magic.begin(), magic.end());
@@ -778,10 +783,15 @@ inline byte_buffer encode_f1ap_ntn_resource_audit_result(const f1ap_ntn_resource
 
   write_u32(result.generation_id);
   write_u8(result.accepted ? 1 : 0);
+  uint8_t completeness_flags = 0;
+  completeness_flags |= result.rnti_snapshot_complete ? 0x01U : 0U;
+  completeness_flags |= result.ue_slot_snapshot_complete ? 0x02U : 0U;
+  write_u8(completeness_flags);
   write_string(result.reject_reason);
   write_u16(static_cast<uint16_t>(result.rnti_leases.size()));
   for (const auto& lease : result.rnti_leases) {
     write_u16(to_value(lease.rnti));
+    write_u32(lease.generation_id);
     write_string(lease.state);
     write_string(lease.distribution_state);
   }
@@ -798,18 +808,22 @@ inline byte_buffer encode_f1ap_ntn_resource_audit_result(const f1ap_ntn_resource
 inline std::optional<f1ap_ntn_resource_audit_result>
 decode_f1ap_ntn_resource_audit_result(const byte_buffer& container)
 {
-  static constexpr std::array<uint8_t, 8> magic = {'N', 'T', 'A', 'U', 'D', 'R', '0', '1'};
+  static constexpr std::array<uint8_t, 7> magic_prefix = {'N', 'T', 'A', 'U', 'D', 'R', '0'};
 
-  if (container.length() < magic.size() + 9) {
+  if (container.length() < magic_prefix.size() + 1 + 9) {
     return std::nullopt;
   }
-  for (unsigned i = 0; i != magic.size(); ++i) {
-    if (container[i] != magic[i]) {
+  for (unsigned i = 0; i != magic_prefix.size(); ++i) {
+    if (container[i] != magic_prefix[i]) {
       return std::nullopt;
     }
   }
+  const uint8_t codec_version = container[magic_prefix.size()];
+  if (codec_version != '1' && codec_version != '2') {
+    return std::nullopt;
+  }
 
-  size_t offset = magic.size();
+  size_t     offset  = magic_prefix.size() + 1;
   const auto read_u8 = [&container, &offset](uint8_t& value) {
     if (offset + 1 > container.length()) {
       return false;
@@ -892,13 +906,21 @@ decode_f1ap_ntn_resource_audit_result(const byte_buffer& container)
 
   f1ap_ntn_resource_audit_result result;
   uint8_t accepted = 0;
-  uint16_t nof_leases = 0;
-  uint16_t nof_slots = 0;
-  if (!read_u32(result.generation_id) || !read_u8(accepted) || accepted > 1 ||
-      !read_string(result.reject_reason) || !read_u16(nof_leases)) {
+  uint8_t  completeness_flags = 0;
+  uint16_t nof_leases         = 0;
+  uint16_t nof_slots          = 0;
+  if (!read_u32(result.generation_id) || !read_u8(accepted) || accepted > 1) {
+    return std::nullopt;
+  }
+  if (codec_version == '2' && (!read_u8(completeness_flags) || (completeness_flags & 0xfcU) != 0)) {
+    return std::nullopt;
+  }
+  if (!read_string(result.reject_reason) || !read_u16(nof_leases)) {
     return std::nullopt;
   }
   result.accepted = accepted == 1;
+  result.rnti_snapshot_complete    = codec_version == '2' && (completeness_flags & 0x01U) != 0;
+  result.ue_slot_snapshot_complete = codec_version == '2' && (completeness_flags & 0x02U) != 0;
   result.rnti_leases.reserve(nof_leases);
   for (unsigned i = 0; i != nof_leases; ++i) {
     uint16_t rnti_value = 0;
@@ -907,6 +929,9 @@ decode_f1ap_ntn_resource_audit_result(const byte_buffer& container)
       return std::nullopt;
     }
     lease.rnti = to_rnti(rnti_value);
+    if (codec_version == '2' && !read_u32(lease.generation_id)) {
+      return std::nullopt;
+    }
     if (!read_string(lease.state) || !read_string(lease.distribution_state)) {
       return std::nullopt;
     }

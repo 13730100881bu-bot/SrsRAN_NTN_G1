@@ -168,6 +168,9 @@ public:
 
   mac_ntn_rnti_lease_pool_result apply_ntn_rnti_lease_pool_update(
       const mac_ntn_rnti_lease_pool_update& request) override;
+  mac_ntn_rnti_lease_pool_snapshot get_ntn_rnti_lease_pool_snapshot(du_cell_index_t cell_index) override;
+  mac_ntn_access_calendar_result
+  apply_ntn_access_calendar_update(const mac_ntn_access_calendar_update& request) override;
 
   mac_cell_rach_handler& get_rach_handler(du_cell_index_t cell_index) override
   {
