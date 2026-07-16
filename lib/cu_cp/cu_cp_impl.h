@@ -52,6 +52,7 @@
 #include "srsran/e2/e2_cu.h"
 #include "srsran/e2/e2_cu_up_factory.h"
 #include "srsran/f1ap/cu_cp/f1ap_cu.h"
+#include "srsran/f1ap/ntn_access_calendar.h"
 #include "srsran/f1ap/ntn_ul_slot_resource_request.h"
 #include "srsran/nrppa/nrppa.h"
 #include "srsran/ran/plmn_identity.h"
@@ -700,6 +701,8 @@ private:
   bool                                                   ntn_position_plan_query_in_flight = false;
   bool                                                   ntn_position_plan_clear_in_flight = false;
   std::optional<std::pair<uint64_t, std::string>>         ntn_position_plan_prepare_dispatched;
+  uint64_t                                                 ntn_position_plan_static_preflight_schedule_version = 0;
+  std::array<f1ap_ntn_access_calendar_preflight_report, 2> ntn_position_plan_static_preflight_reports{};
   std::vector<std::pair<ntn_activated_position_plan, std::string>> ntn_position_plan_clear_queue;
 
   ntn_beam_placement_planner ntn_beam_planner;

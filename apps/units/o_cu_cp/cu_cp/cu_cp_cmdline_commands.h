@@ -775,6 +775,13 @@ public:
                position_plan.satellite_id,
                position_plan.last_rejection,
                position_plan.last_rejected_schedule_version);
+    fmt::print("NTN onboard planning context: schema_version={} planning_run_id={} access_profile_id={} "
+               "access_profile_hash={} identity_authority={}\n",
+               position_plan.schema_version,
+               position_plan.planning_run_id,
+               position_plan.access_profile_id,
+               position_plan.access_profile_hash,
+               position_plan.identity_authority);
     fmt::print("NTN onboard position plan received: present={} catalog_version={} schedule_version={} content_hash={} "
                "candidate_l1={} activation_epoch_unix_ms={}\n",
                position_plan.received_plan_present ? "yes" : "no",
@@ -796,10 +803,15 @@ public:
                position_plan.pending_content_hash,
                position_plan.pending_calendar_hash,
                position_plan.pending_activation_epoch_unix_ms);
-    fmt::print("NTN access calendar intent: schedule_version={} max_ssb_interval_ms={} max_prach_interval_ms={} "
+    fmt::print("NTN access calendar intent: schedule_version={} intents={} ssb={} prach_ro={} prach_ul_beam={} "
+               "max_ssb_interval_ms={} max_prach_interval_ms={} "
                "prach_ro_without_beam={} resource_conflicts={} deployment_detail={} evidence={} "
                "clear_queue={} clear_in_flight={}\n",
                position_plan.audited_schedule_version,
+               position_plan.calendar_intents,
+               position_plan.ssb_intents,
+               position_plan.prach_ro_intents,
+               position_plan.prach_ul_beam_intents,
                position_plan.max_ssb_interval_ms,
                position_plan.max_prach_interval_ms,
                position_plan.prach_ro_without_beam,
@@ -808,13 +820,39 @@ public:
                position_plan.execution_evidence,
                position_plan.clear_queue_depth,
                position_plan.clear_in_flight ? "yes" : "no");
+    for (unsigned i = 0; i != position_plan.static_opportunities.size(); ++i) {
+      const auto& preflight = position_plan.static_opportunities[i];
+      const std::string numerology = preflight.performed ? fmt::format("{}", preflight.numerology) : "n/a";
+      fmt::print("NTN static opportunity preflight: schedule_version={} nci={:#x} pci={} performed={} passed={} "
+                 "numerology={} ssb={}/{} prach={}/{} max_ssb_gap_slots={} max_prach_gap_slots={} "
+                 "first_unmatched={} evidence=static_scheduler_opportunity_only_no_position_or_rf_evidence\n",
+                 position_plan.static_preflight_schedule_version,
+                 position_plan.cells[i].nci,
+                 position_plan.cells[i].pci,
+                 preflight.performed ? "yes" : "no",
+                 preflight.passed ? "yes" : "no",
+                 numerology,
+                 preflight.matched_ssb,
+                 preflight.expected_ssb,
+                 preflight.matched_prach,
+                 preflight.expected_prach,
+                 preflight.max_ssb_gap_slots,
+                 preflight.max_prach_gap_slots,
+                 preflight.first_unmatched);
+    }
     for (const auto& cell : position_plan.cells) {
-      fmt::print("NTN onboard cell: nci={:#x} pci={} active_l1={} pending_l1={} capacity={}\n",
+      fmt::print("NTN onboard cell: nci={:#x} pci={} active_l1={} pending_l1={} capacity={} "
+                 "analog_ports={}/{} digital_planning_capacity={} "
+                 "digital_binding={}\n",
                  cell.nci,
                  cell.pci,
                  cell.active_l1_positions,
                  cell.pending_l1_positions,
-                 cell.capacity);
+                 cell.capacity,
+                 cell.analog_ports_used,
+                 cell.analog_port_capacity,
+                 cell.digital_planning_capacity,
+                 cell.digital_binding_state);
     }
     fmt::print("NTN readable summary: access_ready={} service_ready={} move_waiting={} move_active={} "
                "reserved_capacity={} safety_guard_active={}\n",

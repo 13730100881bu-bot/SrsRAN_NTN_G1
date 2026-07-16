@@ -93,6 +93,8 @@ public:
   const cell_configuration& cell_cfg;
 
 private:
+  ntn_access_calendar_response preflight_ntn_access_calendar(const ntn_access_calendar_request& request) const;
+
   void reset_resource_grid(slot_point sl_tx);
 
   /// Resource grid of this cell.

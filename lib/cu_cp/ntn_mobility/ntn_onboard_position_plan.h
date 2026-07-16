@@ -153,6 +153,7 @@ enum class ntn_position_plan_reject_reason {
   resource_conflict,
   du_unavailable,
   cross_du_calendar_not_supported,
+  static_opportunity_mismatch,
   du_prepare_rejected,
   du_prepare_timeout,
   du_activation_not_applied,

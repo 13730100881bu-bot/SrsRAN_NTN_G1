@@ -37,6 +37,12 @@ public:
   /// Allocate RACH PDUs for the given slot.
   void run_slot(cell_resource_allocator& res_grid);
 
+  /// Returns whether the configured cell has a static PRACH opportunity starting in the supplied slot.
+  ///
+  /// For TDD cells, every slot occupied by a long preamble must be fully UL. This predicate is read-only and is also
+  /// used by the allocation path.
+  bool has_prach_opportunity(slot_point sl) const;
+
   void stop();
 
 private:

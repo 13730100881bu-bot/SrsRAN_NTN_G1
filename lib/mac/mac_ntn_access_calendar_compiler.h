@@ -159,6 +159,7 @@ compile_mac_ntn_access_calendar_cell(const mac_ntn_access_calendar_update& reque
   scheduler_request.activation_slot = activation_slot;
   scheduler_request.validity_slots  = static_cast<uint32_t>(expected_validity_slots.value());
   scheduler_request.cycle_slots     = static_cast<uint32_t>(cycle_slots.value());
+  scheduler_request.expectations.reserve(cell.intents.size());
 
   std::map<std::tuple<uint32_t, uint32_t>, uint8_t> merged_windows;
   for (const mac_ntn_access_calendar_intent& intent : cell.intents) {
@@ -179,6 +180,20 @@ compile_mac_ntn_access_calendar_cell(const mac_ntn_access_calendar_update& reque
       result.reject_reason = "invalid_intent_direction";
       return result;
     }
+
+    if (intent.purpose == mac_ntn_access_calendar_purpose::ssb_sib_paging ||
+        intent.purpose == mac_ntn_access_calendar_purpose::ssb_sib_paging_rar ||
+        intent.purpose == mac_ntn_access_calendar_purpose::prach_ro) {
+      ntn_access_calendar_expectation expectation;
+      expectation.position_id       = intent.position_id;
+      expectation.start_slot_offset = static_cast<uint32_t>(intent_start_slots.value());
+      expectation.nof_slots         = static_cast<uint32_t>(intent_duration_slots.value());
+      expectation.purpose = intent.purpose == mac_ntn_access_calendar_purpose::prach_ro
+                                ? ntn_access_calendar_purpose::prach
+                                : ntn_access_calendar_purpose::ssb;
+      scheduler_request.expectations.push_back(std::move(expectation));
+    }
+
     const auto key = std::make_tuple(static_cast<uint32_t>(intent_start_slots.value()),
                                      static_cast<uint32_t>(intent_duration_slots.value()));
     merged_windows[key] |= mask.mask;

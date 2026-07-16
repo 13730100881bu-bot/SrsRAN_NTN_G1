@@ -690,14 +690,18 @@ TEST(ntn_onboard_position_plan, deployment_rejection_removes_only_matching_pendi
   EXPECT_FALSE(controller.reject_pending_deployment(
       1, first_hash, ntn_position_plan_reject_reason::du_prepare_rejected, "stale_response"));
   EXPECT_TRUE(controller.reject_pending_deployment(
-      2, second_hash, ntn_position_plan_reject_reason::du_prepare_rejected, "static_prach_misaligned"));
+      2,
+      second_hash,
+      ntn_position_plan_reject_reason::static_opportunity_mismatch,
+      "static_prach_opportunity_missing"));
 
   ASSERT_TRUE(controller.active_plan().has_value());
   EXPECT_EQ(controller.active_plan()->source.schedule_version, 1U);
   EXPECT_FALSE(controller.pending_plan().has_value());
   EXPECT_TRUE(controller.active_has_external_apply_evidence());
   EXPECT_EQ(controller.deployment_stage(), ntn_position_plan_deployment_stage::rejected);
-  EXPECT_EQ(controller.deployment_detail(), "static_prach_misaligned");
+  EXPECT_EQ(controller.last_rejection_reason(), ntn_position_plan_reject_reason::static_opportunity_mismatch);
+  EXPECT_EQ(controller.deployment_detail(), "static_prach_opportunity_missing");
 }
 
 TEST(ntn_onboard_position_plan, deployment_feedback_is_monotonic_and_idempotent)

@@ -57,6 +57,8 @@ public:
         return query(request);
       case ntn_access_calendar_operation::clear:
         return clear(request);
+      case ntn_access_calendar_operation::preflight:
+        return make_rejected_response(request, ntn_access_calendar_reject_reason::unsupported);
     }
     return make_rejected_response(request, ntn_access_calendar_reject_reason::unsupported);
   }

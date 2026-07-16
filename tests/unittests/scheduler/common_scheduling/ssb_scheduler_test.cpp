@@ -436,8 +436,11 @@ void test_ssb_allocation(ssb_periodicity    ssb_period,
       ssb_list.clear();
     }
 
+    const bool has_static_ssb_opportunity = ssb_sch.has_ssb_opportunity(bench.slot_tx());
+
     // Schedule the SSB.
     ssb_sch.schedule_ssb(bench.get_slot_allocator());
+    ASSERT_EQ(has_static_ssb_opportunity, !ssb_list.empty());
 
     // Select SSB case with reference to TS 38.213, Section 4.1.
     ssb_pattern_case ssb_case = bench.get_cell_sched_config().ssb_case;

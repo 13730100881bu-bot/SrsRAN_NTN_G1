@@ -32,6 +32,7 @@
 #include "srsran/cu_cp/cu_cp.h"
 #include "srsran/cu_cp/cu_cp_configuration.h"
 #include "srsran/cu_cp/cu_cp_types.h"
+#include "srsran/f1ap/ntn_access_calendar.h"
 #include "srsran/ran/plmn_identity.h"
 #include <array>
 #include <optional>
@@ -86,6 +87,8 @@ struct cu_cp_test_env_params {
   bool                                                   ntn_calendar_query_reports_zero_intents = false;
   bool                                                   ntn_calendar_prepare_rejects            = false;
   bool                                                   ntn_calendar_prepare_reports_ready      = false;
+  bool                                                   ntn_calendar_preflight_incomplete       = false;
+  bool                                                   ntn_calendar_preflight_unsupported      = false;
   bool                                                   ntn_resource_audit_rejects              = false;
 };
 
@@ -215,6 +218,8 @@ public:
 
   void drain_f1ap_resource_coordination_requests(unsigned du_idx);
 
+  unsigned nof_ntn_calendar_clear_requests() const { return ntn_calendar_clear_requests; }
+
   const cu_cp_test_env_params& get_test_env_params() const { return params; }
 
   const ue_context* find_ue_context(unsigned du_idx, gnb_du_ue_f1ap_id_t du_ue_id) const;
@@ -305,6 +310,8 @@ private:
   std::map<unsigned, std::unordered_map<gnb_du_ue_f1ap_id_t, ran_ue_id_t>> du_ue_id_to_ran_ue_id_map;
   std::map<unsigned, std::optional<f1ap_ntn_ul_slot_resource_request>>     last_ntn_ul_slot_request_by_du;
   std::array<uint16_t, 2>                                                  last_ntn_calendar_intents_per_cell{};
+  std::array<f1ap_ntn_access_calendar_preflight_report, 2>                 last_ntn_calendar_preflight_reports{};
+  unsigned                                                                 ntn_calendar_clear_requests = 0;
 
   /// CU-CP instance.
   std::unique_ptr<cu_cp> cu_cp_inst;

@@ -90,6 +90,10 @@ TEST(mac_ntn_access_calendar_compiler_test,
       make_intent(mac_ntn_access_calendar_direction::uplink, mac_ntn_access_calendar_purpose::prach_ro));
   intents.push_back(
       make_intent(mac_ntn_access_calendar_direction::uplink, mac_ntn_access_calendar_purpose::prach_ul_beam));
+  intents[0].position_id = "G000001";
+  intents[1].position_id = "G000002";
+  intents[2].position_id = "G000003";
+  intents[3].position_id = "G000003";
 
   const mac_ntn_access_calendar_compile_result result = compile_first_cell(context);
 
@@ -109,6 +113,18 @@ TEST(mac_ntn_access_calendar_compiler_test,
   EXPECT_EQ(scheduler_request.windows[0].start_slot_offset, 32);
   EXPECT_EQ(scheduler_request.windows[0].nof_slots, 80);
   EXPECT_EQ(scheduler_request.windows[0].purpose_mask, NTN_ACCESS_CALENDAR_ALL_PURPOSES);
+
+  ASSERT_EQ(scheduler_request.expectations.size(), 3U);
+  EXPECT_EQ(scheduler_request.expectations[0].position_id, "G000001");
+  EXPECT_EQ(scheduler_request.expectations[0].purpose, ntn_access_calendar_purpose::ssb);
+  EXPECT_EQ(scheduler_request.expectations[1].position_id, "G000002");
+  EXPECT_EQ(scheduler_request.expectations[1].purpose, ntn_access_calendar_purpose::ssb);
+  EXPECT_EQ(scheduler_request.expectations[2].position_id, "G000003");
+  EXPECT_EQ(scheduler_request.expectations[2].purpose, ntn_access_calendar_purpose::prach);
+  for (const ntn_access_calendar_expectation& expectation : scheduler_request.expectations) {
+    EXPECT_EQ(expectation.start_slot_offset, 32U);
+    EXPECT_EQ(expectation.nof_slots, 80U);
+  }
 }
 
 TEST(mac_ntn_access_calendar_compiler_test, when_direction_does_not_match_purpose_then_compile_is_rejected)

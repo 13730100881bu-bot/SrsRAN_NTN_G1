@@ -1437,6 +1437,11 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_versioned_onboard_position_plan
   auto& plan                    = command_handler.ntn.runtime.onboard_position_plan;
   plan.enabled                  = true;
   plan.du_execution_enabled     = true;
+  plan.schema_version           = 2;
+  plan.planning_run_id          = "planning-run-2026-07-15";
+  plan.access_profile_id        = "ntn-access-16a-64d-v1";
+  plan.access_profile_hash      = "sha256:profile";
+  plan.identity_authority       = "onboard_position_plan";
   plan.stage                    = "pending";
   plan.deployment_stage         = "ready";
   plan.deployment_detail        = "du_ready";
@@ -1458,12 +1463,26 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_versioned_onboard_position_plan
   plan.received_activation_epoch_unix_ms = 960000;
   plan.candidate_l1_positions   = 256;
   plan.audited_schedule_version = 21;
+  plan.calendar_intents         = 2560;
+  plan.ssb_intents              = 2048;
+  plan.prach_ro_intents         = 256;
+  plan.prach_ul_beam_intents    = 256;
   plan.max_ssb_interval_ms      = 80;
   plan.max_prach_interval_ms    = 640;
   plan.last_rejection           = "schedule_overflow";
   plan.last_rejected_schedule_version = 22;
-  plan.cells[0] = {nr_cell_identity::create(0x123450001ULL).value(), 101, 128, 128, 128};
-  plan.cells[1] = {nr_cell_identity::create(0x123450002ULL).value(), 202, 128, 128, 128};
+  plan.cells[0] = {nr_cell_identity::create(0x123450001ULL).value(), 101, 128, 128, 128, 16, 16, 64};
+  plan.cells[1] = {nr_cell_identity::create(0x123450002ULL).value(), 202, 128, 128, 128, 16, 16, 64};
+  plan.static_preflight_schedule_version             = 21;
+  plan.static_opportunities[0].performed             = true;
+  plan.static_opportunities[0].passed                = true;
+  plan.static_opportunities[0].numerology            = 1;
+  plan.static_opportunities[0].expected_ssb          = 1024;
+  plan.static_opportunities[0].matched_ssb           = 1024;
+  plan.static_opportunities[0].expected_prach        = 128;
+  plan.static_opportunities[0].matched_prach         = 128;
+  plan.static_opportunities[0].max_ssb_gap_slots     = 160;
+  plan.static_opportunities[0].max_prach_gap_slots   = 1280;
 
   ntn_state_app_command command(command_handler);
   ::testing::internal::CaptureStdout();
@@ -1474,6 +1493,10 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_versioned_onboard_position_plan
   EXPECT_NE(output.find("NTN onboard position plan: enabled=yes du_execution=yes stage=pending deployment=ready "
                         "satellite_id=P01-S01 last_rejection=schedule_overflow rejected_schedule_version=22"),
             std::string::npos);
+  EXPECT_NE(output.find("NTN onboard planning context: schema_version=2 planning_run_id=planning-run-2026-07-15 "
+                        "access_profile_id=ntn-access-16a-64d-v1 access_profile_hash=sha256:profile "
+                        "identity_authority=onboard_position_plan"),
+            std::string::npos);
   EXPECT_NE(output.find("NTN onboard position plan received: present=yes catalog_version=12 schedule_version=22 "
                         "content_hash=sha256:rejected candidate_l1=256 activation_epoch_unix_ms=960000"),
             std::string::npos);
@@ -1483,10 +1506,15 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_versioned_onboard_position_plan
   EXPECT_NE(output.find("NTN onboard position plan pending: catalog_version=11 schedule_version=21 "
                         "content_hash=sha256:pending calendar_hash=sha256:calendar activation_epoch_unix_ms=640000"),
             std::string::npos);
-  EXPECT_NE(output.find("NTN access calendar intent: schedule_version=21 max_ssb_interval_ms=80 "
+  EXPECT_NE(output.find("NTN access calendar intent: schedule_version=21 intents=2560 ssb=2048 prach_ro=256 "
+                        "prach_ul_beam=256 max_ssb_interval_ms=80 "
                         "max_prach_interval_ms=640 "
                         "prach_ro_without_beam=0 resource_conflicts=0 deployment_detail=du_ready "
                         "evidence=intent_or_control_plane_only clear_queue=0 clear_in_flight=no"),
+            std::string::npos);
+  EXPECT_NE(output.find("NTN static opportunity preflight: schedule_version=21 nci=0x123450001 pci=101 "
+                        "performed=yes passed=yes numerology=1 ssb=1024/1024 prach=128/128 "
+                        "max_ssb_gap_slots=160 max_prach_gap_slots=1280"),
             std::string::npos);
   EXPECT_NE(output.find("NTN onboard cell: nci=0x123450001 pci=101 active_l1=128 pending_l1=128 capacity=128"),
             std::string::npos);

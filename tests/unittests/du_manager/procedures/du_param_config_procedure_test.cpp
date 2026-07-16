@@ -501,6 +501,33 @@ TEST_P(du_manager_ntn_access_calendar_status_test, when_mac_returns_status_then_
   dependencies.mac.next_ntn_access_calendar_result.reason = "mac_status_reason";
   dependencies.mac.next_ntn_access_calendar_result.accepted_intents = {7, 11};
   dependencies.mac.next_ntn_access_calendar_result.effective_activation_slot = slot_point{1, 321};
+  auto& mac_preflight0                    = dependencies.mac.next_ntn_access_calendar_result.preflight_reports[0];
+  mac_preflight0.performed                = true;
+  mac_preflight0.passed                   = true;
+  mac_preflight0.numerology               = 1;
+  mac_preflight0.expected_ssb             = 8;
+  mac_preflight0.matched_ssb              = 8;
+  mac_preflight0.expected_prach           = 1;
+  mac_preflight0.matched_prach            = 1;
+  mac_preflight0.max_ssb_gap_slots        = 160;
+  mac_preflight0.max_prach_gap_slots      = 1280;
+  const bool complete_preflight = test_case.mac_status == mac_ntn_access_calendar_status::preparing ||
+                                  test_case.mac_status == mac_ntn_access_calendar_status::ready ||
+                                  test_case.mac_status == mac_ntn_access_calendar_status::applied;
+  auto& mac_preflight1                    = dependencies.mac.next_ntn_access_calendar_result.preflight_reports[1];
+  mac_preflight1.performed                = true;
+  mac_preflight1.passed                   = complete_preflight;
+  mac_preflight1.numerology               = 1;
+  mac_preflight1.expected_ssb             = 9;
+  mac_preflight1.matched_ssb              = complete_preflight ? 9 : 8;
+  mac_preflight1.expected_prach           = 1;
+  mac_preflight1.matched_prach            = complete_preflight ? 1 : 0;
+  mac_preflight1.max_ssb_gap_slots        = 160;
+  mac_preflight1.max_prach_gap_slots      = 1280;
+  if (!complete_preflight) {
+    mac_preflight1.first_unmatched = mac_ntn_access_calendar_unmatched_intent{
+        "G000002", mac_ntn_access_calendar_preflight_purpose::prach, 640, 5};
+  }
   f1ap_ntn_access_calendar_update request = make_ntn_calendar_prepare(cell_cfgs);
 
   async_task<f1ap_ntn_access_calendar_result>         procedure =
@@ -516,6 +543,29 @@ TEST_P(du_manager_ntn_access_calendar_status_test, when_mac_returns_status_then_
   EXPECT_EQ(response.accepted_intents_per_cell[1], 11);
   ASSERT_TRUE(response.activation_slot.has_value());
   EXPECT_EQ(response.activation_slot.value(), slot_point(1, 321));
+  EXPECT_TRUE(response.preflight_reports[0].performed);
+  EXPECT_TRUE(response.preflight_reports[0].passed);
+  EXPECT_EQ(response.preflight_reports[0].numerology, 1U);
+  EXPECT_EQ(response.preflight_reports[0].expected_ssb, 8U);
+  EXPECT_EQ(response.preflight_reports[0].matched_ssb, 8U);
+  EXPECT_EQ(response.preflight_reports[0].expected_prach, 1U);
+  EXPECT_EQ(response.preflight_reports[0].matched_prach, 1U);
+  EXPECT_EQ(response.preflight_reports[0].max_ssb_gap_slots, 160U);
+  EXPECT_EQ(response.preflight_reports[0].max_prach_gap_slots, 1280U);
+  EXPECT_TRUE(response.preflight_reports[1].performed);
+  EXPECT_EQ(response.preflight_reports[1].passed, complete_preflight);
+  EXPECT_EQ(response.preflight_reports[1].expected_ssb, 9U);
+  EXPECT_EQ(response.preflight_reports[1].matched_ssb, complete_preflight ? 9U : 8U);
+  EXPECT_EQ(response.preflight_reports[1].expected_prach, 1U);
+  EXPECT_EQ(response.preflight_reports[1].matched_prach, complete_preflight ? 1U : 0U);
+  EXPECT_EQ(response.preflight_reports[1].first_unmatched.has_value(), !complete_preflight);
+  if (!complete_preflight) {
+    EXPECT_EQ(response.preflight_reports[1].first_unmatched->position_id, "G000002");
+    EXPECT_EQ(response.preflight_reports[1].first_unmatched->purpose,
+              f1ap_ntn_access_calendar_preflight_purpose::prach);
+    EXPECT_EQ(response.preflight_reports[1].first_unmatched->start_slot_offset, 640U);
+    EXPECT_EQ(response.preflight_reports[1].first_unmatched->nof_slots, 5U);
+  }
 }
 
 INSTANTIATE_TEST_SUITE_P(

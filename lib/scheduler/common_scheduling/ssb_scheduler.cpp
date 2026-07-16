@@ -56,7 +56,6 @@ void ssb_scheduler::stop()
 
 void ssb_scheduler::schedule_ssb(cell_slot_resource_allocator& res_grid)
 {
-  slot_point            sl_point = res_grid.slot;
   ssb_information_list& ssb_list = res_grid.result.dl.bc.ssb_info;
 
   if (ssb_list.full()) {
@@ -64,6 +63,26 @@ void ssb_scheduler::schedule_ssb(cell_slot_resource_allocator& res_grid)
     return;
   }
 
+  build_ssb_information(ssb_list, res_grid.slot);
+
+  // Update the used DL PRBs with those allocated to the SSBs.
+  for (auto& ssb : ssb_list) {
+    // TODO: In case, SSB SCS != init DL BWP SCS, we should do an adaptation of symbols and CRBs to the numerology
+    // of the latter.
+    grant_info grant{cell_cfg.dl_cfg_common.init_dl_bwp.generic_params.scs, ssb.symbols, ssb.crbs};
+    res_grid.dl_res_grid.fill(grant);
+  }
+}
+
+bool ssb_scheduler::has_ssb_opportunity(slot_point sl_point) const
+{
+  ssb_information_list ssb_list;
+  build_ssb_information(ssb_list, sl_point);
+  return !ssb_list.empty();
+}
+
+void ssb_scheduler::build_ssb_information(ssb_information_list& ssb_list, slot_point sl_point) const
+{
   // Perform mod operation of slot index by ssb_periodicity;
   // "ssb_periodicity * nof_slots_per_subframe" gives the number of slots in 1 ssb_periodicity time interval.
   slot_point sl_point_mod(sl_point.numerology(), sl_point.to_uint() % (ssb_period * sl_point.nof_slots_per_subframe()));
@@ -86,19 +105,11 @@ void ssb_scheduler::schedule_ssb(cell_slot_resource_allocator& res_grid)
     default:
       srsran_assert(cell_cfg.ssb_case < ssb_pattern_case::invalid, "Only SSB case A, B and C are currently supported");
   }
-
-  // Update the used DL PRBs with those allocated to the SSBs.
-  for (auto& ssb : ssb_list) {
-    // TODO: In case, SSB SCS != init DL BWP SCS, we should do an adaptation of symbols and CRBs to the numerology
-    // of the latter.
-    grant_info grant{cell_cfg.dl_cfg_common.init_dl_bwp.generic_params.scs, ssb.symbols, ssb.crbs};
-    res_grid.dl_res_grid.fill(grant);
-  }
 }
 
 void ssb_scheduler::ssb_alloc_case_A_C(ssb_information_list& ssb_list,
                                        uint32_t              freq_arfcn_cut_off,
-                                       slot_point            sl_point_mod)
+                                       slot_point            sl_point_mod) const
 {
   uint32_t slot_idx = sl_point_mod.to_uint();
 
@@ -139,7 +150,7 @@ void ssb_scheduler::ssb_alloc_case_A_C(ssb_information_list& ssb_list,
   }
 }
 
-void ssb_scheduler::ssb_alloc_case_B(ssb_information_list& ssb_list, slot_point sl_point_mod)
+void ssb_scheduler::ssb_alloc_case_B(ssb_information_list& ssb_list, slot_point sl_point_mod) const
 {
   uint32_t slot_idx = sl_point_mod.to_uint();
 
@@ -200,7 +211,7 @@ void ssb_scheduler::ssb_alloc_case_B(ssb_information_list& ssb_list, slot_point 
   }
 }
 
-void ssb_scheduler::ssb_alloc_case_D(ssb_information_list& ssb_list, slot_point sl_point_mod)
+void ssb_scheduler::ssb_alloc_case_D(ssb_information_list& ssb_list, slot_point sl_point_mod) const
 {
   // Number of slots within a 5ms burst for the SSB subcarrier spacing of 120kHz.
   static constexpr unsigned nof_slots_ssb_burst = 5 * pow2(to_numerology_value(subcarrier_spacing::kHz120));

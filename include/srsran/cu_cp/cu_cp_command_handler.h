@@ -168,22 +168,45 @@ struct cu_cp_ntn_antenna_intent_snapshot {
 struct cu_cp_ntn_onboard_cell_plan_status {
   nr_cell_identity nci = nr_cell_identity::min();
   pci_t            pci = INVALID_PCI;
-  unsigned         active_l1_positions  = 0;
-  unsigned         pending_l1_positions = 0;
-  unsigned         capacity             = 0;
+  unsigned         active_l1_positions       = 0;
+  unsigned         pending_l1_positions      = 0;
+  unsigned         capacity                  = 0;
+  unsigned         analog_ports_used         = 0;
+  unsigned         analog_port_capacity      = 0;
+  unsigned         digital_planning_capacity = 0;
+  std::string      digital_binding_state     = "not_bound_to_service_runtime";
+};
+
+/// Static scheduler opportunity evidence for one onboard cell. This does not prove position, antenna or RF execution.
+struct cu_cp_ntn_static_opportunity_status {
+  bool        performed            = false;
+  bool        passed               = false;
+  unsigned    numerology           = 0xffU;
+  unsigned    expected_ssb         = 0;
+  unsigned    matched_ssb          = 0;
+  unsigned    expected_prach       = 0;
+  unsigned    matched_prach        = 0;
+  unsigned    max_ssb_gap_slots    = 0;
+  unsigned    max_prach_gap_slots  = 0;
+  std::string first_unmatched      = "none";
 };
 
 /// Read-only versioned position-plan projection. Calendar values describe checked CU-CP intent, not RF execution.
 struct cu_cp_ntn_position_plan_status {
-  bool        enabled      = false;
+  bool        enabled              = false;
   bool        du_execution_enabled = false;
-  std::string stage        = "disabled";
-  std::string deployment_stage  = "disabled";
-  std::string deployment_detail = "external_execution_disabled";
-  std::string execution_evidence = "intent_only";
-  unsigned    clear_queue_depth = 0;
-  bool        clear_in_flight   = false;
-  std::string satellite_id = "none";
+  unsigned    schema_version       = 0;
+  std::string planning_run_id      = "none";
+  std::string access_profile_id    = "none";
+  std::string access_profile_hash = "none";
+  std::string identity_authority  = "none";
+  std::string stage               = "disabled";
+  std::string deployment_stage    = "disabled";
+  std::string deployment_detail   = "external_execution_disabled";
+  std::string execution_evidence  = "intent_only";
+  unsigned    clear_queue_depth   = 0;
+  bool        clear_in_flight     = false;
+  std::string satellite_id        = "none";
   uint64_t    active_catalog_version   = 0;
   uint64_t    active_schedule_version  = 0;
   std::string active_content_hash      = "none";
@@ -200,10 +223,16 @@ struct cu_cp_ntn_position_plan_status {
   int64_t     received_activation_epoch_unix_ms = -1;
   unsigned    candidate_l1_positions   = 0;
   uint64_t    audited_schedule_version = 0;
+  unsigned    calendar_intents         = 0;
+  unsigned    ssb_intents              = 0;
+  unsigned    prach_ro_intents         = 0;
+  unsigned    prach_ul_beam_intents    = 0;
   unsigned    max_ssb_interval_ms      = 0;
   unsigned    max_prach_interval_ms    = 0;
   unsigned    prach_ro_without_beam    = 0;
   unsigned    resource_conflicts       = 0;
+  uint64_t    static_preflight_schedule_version = 0;
+  std::array<cu_cp_ntn_static_opportunity_status, 2> static_opportunities{};
   std::string last_rejection           = "none";
   uint64_t    last_rejected_schedule_version = 0;
   std::array<cu_cp_ntn_onboard_cell_plan_status, 2> cells{};

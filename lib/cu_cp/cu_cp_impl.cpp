@@ -95,6 +95,110 @@ static constexpr uint32_t ntn_rnti_lease_expiry_ms          = 30000;
 static constexpr uint16_t ntn_rnti_lease_min_value          = 0x4601;
 static constexpr uint16_t ntn_rnti_lease_max_value          = 0xffef;
 
+struct ntn_static_opportunity_validation {
+  bool        accepted = false;
+  std::string detail   = "du_static_opportunity_preflight_missing";
+};
+
+struct ntn_static_opportunity_expectation_count {
+  uint32_t ssb   = 0;
+  uint32_t prach = 0;
+};
+
+using ntn_static_opportunity_expectation_counts = std::array<ntn_static_opportunity_expectation_count, 2>;
+
+static ntn_static_opportunity_expectation_counts
+count_ntn_static_opportunity_expectations(const f1ap_ntn_access_calendar_update& update)
+{
+  ntn_static_opportunity_expectation_counts result{};
+  for (unsigned cell_index = 0; cell_index != std::min(update.cells.size(), result.size()); ++cell_index) {
+    for (const f1ap_ntn_access_calendar_intent& intent : update.cells[cell_index].intents) {
+      switch (intent.purpose) {
+        case f1ap_ntn_access_calendar_purpose::ssb_sib_paging:
+        case f1ap_ntn_access_calendar_purpose::ssb_sib_paging_rar:
+          ++result[cell_index].ssb;
+          break;
+        case f1ap_ntn_access_calendar_purpose::prach_ro:
+          ++result[cell_index].prach;
+          break;
+        case f1ap_ntn_access_calendar_purpose::prach_ul_beam:
+        case f1ap_ntn_access_calendar_purpose::invalid:
+          break;
+      }
+    }
+  }
+  return result;
+}
+
+static ntn_static_opportunity_validation validate_ntn_static_opportunity_preflight(
+    const f1ap_ntn_access_calendar_result&           result,
+    const ntn_static_opportunity_expectation_counts& expected)
+{
+  for (unsigned cell_index = 0; cell_index != expected.size(); ++cell_index) {
+    const f1ap_ntn_access_calendar_preflight_report& report = result.preflight_reports[cell_index];
+    if (!report.performed) {
+      return {false, fmt::format("du_static_opportunity_preflight_missing_cell_{}", cell_index)};
+    }
+    if (report.expected_ssb != expected[cell_index].ssb || report.expected_prach != expected[cell_index].prach) {
+      return {false, fmt::format("du_static_opportunity_preflight_expected_count_mismatch_cell_{}", cell_index)};
+    }
+    if (!report.passed || report.first_unmatched.has_value()) {
+      if (report.first_unmatched.has_value()) {
+        const auto& unmatched = *report.first_unmatched;
+        const char* purpose = unmatched.purpose == f1ap_ntn_access_calendar_preflight_purpose::ssb ? "ssb" : "prach";
+        return {false,
+                fmt::format("du_static_opportunity_unmatched_cell_{}_position_{}_purpose_{}_start_slot_{}",
+                            cell_index,
+                            unmatched.position_id,
+                            purpose,
+                            unmatched.start_slot_offset)};
+      }
+      return {false, fmt::format("du_static_opportunity_preflight_failed_cell_{}", cell_index)};
+    }
+    if (report.matched_ssb != expected[cell_index].ssb || report.matched_prach != expected[cell_index].prach) {
+      return {false, fmt::format("du_static_opportunity_preflight_matched_count_mismatch_cell_{}", cell_index)};
+    }
+
+    const uint32_t slots_per_ms        = 1U << report.numerology;
+    const uint32_t max_ssb_gap_slots   = 80U * slots_per_ms;
+    const uint32_t max_prach_gap_slots = 640U * slots_per_ms;
+    if ((expected[cell_index].ssb != 0 &&
+         (report.max_ssb_gap_slots == 0 || report.max_ssb_gap_slots > max_ssb_gap_slots)) ||
+        (expected[cell_index].prach != 0 &&
+         (report.max_prach_gap_slots == 0 || report.max_prach_gap_slots > max_prach_gap_slots))) {
+      return {false, fmt::format("du_static_opportunity_interval_mismatch_cell_{}", cell_index)};
+    }
+  }
+  return {true, "static_ssb_prach_opportunities_matched_no_position_or_rf_evidence"};
+}
+
+static ntn_static_opportunity_validation validate_ntn_static_opportunity_preflight(
+    const f1ap_ntn_access_calendar_result& result, const f1ap_ntn_access_calendar_update& update)
+{
+  if (update.cells.size() != result.preflight_reports.size()) {
+    return {};
+  }
+  return validate_ntn_static_opportunity_preflight(result, count_ntn_static_opportunity_expectations(update));
+}
+
+static bool carries_ntn_static_opportunity_feedback(const f1ap_ntn_access_calendar_result& result)
+{
+  if (result.status == f1ap_ntn_access_calendar_result_status::preparing ||
+      result.status == f1ap_ntn_access_calendar_result_status::ready ||
+      result.status == f1ap_ntn_access_calendar_result_status::applied) {
+    return true;
+  }
+  if (std::any_of(result.preflight_reports.begin(), result.preflight_reports.end(), [](const auto& report) {
+        return report.performed;
+      })) {
+    return true;
+  }
+  return result.reject_reason == "scheduler_preflight_not_performed" ||
+         result.reject_reason == "scheduler_preflight_failed" ||
+         result.reject_reason == "static_opportunity_missing" ||
+         result.reject_reason == "static_opportunity_mismatch";
+}
+
 static void assert_cu_cp_configuration_valid(const cu_cp_configuration& cfg)
 {
   srsran_assert(cfg.services.cu_cp_executor != nullptr, "Invalid CU-CP executor");
@@ -7931,6 +8035,18 @@ cu_cp_ntn_runtime_status cu_cp_impl::get_current_ntn_runtime_status() const
   cu_cp_ntn_position_plan_status& position_status = status.onboard_position_plan;
   position_status.enabled      = cfg.mobility.onboard_position_plan.enabled;
   position_status.du_execution_enabled = cfg.mobility.onboard_position_plan.du_execution_enabled;
+  position_status.access_profile_id = cfg.mobility.onboard_position_plan.expected_access_profile_id.empty()
+                                          ? "none"
+                                          : cfg.mobility.onboard_position_plan.expected_access_profile_id;
+  position_status.access_profile_hash = cfg.mobility.onboard_position_plan.expected_access_profile_hash.empty()
+                                            ? "none"
+                                            : cfg.mobility.onboard_position_plan.expected_access_profile_hash;
+  position_status.identity_authority =
+      cfg.mobility.onboard_position_plan.enabled
+          ? (cfg.mobility.onboard_position_plan.du_execution_enabled
+                 ? "onboard_position_plan"
+                 : (ntn_cfg.enabled ? "legacy" : "onboard_position_plan_dry_run"))
+          : (ntn_cfg.enabled ? "legacy" : "none");
   position_status.satellite_id = cfg.mobility.onboard_position_plan.satellite_id.empty()
                                      ? "none"
                                      : cfg.mobility.onboard_position_plan.satellite_id;
@@ -7967,6 +8083,31 @@ cu_cp_ntn_runtime_status cu_cp_impl::get_current_ntn_runtime_status() const
         position_status.cells[i].nci      = controller_cfg.onboard_cells[i].nci;
         position_status.cells[i].pci      = controller_cfg.onboard_cells[i].pci;
         position_status.cells[i].capacity = controller_cfg.max_l1_positions_per_cell;
+        position_status.cells[i].analog_port_capacity      = controller_cfg.max_analog_ports_per_cell;
+        position_status.cells[i].digital_planning_capacity = controller_cfg.max_digital_ports_per_cell;
+      }
+      position_status.static_preflight_schedule_version = ntn_position_plan_static_preflight_schedule_version;
+      for (unsigned i = 0; i != position_status.static_opportunities.size(); ++i) {
+        const f1ap_ntn_access_calendar_preflight_report& source = ntn_position_plan_static_preflight_reports[i];
+        cu_cp_ntn_static_opportunity_status& destination = position_status.static_opportunities[i];
+        destination.performed           = source.performed;
+        destination.passed              = source.passed;
+        destination.numerology          = source.numerology;
+        destination.expected_ssb        = source.expected_ssb;
+        destination.matched_ssb         = source.matched_ssb;
+        destination.expected_prach      = source.expected_prach;
+        destination.matched_prach       = source.matched_prach;
+        destination.max_ssb_gap_slots   = source.max_ssb_gap_slots;
+        destination.max_prach_gap_slots = source.max_prach_gap_slots;
+        if (source.first_unmatched.has_value()) {
+          destination.first_unmatched =
+              fmt::format("{}:{}:{}+{}",
+                          source.first_unmatched->position_id,
+                          source.first_unmatched->purpose == f1ap_ntn_access_calendar_preflight_purpose::ssb ? "ssb"
+                                                                                                             : "prach",
+                          source.first_unmatched->start_slot_offset,
+                          source.first_unmatched->nof_slots);
+        }
       }
 
       const ntn_activated_position_plan* audited_plan = nullptr;
@@ -7999,7 +8140,15 @@ cu_cp_ntn_runtime_status cu_cp_impl::get_current_ntn_runtime_status() const
         audited_plan = &pending_plan;
       }
       if (audited_plan != nullptr) {
+        position_status.schema_version  = audited_plan->source.schema_version;
+        position_status.planning_run_id = audited_plan->source.planning_run_id.empty()
+                                                   ? "none"
+                                                   : audited_plan->source.planning_run_id;
         position_status.audited_schedule_version = audited_plan->source.schedule_version;
+        position_status.calendar_intents          = audited_plan->calendar_audit.nof_calendar_intents;
+        position_status.ssb_intents               = audited_plan->calendar_audit.nof_ssb_intents;
+        position_status.prach_ro_intents          = audited_plan->calendar_audit.nof_prach_ro_intents;
+        position_status.prach_ul_beam_intents     = audited_plan->calendar_audit.nof_prach_ul_beam_intents;
         position_status.max_ssb_interval_ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(audited_plan->calendar_audit.max_ssb_interval)
                 .count();
@@ -8008,6 +8157,16 @@ cu_cp_ntn_runtime_status cu_cp_impl::get_current_ntn_runtime_status() const
                 .count();
         position_status.prach_ro_without_beam = audited_plan->calendar_audit.prach_ro_without_beam;
         position_status.resource_conflicts    = audited_plan->calendar_audit.resource_conflicts;
+        for (unsigned i = 0; i != position_status.cells.size(); ++i) {
+          std::set<uint16_t> used_ports;
+          for (const ntn_access_calendar_intent& intent : audited_plan->access_calendar) {
+            if (intent.nci == position_status.cells[i].nci &&
+                intent.port_id != ntn_access_calendar_intent::no_resource_port) {
+              used_ports.insert(intent.port_id);
+            }
+          }
+          position_status.cells[i].analog_ports_used = used_ports.size();
+        }
       }
     }
   }
@@ -11167,6 +11326,29 @@ void cu_cp_impl::try_prepare_ntn_onboard_position_plan()
             const auto deployment                  = ntn_onboard_position_plan_ctrl->deployment_stage();
             const bool query_already_advanced_plan = deployment == ntn_position_plan_deployment_stage::ready ||
                                                      deployment == ntn_position_plan_deployment_stage::applied;
+            const bool response_accepts_calendar =
+                response.calendar_result.has_value() &&
+                (response.calendar_result->status == f1ap_ntn_access_calendar_result_status::preparing ||
+                 response.calendar_result->status == f1ap_ntn_access_calendar_result_status::ready ||
+                 response.calendar_result->status == f1ap_ntn_access_calendar_result_status::applied);
+            const bool response_carries_preflight =
+                response.calendar_result.has_value() &&
+                carries_ntn_static_opportunity_feedback(*response.calendar_result);
+            const ntn_static_opportunity_validation preflight =
+                response_carries_preflight
+                    ? validate_ntn_static_opportunity_preflight(*response.calendar_result, update)
+                    : ntn_static_opportunity_validation{};
+            const bool response_plan_matches =
+                response.calendar_result.has_value() &&
+                response.calendar_result->catalog_version == update.catalog_version &&
+                response.calendar_result->schedule_version == update.schedule_version &&
+                response.calendar_result->source_content_hash == update.source_content_hash &&
+                response.calendar_result->calendar_hash == update.calendar_hash;
+            if (response_plan_matches && (pending_matches || active_matches) &&
+                update.schedule_version >= ntn_position_plan_static_preflight_schedule_version) {
+              ntn_position_plan_static_preflight_schedule_version = update.schedule_version;
+              ntn_position_plan_static_preflight_reports          = response.calendar_result->preflight_reports;
+            }
             const bool response_after_prepare_deadline =
                 std::chrono::system_clock::now() >=
                 prepared_plan.source.activation_epoch - cfg.mobility.onboard_position_plan.du_prepare_guard;
@@ -11197,9 +11379,24 @@ void cu_cp_impl::try_prepare_ntn_onboard_position_plan()
                   ntn_position_plan_reject_reason::calendar_hash_mismatch,
                   "du_prepare_response_version_or_hash_mismatch");
               should_clear_orphan = true;
-            } else if ((response.calendar_result->status == f1ap_ntn_access_calendar_result_status::preparing ||
-                        response.calendar_result->status == f1ap_ntn_access_calendar_result_status::ready ||
-                        response.calendar_result->status == f1ap_ntn_access_calendar_result_status::applied) &&
+            } else if (response.calendar_result->status == f1ap_ntn_access_calendar_result_status::unsupported) {
+              // A preflight capability failure carries an empty report by definition. Preserve its machine-readable
+              // unsupported meaning instead of classifying the absent report as a static-opportunity mismatch. The
+              // prepare path has not installed a gate, so there is nothing to clear.
+              ntn_onboard_position_plan_ctrl->reject_pending_deployment(
+                  update.schedule_version,
+                  update.calendar_hash,
+                  ntn_position_plan_reject_reason::execution_unsupported,
+                  response.calendar_result->reject_reason.empty() ? "scheduler_preflight_unsupported"
+                                                                  : response.calendar_result->reject_reason);
+            } else if (response_carries_preflight && !preflight.accepted) {
+              ntn_onboard_position_plan_ctrl->reject_pending_deployment(
+                  update.schedule_version,
+                  update.calendar_hash,
+                  ntn_position_plan_reject_reason::static_opportunity_mismatch,
+                  preflight.detail);
+              should_clear_orphan = true;
+            } else if (response_accepts_calendar &&
                        (static_cast<size_t>(response.calendar_result->accepted_intents_per_cell[0]) !=
                             update.cells[0].intents.size() ||
                         static_cast<size_t>(response.calendar_result->accepted_intents_per_cell[1]) !=
@@ -11399,10 +11596,17 @@ void cu_cp_impl::query_ntn_onboard_position_plan_application()
             should_clear_rejected = true;
           } else if (ntn_onboard_position_plan_ctrl.has_value() && response.calendar_result.has_value()) {
             std::array<size_t, 2> expected_intents_per_cell{};
+            ntn_static_opportunity_expectation_counts expected_static_opportunities{};
             for (const ntn_access_calendar_intent& intent : queried_plan.access_calendar) {
               for (unsigned i = 0; i != queried_plan.cell_positions.size(); ++i) {
                 if (intent.nci == queried_plan.cell_positions[i].identity.nci) {
                   ++expected_intents_per_cell[i];
+                  if (intent.purpose == ntn_access_calendar_purpose::ssb_sib_paging ||
+                      intent.purpose == ntn_access_calendar_purpose::ssb_sib_paging_rar) {
+                    ++expected_static_opportunities[i].ssb;
+                  } else if (intent.purpose == ntn_access_calendar_purpose::prach_ro) {
+                    ++expected_static_opportunities[i].prach;
+                  }
                   break;
                 }
               }
@@ -11411,6 +11615,23 @@ void cu_cp_impl::query_ntn_onboard_position_plan_application()
                 response.calendar_result->status == f1ap_ntn_access_calendar_result_status::preparing ||
                 response.calendar_result->status == f1ap_ntn_access_calendar_result_status::ready ||
                 response.calendar_result->status == f1ap_ntn_access_calendar_result_status::applied;
+            const bool response_carries_preflight =
+                carries_ntn_static_opportunity_feedback(*response.calendar_result);
+            const ntn_static_opportunity_validation preflight =
+                response_carries_preflight
+                    ? validate_ntn_static_opportunity_preflight(*response.calendar_result,
+                                                                expected_static_opportunities)
+                    : ntn_static_opportunity_validation{};
+            const bool response_plan_matches =
+                response.calendar_result->catalog_version == update.catalog_version &&
+                response.calendar_result->schedule_version == update.schedule_version &&
+                response.calendar_result->source_content_hash == update.source_content_hash &&
+                response.calendar_result->calendar_hash == update.calendar_hash;
+            if (response_plan_matches && (pending_matches || active_matches) &&
+                update.schedule_version >= ntn_position_plan_static_preflight_schedule_version) {
+              ntn_position_plan_static_preflight_schedule_version = update.schedule_version;
+              ntn_position_plan_static_preflight_reports          = response.calendar_result->preflight_reports;
+            }
             if (response.calendar_result->catalog_version != update.catalog_version ||
                 response.calendar_result->schedule_version != update.schedule_version ||
                 response.calendar_result->source_content_hash != update.source_content_hash ||
@@ -11420,6 +11641,23 @@ void cu_cp_impl::query_ntn_onboard_position_plan_application()
                   update.calendar_hash,
                   ntn_position_plan_reject_reason::calendar_hash_mismatch,
                   "du_query_response_version_or_hash_mismatch");
+              should_clear_rejected = true;
+            } else if (response.calendar_result->status == f1ap_ntn_access_calendar_result_status::unsupported) {
+              ntn_onboard_position_plan_ctrl->reject_pending_deployment(
+                  update.schedule_version,
+                  update.calendar_hash,
+                  ntn_position_plan_reject_reason::execution_unsupported,
+                  response.calendar_result->reject_reason.empty() ? "scheduler_preflight_unsupported"
+                                                                  : response.calendar_result->reject_reason);
+              // A query can only follow an earlier prepare, so retain the existing best-effort clear for a possibly
+              // installed software gate even though the query capability itself is unsupported.
+              should_clear_rejected = true;
+            } else if (response_carries_preflight && !preflight.accepted) {
+              ntn_onboard_position_plan_ctrl->reject_pending_deployment(
+                  update.schedule_version,
+                  update.calendar_hash,
+                  ntn_position_plan_reject_reason::static_opportunity_mismatch,
+                  preflight.detail);
               should_clear_rejected = true;
             } else if (response_accepts_calendar &&
                        (static_cast<size_t>(response.calendar_result->accepted_intents_per_cell[0]) !=

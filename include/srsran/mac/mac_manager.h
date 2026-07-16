@@ -31,6 +31,7 @@
 #include <cstdint>
 #include <limits>
 #include "srsran/ran/rnti.h"
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -77,6 +78,29 @@ enum class mac_ntn_access_calendar_operation { prepare, query, clear };
 enum class mac_ntn_access_calendar_direction { downlink, uplink };
 enum class mac_ntn_access_calendar_purpose { ssb_sib_paging, ssb_sib_paging_rar, prach_ro, prach_ul_beam };
 enum class mac_ntn_access_calendar_status { preparing, ready, applied, cleared, rejected, unsupported };
+enum class mac_ntn_access_calendar_preflight_purpose { ssb, prach, invalid };
+
+/// First raw common-channel intent that could not be matched to an existing scheduler opportunity.
+struct mac_ntn_access_calendar_unmatched_intent {
+  std::string                               position_id;
+  mac_ntn_access_calendar_preflight_purpose purpose = mac_ntn_access_calendar_preflight_purpose::invalid;
+  uint32_t                                  start_slot_offset = 0;
+  uint32_t                                  nof_slots         = 0;
+};
+
+/// Read-only scheduler preflight evidence for one cell. It is not proof of PHY or RF execution.
+struct mac_ntn_access_calendar_preflight_report {
+  bool                                                    performed           = false;
+  bool                                                    passed              = false;
+  uint8_t                                                 numerology          = 0xffU;
+  uint32_t                                                expected_ssb        = 0;
+  uint32_t                                                matched_ssb         = 0;
+  uint32_t                                                expected_prach      = 0;
+  uint32_t                                                matched_prach       = 0;
+  uint32_t                                                max_ssb_gap_slots   = 0;
+  uint32_t                                                max_prach_gap_slots = 0;
+  std::optional<mac_ntn_access_calendar_unmatched_intent> first_unmatched;
+};
 
 struct mac_ntn_access_calendar_intent {
   std::string                       position_id;
@@ -113,6 +137,7 @@ struct mac_ntn_access_calendar_result {
   unsigned                       activation_numerology = 0;
   unsigned                       minimum_lead_slots = 0;
   std::array<unsigned, 2>        accepted_intents{};
+  std::array<mac_ntn_access_calendar_preflight_report, 2> preflight_reports{};
 
   bool accepted() const
   {

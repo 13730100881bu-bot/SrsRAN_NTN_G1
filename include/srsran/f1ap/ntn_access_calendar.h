@@ -62,6 +62,29 @@ enum class f1ap_ntn_access_calendar_purpose : uint8_t {
   invalid            = 255
 };
 
+enum class f1ap_ntn_access_calendar_preflight_purpose : uint8_t { ssb = 0, prach = 1, invalid = 255 };
+
+struct f1ap_ntn_access_calendar_unmatched_intent {
+  std::string                                position_id;
+  f1ap_ntn_access_calendar_preflight_purpose purpose =
+      f1ap_ntn_access_calendar_preflight_purpose::invalid;
+  uint32_t                                   start_slot_offset = 0;
+  uint32_t                                   nof_slots         = 0;
+};
+
+struct f1ap_ntn_access_calendar_preflight_report {
+  bool                                                    performed            = false;
+  bool                                                    passed               = false;
+  uint8_t                                                 numerology           = 0xffU;
+  uint16_t                                                expected_ssb         = 0;
+  uint16_t                                                matched_ssb          = 0;
+  uint16_t                                                expected_prach       = 0;
+  uint16_t                                                matched_prach        = 0;
+  uint32_t                                                max_ssb_gap_slots    = 0;
+  uint32_t                                                max_prach_gap_slots  = 0;
+  std::optional<f1ap_ntn_access_calendar_unmatched_intent> first_unmatched;
+};
+
 struct f1ap_ntn_access_calendar_intent {
   static constexpr uint16_t no_resource_port = std::numeric_limits<uint16_t>::max();
 
@@ -103,13 +126,23 @@ struct f1ap_ntn_access_calendar_result {
   std::string                                   reject_reason;
   std::optional<slot_point>                     activation_slot;
   std::array<uint16_t, 2>                       accepted_intents_per_cell{};
+  std::array<f1ap_ntn_access_calendar_preflight_report, 2> preflight_reports{};
 
   bool accepted() const
   {
-    return status == f1ap_ntn_access_calendar_result_status::preparing ||
-           status == f1ap_ntn_access_calendar_result_status::ready ||
-           status == f1ap_ntn_access_calendar_result_status::applied ||
-           status == f1ap_ntn_access_calendar_result_status::cleared;
+    if (status == f1ap_ntn_access_calendar_result_status::cleared) {
+      return true;
+    }
+    if (status != f1ap_ntn_access_calendar_result_status::preparing &&
+        status != f1ap_ntn_access_calendar_result_status::ready &&
+        status != f1ap_ntn_access_calendar_result_status::applied) {
+      return false;
+    }
+    return std::all_of(preflight_reports.begin(), preflight_reports.end(), [](const auto& report) {
+      return report.performed && report.passed && report.numerology < 5 &&
+             report.matched_ssb == report.expected_ssb && report.matched_prach == report.expected_prach &&
+             !report.first_unmatched.has_value();
+    });
   }
 };
 
@@ -117,7 +150,9 @@ namespace f1ap_ntn_access_calendar_detail {
 
 static constexpr std::array<uint8_t, 6> update_magic = {'N', 'T', 'N', 'A', 'C', 'U'};
 static constexpr std::array<uint8_t, 6> result_magic = {'N', 'T', 'N', 'A', 'C', 'R'};
-static constexpr uint8_t                wire_version = 1;
+static constexpr uint8_t                update_wire_version        = 1;
+static constexpr uint8_t                legacy_result_wire_version = 1;
+static constexpr uint8_t                result_wire_version        = 2;
 
 static constexpr size_t max_satellite_id_length = 128;
 static constexpr size_t max_hash_length         = 128;
@@ -340,6 +375,81 @@ inline bool valid_update(const f1ap_ntn_access_calendar_update& update)
   return true;
 }
 
+inline bool valid_preflight_report(const f1ap_ntn_access_calendar_preflight_report& report)
+{
+  if (!report.performed) {
+    return !report.passed && report.numerology == 0xffU && report.expected_ssb == 0 && report.matched_ssb == 0 &&
+           report.expected_prach == 0 && report.matched_prach == 0 && report.max_ssb_gap_slots == 0 &&
+           report.max_prach_gap_slots == 0 && !report.first_unmatched.has_value();
+  }
+  if (report.numerology >= 5 || report.matched_ssb > report.expected_ssb ||
+      report.matched_prach > report.expected_prach ||
+      (report.passed && (report.matched_ssb != report.expected_ssb || report.matched_prach != report.expected_prach ||
+                         report.first_unmatched.has_value()))) {
+    return false;
+  }
+  if (!report.first_unmatched.has_value()) {
+    return true;
+  }
+
+  const auto& unmatched = *report.first_unmatched;
+  return !report.passed && valid_l1_position_id(unmatched.position_id) &&
+         unmatched.position_id.size() <= max_position_id_length &&
+         unmatched.purpose != f1ap_ntn_access_calendar_preflight_purpose::invalid &&
+         static_cast<uint8_t>(unmatched.purpose) <=
+             static_cast<uint8_t>(f1ap_ntn_access_calendar_preflight_purpose::prach) &&
+         unmatched.nof_slots != 0 &&
+         static_cast<uint64_t>(unmatched.start_slot_offset) + unmatched.nof_slots <=
+             std::numeric_limits<uint32_t>::max();
+}
+
+inline void encode_preflight_report(writer& out, const f1ap_ntn_access_calendar_preflight_report& report)
+{
+  out.u8(report.performed ? 1U : 0U);
+  out.u8(report.passed ? 1U : 0U);
+  out.u8(report.numerology);
+  out.u16(report.expected_ssb);
+  out.u16(report.matched_ssb);
+  out.u16(report.expected_prach);
+  out.u16(report.matched_prach);
+  out.u32(report.max_ssb_gap_slots);
+  out.u32(report.max_prach_gap_slots);
+  out.u8(report.first_unmatched.has_value() ? 1U : 0U);
+  if (report.first_unmatched.has_value()) {
+    out.string(report.first_unmatched->position_id);
+    out.u8(static_cast<uint8_t>(report.first_unmatched->purpose));
+    out.u32(report.first_unmatched->start_slot_offset);
+    out.u32(report.first_unmatched->nof_slots);
+  }
+}
+
+inline bool decode_preflight_report(reader& out, f1ap_ntn_access_calendar_preflight_report& report)
+{
+  uint8_t performed              = 0;
+  uint8_t passed                 = 0;
+  uint8_t first_unmatched_present = 0;
+  if (!out.u8(performed) || performed > 1 || !out.u8(passed) || passed > 1 || !out.u8(report.numerology) ||
+      !out.u16(report.expected_ssb) || !out.u16(report.matched_ssb) || !out.u16(report.expected_prach) ||
+      !out.u16(report.matched_prach) || !out.u32(report.max_ssb_gap_slots) ||
+      !out.u32(report.max_prach_gap_slots) || !out.u8(first_unmatched_present) || first_unmatched_present > 1) {
+    return false;
+  }
+  report.performed = performed != 0;
+  report.passed    = passed != 0;
+  if (first_unmatched_present != 0) {
+    f1ap_ntn_access_calendar_unmatched_intent unmatched;
+    uint8_t                                   purpose = 0;
+    if (!out.string(unmatched.position_id, max_position_id_length) || !out.u8(purpose) ||
+        purpose > static_cast<uint8_t>(f1ap_ntn_access_calendar_preflight_purpose::prach) ||
+        !out.u32(unmatched.start_slot_offset) || !out.u32(unmatched.nof_slots)) {
+      return false;
+    }
+    unmatched.purpose = static_cast<f1ap_ntn_access_calendar_preflight_purpose>(purpose);
+    report.first_unmatched.emplace(std::move(unmatched));
+  }
+  return valid_preflight_report(report);
+}
+
 } // namespace f1ap_ntn_access_calendar_detail
 
 /// Identifies this private container even when its body/version is malformed, so it cannot fall through to another codec.
@@ -353,7 +463,7 @@ inline byte_buffer encode_f1ap_ntn_access_calendar_update(const f1ap_ntn_access_
   using namespace f1ap_ntn_access_calendar_detail;
   writer out;
   out.bytes(update_magic.data(), update_magic.data() + update_magic.size());
-  out.u8(wire_version);
+  out.u8(update_wire_version);
   out.u8(static_cast<uint8_t>(update.operation));
   out.string(update.satellite_id);
   out.u64(update.catalog_version);
@@ -391,7 +501,7 @@ decode_f1ap_ntn_access_calendar_update(const byte_buffer& container)
   uint8_t nof_cells = 0;
 
   f1ap_ntn_access_calendar_update update;
-  if (!out.bytes(update_magic.data(), update_magic.size()) || !out.u8(version) || version != wire_version ||
+  if (!out.bytes(update_magic.data(), update_magic.size()) || !out.u8(version) || version != update_wire_version ||
       !out.u8(operation) || operation > static_cast<uint8_t>(f1ap_ntn_access_calendar_operation::clear) ||
       !out.string(update.satellite_id, max_satellite_id_length) || !out.u64(update.catalog_version) ||
       !out.u64(update.schedule_version) || !out.string(update.source_content_hash, max_hash_length) ||
@@ -451,7 +561,7 @@ inline byte_buffer encode_f1ap_ntn_access_calendar_result(const f1ap_ntn_access_
   using namespace f1ap_ntn_access_calendar_detail;
   writer out;
   out.bytes(result_magic.data(), result_magic.data() + result_magic.size());
-  out.u8(wire_version);
+  out.u8(result_wire_version);
   out.u64(result.catalog_version);
   out.u64(result.schedule_version);
   out.string(result.source_content_hash);
@@ -463,6 +573,10 @@ inline byte_buffer encode_f1ap_ntn_access_calendar_result(const f1ap_ntn_access_
   out.u32(result.activation_slot.has_value() ? result.activation_slot->to_uint() : 0U);
   out.u16(result.accepted_intents_per_cell[0]);
   out.u16(result.accepted_intents_per_cell[1]);
+  out.u8(static_cast<uint8_t>(result.preflight_reports.size()));
+  for (const auto& report : result.preflight_reports) {
+    encode_preflight_report(out, report);
+  }
   return out.finish();
 }
 
@@ -478,14 +592,15 @@ decode_f1ap_ntn_access_calendar_result(const byte_buffer& container)
   uint32_t slot_count       = 0;
 
   f1ap_ntn_access_calendar_result result;
-  if (!out.bytes(result_magic.data(), result_magic.size()) || !out.u8(version) || version != wire_version ||
+  if (!out.bytes(result_magic.data(), result_magic.size()) || !out.u8(version) ||
+      (version != legacy_result_wire_version && version != result_wire_version) ||
       !out.u64(result.catalog_version) || !out.u64(result.schedule_version) ||
       !out.string(result.source_content_hash, max_hash_length, true) ||
       !out.string(result.calendar_hash, max_hash_length, true) || !out.u8(status) ||
       status > static_cast<uint8_t>(f1ap_ntn_access_calendar_result_status::preparing) ||
       !out.string(result.reject_reason, max_reject_reason_length, true) || !out.u8(slot_present) || slot_present > 1 ||
       !out.u8(slot_numerology) || !out.u32(slot_count) || !out.u16(result.accepted_intents_per_cell[0]) ||
-      !out.u16(result.accepted_intents_per_cell[1]) || !out.finished()) {
+      !out.u16(result.accepted_intents_per_cell[1])) {
     return std::nullopt;
   }
   result.status = static_cast<f1ap_ntn_access_calendar_result_status>(status);
@@ -495,6 +610,27 @@ decode_f1ap_ntn_access_calendar_result(const byte_buffer& container)
     }
     result.activation_slot = slot_point{slot_numerology, slot_count};
   } else if (slot_numerology != 0xffU || slot_count != 0) {
+    return std::nullopt;
+  }
+
+  if (version == legacy_result_wire_version) {
+    if (!out.finished()) {
+      return std::nullopt;
+    }
+    return result;
+  }
+
+  uint8_t nof_preflight_reports = 0;
+  if (!out.u8(nof_preflight_reports) ||
+      nof_preflight_reports != static_cast<uint8_t>(result.preflight_reports.size())) {
+    return std::nullopt;
+  }
+  for (auto& report : result.preflight_reports) {
+    if (!decode_preflight_report(out, report)) {
+      return std::nullopt;
+    }
+  }
+  if (!out.finished()) {
     return std::nullopt;
   }
   return result;

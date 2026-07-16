@@ -87,7 +87,10 @@ static bool is_ntn_access_calendar_query(const f1ap_message& pdu)
 }
 
 static void record_ntn_calendar_prepare(const f1ap_message&      request,
-                                        std::array<uint16_t, 2>& last_ntn_calendar_intents_per_cell)
+                                        bool                     preflight_incomplete,
+                                        std::array<uint16_t, 2>& last_ntn_calendar_intents_per_cell,
+                                        std::array<f1ap_ntn_access_calendar_preflight_report, 2>&
+                                            last_ntn_calendar_preflight_reports)
 {
   if (!is_gnb_du_resource_coordination_request(request)) {
     return;
@@ -101,8 +104,28 @@ static void record_ntn_calendar_prepare(const f1ap_message&      request,
   }
 
   last_ntn_calendar_intents_per_cell = {};
+  last_ntn_calendar_preflight_reports = {};
   for (unsigned i = 0; i != update->cells.size() && i != last_ntn_calendar_intents_per_cell.size(); ++i) {
     last_ntn_calendar_intents_per_cell[i] = static_cast<uint16_t>(update->cells[i].intents.size());
+    auto& report       = last_ntn_calendar_preflight_reports[i];
+    report.performed   = !preflight_incomplete || i != 0;
+    report.passed      = report.performed;
+    report.numerology  = report.performed ? 1U : 0xffU;
+    if (!report.performed) {
+      continue;
+    }
+    for (const f1ap_ntn_access_calendar_intent& intent : update->cells[i].intents) {
+      if (intent.purpose == f1ap_ntn_access_calendar_purpose::ssb_sib_paging ||
+          intent.purpose == f1ap_ntn_access_calendar_purpose::ssb_sib_paging_rar) {
+        ++report.expected_ssb;
+        ++report.matched_ssb;
+      } else if (intent.purpose == f1ap_ntn_access_calendar_purpose::prach_ro) {
+        ++report.expected_prach;
+        ++report.matched_prach;
+      }
+    }
+    report.max_ssb_gap_slots   = report.expected_ssb == 0 ? 0 : 160;
+    report.max_prach_gap_slots = report.expected_prach == 0 ? 0 : 1280;
   }
 }
 
@@ -112,10 +135,18 @@ make_gnb_du_resource_coordination_response(const f1ap_message&      request,
                                            bool                     ntn_calendar_query_reports_zero_intents,
                                            bool                     ntn_calendar_prepare_rejects,
                                            bool                     ntn_calendar_prepare_reports_ready,
+                                           bool                     ntn_calendar_preflight_incomplete,
+                                           bool                     ntn_calendar_preflight_unsupported,
                                            bool                     ntn_resource_audit_rejects,
-                                           std::array<uint16_t, 2>& last_ntn_calendar_intents_per_cell)
+                                           std::array<uint16_t, 2>& last_ntn_calendar_intents_per_cell,
+                                           std::array<f1ap_ntn_access_calendar_preflight_report, 2>&
+                                               last_ntn_calendar_preflight_reports,
+                                           unsigned& ntn_calendar_clear_requests)
 {
-  record_ntn_calendar_prepare(request, last_ntn_calendar_intents_per_cell);
+  record_ntn_calendar_prepare(request,
+                              ntn_calendar_preflight_incomplete,
+                              last_ntn_calendar_intents_per_cell,
+                              last_ntn_calendar_preflight_reports);
   const auto& asn1_req = request.pdu.init_msg().value.gnb_du_res_coordination_request();
 
   const std::optional<f1ap_ntn_rnti_lease_pool_update> update =
@@ -129,6 +160,9 @@ make_gnb_du_resource_coordination_response(const f1ap_message&      request,
 
   byte_buffer response_container;
   if (calendar_update.has_value()) {
+    if (calendar_update->operation == f1ap_ntn_access_calendar_operation::clear) {
+      ++ntn_calendar_clear_requests;
+    }
     f1ap_ntn_access_calendar_result result;
     result.catalog_version     = calendar_update->catalog_version;
     result.schedule_version    = calendar_update->schedule_version;
@@ -137,8 +171,14 @@ make_gnb_du_resource_coordination_response(const f1ap_message&      request,
     const uint64_t now_unix_ms = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                                            std::chrono::system_clock::now().time_since_epoch())
                                                            .count());
+    const bool prepare_preflight_unsupported =
+        calendar_update->operation == f1ap_ntn_access_calendar_operation::prepare &&
+        ntn_calendar_preflight_unsupported;
     result.status = calendar_update->operation == f1ap_ntn_access_calendar_operation::prepare
-                        ? (ntn_calendar_prepare_rejects         ? f1ap_ntn_access_calendar_result_status::rejected
+                        ? (ntn_calendar_preflight_unsupported
+                               ? f1ap_ntn_access_calendar_result_status::unsupported
+                           : ntn_calendar_preflight_incomplete || ntn_calendar_prepare_rejects
+                               ? f1ap_ntn_access_calendar_result_status::rejected
                            : ntn_calendar_prepare_reports_ready ? f1ap_ntn_access_calendar_result_status::ready
                                                                 : f1ap_ntn_access_calendar_result_status::preparing)
                     : calendar_update->operation == f1ap_ntn_access_calendar_operation::query
@@ -146,7 +186,9 @@ make_gnb_du_resource_coordination_response(const f1ap_message&      request,
                                ? f1ap_ntn_access_calendar_result_status::applied
                                : f1ap_ntn_access_calendar_result_status::ready)
                         : f1ap_ntn_access_calendar_result_status::cleared;
-    result.reject_reason = result.status == f1ap_ntn_access_calendar_result_status::rejected ? "rejected_by_mock_du"
+    result.reject_reason = prepare_preflight_unsupported ? "scheduler_preflight_not_performed"
+                           : ntn_calendar_preflight_incomplete ? "scheduler_preflight_not_performed"
+                           : result.status == f1ap_ntn_access_calendar_result_status::rejected ? "rejected_by_mock_du"
                            : result.status == f1ap_ntn_access_calendar_result_status::applied
                                ? "ssb_prach_software_gate_applied_no_position_or_rf_evidence"
                            : result.status == f1ap_ntn_access_calendar_result_status::preparing
@@ -157,6 +199,12 @@ make_gnb_du_resource_coordination_response(const f1ap_message&      request,
       result.accepted_intents_per_cell = {};
     } else {
       result.accepted_intents_per_cell = last_ntn_calendar_intents_per_cell;
+    }
+    if (ntn_calendar_preflight_incomplete ||
+        result.status == f1ap_ntn_access_calendar_result_status::preparing ||
+        result.status == f1ap_ntn_access_calendar_result_status::ready ||
+        result.status == f1ap_ntn_access_calendar_result_status::applied) {
+      result.preflight_reports = last_ntn_calendar_preflight_reports;
     }
     response_container = encode_f1ap_ntn_access_calendar_result(result);
   } else if (update.has_value()) {
@@ -468,8 +516,12 @@ bool cu_cp_test_environment::wait_for_f1ap_tx_pdu(unsigned du_idx, f1ap_message&
                                                        params.ntn_calendar_query_reports_zero_intents,
                                                        params.ntn_calendar_prepare_rejects,
                                                        params.ntn_calendar_prepare_reports_ready,
+                                                       params.ntn_calendar_preflight_incomplete,
+                                                       params.ntn_calendar_preflight_unsupported,
                                                        params.ntn_resource_audit_rejects,
-                                                       last_ntn_calendar_intents_per_cell));
+                                                       last_ntn_calendar_intents_per_cell,
+                                                       last_ntn_calendar_preflight_reports,
+                                                       ntn_calendar_clear_requests));
       }
       return false;
     }
@@ -486,7 +538,10 @@ bool cu_cp_test_environment::wait_for_f1ap_tx_pdu_without_auto_response(unsigned
     if (dus[du_idx] == nullptr || !dus[du_idx]->try_pop_dl_pdu(pdu)) {
       return false;
     }
-    record_ntn_calendar_prepare(pdu, last_ntn_calendar_intents_per_cell);
+    record_ntn_calendar_prepare(pdu,
+                                params.ntn_calendar_preflight_incomplete,
+                                last_ntn_calendar_intents_per_cell,
+                                last_ntn_calendar_preflight_reports);
     return true;
   });
 }
@@ -502,8 +557,12 @@ void cu_cp_test_environment::respond_to_f1ap_resource_coordination_request(unsig
                                                                       params.ntn_calendar_query_reports_zero_intents,
                                                                       params.ntn_calendar_prepare_rejects,
                                                                       params.ntn_calendar_prepare_reports_ready,
+                                                                      params.ntn_calendar_preflight_incomplete,
+                                                                      params.ntn_calendar_preflight_unsupported,
                                                                       params.ntn_resource_audit_rejects,
-                                                                      last_ntn_calendar_intents_per_cell));
+                                                                      last_ntn_calendar_intents_per_cell,
+                                                                      last_ntn_calendar_preflight_reports,
+                                                                      ntn_calendar_clear_requests));
 }
 
 void cu_cp_test_environment::drain_f1ap_resource_coordination_requests(unsigned du_idx)
@@ -526,8 +585,12 @@ void cu_cp_test_environment::drain_f1ap_resource_coordination_requests(unsigned 
                                                        params.ntn_calendar_query_reports_zero_intents,
                                                        params.ntn_calendar_prepare_rejects,
                                                        params.ntn_calendar_prepare_reports_ready,
+                                                       params.ntn_calendar_preflight_incomplete,
+                                                       params.ntn_calendar_preflight_unsupported,
                                                        params.ntn_resource_audit_rejects,
-                                                       last_ntn_calendar_intents_per_cell));
+                                                       last_ntn_calendar_intents_per_cell,
+                                                       last_ntn_calendar_preflight_reports,
+                                                       ntn_calendar_clear_requests));
       }
       return true;
     });

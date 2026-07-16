@@ -95,10 +95,79 @@ static f1ap_ntn_access_calendar_update make_access_calendar_update()
   return update;
 }
 
+static f1ap_ntn_access_calendar_result make_access_calendar_result_with_preflight()
+{
+  f1ap_ntn_access_calendar_result result;
+  result.catalog_version              = 10;
+  result.schedule_version             = 21;
+  result.source_content_hash          = std::string(64, 'a');
+  result.calendar_hash                = std::string(64, 'b');
+  result.status                       = f1ap_ntn_access_calendar_result_status::ready;
+  result.activation_slot              = slot_point{1, 42};
+  result.accepted_intents_per_cell[0] = 16;
+  result.accepted_intents_per_cell[1] = 15;
+
+  auto& first_report               = result.preflight_reports[0];
+  first_report.performed           = true;
+  first_report.passed              = true;
+  first_report.numerology          = 1;
+  first_report.expected_ssb        = 16;
+  first_report.matched_ssb         = 16;
+  first_report.expected_prach      = 8;
+  first_report.matched_prach       = 8;
+  first_report.max_ssb_gap_slots   = 8;
+  first_report.max_prach_gap_slots = 64;
+
+  auto& second_report               = result.preflight_reports[1];
+  second_report.performed           = true;
+  second_report.passed              = false;
+  second_report.numerology          = 1;
+  second_report.expected_ssb        = 16;
+  second_report.matched_ssb         = 16;
+  second_report.expected_prach      = 8;
+  second_report.matched_prach       = 7;
+  second_report.max_ssb_gap_slots   = 8;
+  second_report.max_prach_gap_slots = 65;
+  second_report.first_unmatched.emplace(f1ap_ntn_access_calendar_unmatched_intent{
+      "G000002", f1ap_ntn_access_calendar_preflight_purpose::prach, 320, 2});
+  return result;
+}
+
+static byte_buffer make_legacy_v1_access_calendar_result(const f1ap_ntn_access_calendar_result& result)
+{
+  using namespace f1ap_ntn_access_calendar_detail;
+  writer out;
+  out.bytes(result_magic.data(), result_magic.data() + result_magic.size());
+  out.u8(legacy_result_wire_version);
+  out.u64(result.catalog_version);
+  out.u64(result.schedule_version);
+  out.string(result.source_content_hash);
+  out.string(result.calendar_hash);
+  out.u8(static_cast<uint8_t>(result.status));
+  out.string(result.reject_reason);
+  out.u8(result.activation_slot.has_value() ? 1U : 0U);
+  out.u8(result.activation_slot.has_value() ? static_cast<uint8_t>(result.activation_slot->numerology()) : 0xffU);
+  out.u32(result.activation_slot.has_value() ? result.activation_slot->to_uint() : 0U);
+  out.u16(result.accepted_intents_per_cell[0]);
+  out.u16(result.accepted_intents_per_cell[1]);
+  return out.finish();
+}
+
+static size_t access_calendar_v2_preflight_count_offset(const f1ap_ntn_access_calendar_result& result)
+{
+  return f1ap_ntn_access_calendar_detail::result_magic.size() + 1U + 2U * sizeof(uint64_t) + sizeof(uint16_t) +
+         result.source_content_hash.size() + sizeof(uint16_t) + result.calendar_hash.size() + sizeof(uint8_t) +
+         sizeof(uint16_t) + result.reject_reason.size() + 2U * sizeof(uint8_t) + sizeof(uint32_t) +
+         2U * sizeof(uint16_t);
+}
+
 TEST(f1ap_ntn_access_calendar_container_test, valid_prepare_and_query_without_cells_round_trip)
 {
-  const auto update = make_access_calendar_update();
-  const auto decoded = decode_f1ap_ntn_access_calendar_update(encode_f1ap_ntn_access_calendar_update(update));
+  const auto        update  = make_access_calendar_update();
+  const byte_buffer encoded = encode_f1ap_ntn_access_calendar_update(update);
+  ASSERT_GT(encoded.length(), f1ap_ntn_access_calendar_detail::update_magic.size());
+  EXPECT_EQ(encoded[f1ap_ntn_access_calendar_detail::update_magic.size()], 1U);
+  const auto decoded = decode_f1ap_ntn_access_calendar_update(encoded);
 
   ASSERT_TRUE(decoded.has_value());
   EXPECT_EQ(decoded->satellite_id, update.satellite_id);
@@ -246,12 +315,110 @@ TEST(f1ap_ntn_access_calendar_container_test, preparing_result_is_accepted_and_r
   result.calendar_hash       = std::string(64, 'b');
   result.status              = f1ap_ntn_access_calendar_result_status::preparing;
   result.reject_reason       = "waiting_for_both_cell_slot_threads_to_arm";
+  for (auto& report : result.preflight_reports) {
+    report.performed  = true;
+    report.passed     = true;
+    report.numerology = 1;
+  }
 
   const auto decoded = decode_f1ap_ntn_access_calendar_result(encode_f1ap_ntn_access_calendar_result(result));
 
   ASSERT_TRUE(decoded.has_value());
   EXPECT_EQ(decoded->status, f1ap_ntn_access_calendar_result_status::preparing);
   EXPECT_TRUE(decoded->accepted());
+}
+
+TEST(f1ap_ntn_access_calendar_container_test,
+     when_v2_result_is_round_tripped_then_both_cell_preflight_reports_are_preserved)
+{
+  const auto        result  = make_access_calendar_result_with_preflight();
+  const byte_buffer encoded = encode_f1ap_ntn_access_calendar_result(result);
+
+  ASSERT_GT(encoded.length(), f1ap_ntn_access_calendar_detail::result_magic.size());
+  EXPECT_EQ(encoded[f1ap_ntn_access_calendar_detail::result_magic.size()], 2U);
+  const auto decoded = decode_f1ap_ntn_access_calendar_result(encoded);
+
+  ASSERT_TRUE(decoded.has_value());
+  ASSERT_TRUE(decoded->preflight_reports[0].performed);
+  EXPECT_TRUE(decoded->preflight_reports[0].passed);
+  EXPECT_EQ(decoded->preflight_reports[0].numerology, 1U);
+  EXPECT_EQ(decoded->preflight_reports[0].expected_ssb, 16U);
+  EXPECT_EQ(decoded->preflight_reports[0].matched_ssb, 16U);
+  EXPECT_EQ(decoded->preflight_reports[0].expected_prach, 8U);
+  EXPECT_EQ(decoded->preflight_reports[0].matched_prach, 8U);
+  EXPECT_EQ(decoded->preflight_reports[0].max_ssb_gap_slots, 8U);
+  EXPECT_EQ(decoded->preflight_reports[0].max_prach_gap_slots, 64U);
+  ASSERT_TRUE(decoded->preflight_reports[1].performed);
+  EXPECT_FALSE(decoded->preflight_reports[1].passed);
+  EXPECT_EQ(decoded->preflight_reports[1].matched_prach, 7U);
+  ASSERT_TRUE(decoded->preflight_reports[1].first_unmatched.has_value());
+  EXPECT_EQ(decoded->preflight_reports[1].first_unmatched->position_id, "G000002");
+  EXPECT_EQ(decoded->preflight_reports[1].first_unmatched->purpose,
+            f1ap_ntn_access_calendar_preflight_purpose::prach);
+  EXPECT_EQ(decoded->preflight_reports[1].first_unmatched->start_slot_offset, 320U);
+  EXPECT_EQ(decoded->preflight_reports[1].first_unmatched->nof_slots, 2U);
+}
+
+TEST(f1ap_ntn_access_calendar_container_test,
+     when_v1_result_is_decoded_then_preflight_reports_fail_closed_to_not_performed)
+{
+  const auto decoded = decode_f1ap_ntn_access_calendar_result(
+      make_legacy_v1_access_calendar_result(make_access_calendar_result_with_preflight()));
+
+  ASSERT_TRUE(decoded.has_value());
+  EXPECT_FALSE(decoded->accepted());
+  for (const auto& report : decoded->preflight_reports) {
+    EXPECT_FALSE(report.performed);
+    EXPECT_FALSE(report.passed);
+    EXPECT_EQ(report.numerology, 0xffU);
+    EXPECT_EQ(report.expected_ssb, 0U);
+    EXPECT_EQ(report.matched_prach, 0U);
+    EXPECT_FALSE(report.first_unmatched.has_value());
+  }
+}
+
+TEST(f1ap_ntn_access_calendar_container_test,
+     when_v2_result_has_invalid_length_enum_or_count_then_decode_fails_closed)
+{
+  const auto   result                 = make_access_calendar_result_with_preflight();
+  const size_t preflight_count_offset = access_calendar_v2_preflight_count_offset(result);
+
+  byte_buffer wrong_report_count = encode_f1ap_ntn_access_calendar_result(result);
+  ASSERT_LT(preflight_count_offset, wrong_report_count.length());
+  wrong_report_count[preflight_count_offset] = 1;
+  EXPECT_FALSE(decode_f1ap_ntn_access_calendar_result(wrong_report_count).has_value());
+
+  byte_buffer invalid_boolean = encode_f1ap_ntn_access_calendar_result(result);
+  invalid_boolean[preflight_count_offset + 1U] = 2;
+  EXPECT_FALSE(decode_f1ap_ntn_access_calendar_result(invalid_boolean).has_value());
+
+  byte_buffer invalid_numerology = encode_f1ap_ntn_access_calendar_result(result);
+  invalid_numerology[preflight_count_offset + 3U] = 5;
+  EXPECT_FALSE(decode_f1ap_ntn_access_calendar_result(invalid_numerology).has_value());
+
+  byte_buffer invalid_purpose = encode_f1ap_ntn_access_calendar_result(result);
+  constexpr size_t fixed_report_size_without_unmatched = 20;
+  constexpr size_t unmatched_purpose_offset            = 29;
+  const size_t invalid_purpose_offset =
+      preflight_count_offset + 1U + fixed_report_size_without_unmatched + unmatched_purpose_offset;
+  ASSERT_LT(invalid_purpose_offset, invalid_purpose.length());
+  invalid_purpose[invalid_purpose_offset] = 2;
+  EXPECT_FALSE(decode_f1ap_ntn_access_calendar_result(invalid_purpose).has_value());
+
+  auto invalid_matched_count = result;
+  invalid_matched_count.preflight_reports[0].matched_prach =
+      invalid_matched_count.preflight_reports[0].expected_prach + 1U;
+  EXPECT_FALSE(decode_f1ap_ntn_access_calendar_result(
+                   encode_f1ap_ntn_access_calendar_result(invalid_matched_count))
+                   .has_value());
+
+  byte_buffer truncated = encode_f1ap_ntn_access_calendar_result(result);
+  truncated.trim_tail(1);
+  EXPECT_FALSE(decode_f1ap_ntn_access_calendar_result(truncated).has_value());
+
+  byte_buffer trailing = encode_f1ap_ntn_access_calendar_result(result);
+  ASSERT_TRUE(trailing.append(0));
+  EXPECT_FALSE(decode_f1ap_ntn_access_calendar_result(trailing).has_value());
 }
 
 TEST(f1ap_ntn_rnti_lease_pool_container_test, valid_update_round_trips)

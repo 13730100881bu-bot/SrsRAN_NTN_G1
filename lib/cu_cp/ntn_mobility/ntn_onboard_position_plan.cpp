@@ -557,6 +557,8 @@ const char* srsran::srs_cu_cp::to_string(ntn_position_plan_reject_reason reason)
       return "du_unavailable";
     case ntn_position_plan_reject_reason::cross_du_calendar_not_supported:
       return "cross_du_calendar_not_supported";
+    case ntn_position_plan_reject_reason::static_opportunity_mismatch:
+      return "static_opportunity_mismatch";
     case ntn_position_plan_reject_reason::du_prepare_rejected:
       return "du_prepare_rejected";
     case ntn_position_plan_reject_reason::du_prepare_timeout:

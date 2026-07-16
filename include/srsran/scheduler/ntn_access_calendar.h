@@ -36,7 +36,7 @@ constexpr unsigned MAX_NTN_ACCESS_CALENDAR_CYCLE_SLOTS = 16384;
 /// Maximum content-hash text length accepted by the scheduler access-calendar gate.
 constexpr unsigned MAX_NTN_ACCESS_CALENDAR_HASH_LENGTH = 128;
 
-enum class ntn_access_calendar_operation : uint8_t { prepare, query, clear };
+enum class ntn_access_calendar_operation : uint8_t { prepare, query, clear, preflight };
 
 /// Common-channel purposes that can be authorized by an access-calendar window.
 enum class ntn_access_calendar_purpose : uint8_t {
@@ -66,6 +66,17 @@ struct ntn_access_calendar_slot_window {
   uint8_t  purpose_mask      = 0;
 };
 
+/// One raw common-channel expectation to be checked against the cell's static radio configuration.
+///
+/// Preflight only checks whether the existing scheduler configuration contains an opportunity inside the half-open
+/// slot window. It does not create or reserve a radio opportunity.
+struct ntn_access_calendar_expectation {
+  std::string                 position_id;
+  uint32_t                    start_slot_offset = 0;
+  uint32_t                    nof_slots         = 0;
+  ntn_access_calendar_purpose purpose           = ntn_access_calendar_purpose::ssb;
+};
+
 /// Per-cell, already slot-compiled access calendar request.
 ///
 /// The valid interval is [activation_slot, activation_slot + validity_slots). Windows repeat every cycle_slots from
@@ -82,6 +93,7 @@ struct ntn_access_calendar_request {
   uint64_t                                     validity_slots = 0;
   uint32_t                                     cycle_slots    = 0;
   std::vector<ntn_access_calendar_slot_window> windows;
+  std::vector<ntn_access_calendar_expectation> expectations;
 };
 
 enum class ntn_access_calendar_state : uint8_t { ready, applied, cleared, rejected };
@@ -96,10 +108,30 @@ enum class ntn_access_calendar_reject_reason : uint8_t {
   invalid_validity,
   invalid_cycle,
   invalid_window,
+  static_opportunity_missing,
   activation_too_late,
   expired,
   version_hash_mismatch,
   command_queue_full
+};
+
+/// Read-only result of checking raw calendar expectations against static SSB and PRACH opportunities.
+struct ntn_access_calendar_preflight_report {
+  bool     performed           = false;
+  bool     passed              = false;
+  unsigned numerology          = 0;
+  uint32_t expected_ssb        = 0;
+  uint32_t matched_ssb         = 0;
+  uint32_t expected_prach      = 0;
+  uint32_t matched_prach       = 0;
+  uint32_t max_ssb_gap_slots   = 0;
+  uint32_t max_prach_gap_slots = 0;
+
+  bool                        first_unmatched_present = false;
+  std::string                 first_unmatched_position_id;
+  ntn_access_calendar_purpose first_unmatched_purpose           = ntn_access_calendar_purpose::ssb;
+  uint32_t                    first_unmatched_start_slot_offset = 0;
+  uint32_t                    first_unmatched_nof_slots         = 0;
 };
 
 struct ntn_access_calendar_response {
@@ -110,7 +142,8 @@ struct ntn_access_calendar_response {
   slot_point                        effective_activation_slot;
   uint32_t                          minimum_lead_slots = 0;
   /// True once the target cell slot thread has consumed and armed the prepared command.
-  bool                              command_consumed = false;
+  bool                                 command_consumed = false;
+  ntn_access_calendar_preflight_report preflight;
 };
 
 } // namespace srsran

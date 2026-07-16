@@ -519,6 +519,43 @@ du_manager_impl::handle_ntn_access_calendar_update_request(const f1ap_ntn_access
   for (unsigned i = 0; i != result.accepted_intents_per_cell.size(); ++i) {
     result.accepted_intents_per_cell[i] = static_cast<uint16_t>(
         std::min(mac_result.accepted_intents[i], static_cast<unsigned>(std::numeric_limits<uint16_t>::max())));
+
+    const mac_ntn_access_calendar_preflight_report& source_report = mac_result.preflight_reports[i];
+    f1ap_ntn_access_calendar_preflight_report&      target_report = result.preflight_reports[i];
+    if (!source_report.performed) {
+      continue;
+    }
+    target_report.performed    = true;
+    target_report.passed       = source_report.passed;
+    target_report.numerology   = source_report.numerology;
+    target_report.expected_ssb = static_cast<uint16_t>(
+        std::min(source_report.expected_ssb, static_cast<uint32_t>(std::numeric_limits<uint16_t>::max())));
+    target_report.matched_ssb = static_cast<uint16_t>(
+        std::min(source_report.matched_ssb, static_cast<uint32_t>(std::numeric_limits<uint16_t>::max())));
+    target_report.expected_prach = static_cast<uint16_t>(
+        std::min(source_report.expected_prach, static_cast<uint32_t>(std::numeric_limits<uint16_t>::max())));
+    target_report.matched_prach = static_cast<uint16_t>(
+        std::min(source_report.matched_prach, static_cast<uint32_t>(std::numeric_limits<uint16_t>::max())));
+    target_report.max_ssb_gap_slots   = source_report.max_ssb_gap_slots;
+    target_report.max_prach_gap_slots = source_report.max_prach_gap_slots;
+    if (source_report.first_unmatched.has_value()) {
+      f1ap_ntn_access_calendar_unmatched_intent unmatched;
+      unmatched.position_id       = source_report.first_unmatched->position_id;
+      unmatched.start_slot_offset = source_report.first_unmatched->start_slot_offset;
+      unmatched.nof_slots         = source_report.first_unmatched->nof_slots;
+      switch (source_report.first_unmatched->purpose) {
+        case mac_ntn_access_calendar_preflight_purpose::ssb:
+          unmatched.purpose = f1ap_ntn_access_calendar_preflight_purpose::ssb;
+          break;
+        case mac_ntn_access_calendar_preflight_purpose::prach:
+          unmatched.purpose = f1ap_ntn_access_calendar_preflight_purpose::prach;
+          break;
+        case mac_ntn_access_calendar_preflight_purpose::invalid:
+          unmatched.purpose = f1ap_ntn_access_calendar_preflight_purpose::invalid;
+          break;
+      }
+      target_report.first_unmatched.emplace(std::move(unmatched));
+    }
   }
   return launch_result(std::move(result));
 }

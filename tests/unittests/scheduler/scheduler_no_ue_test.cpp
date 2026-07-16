@@ -35,6 +35,7 @@
 #include "srsran/scheduler/config/scheduler_expert_config_factory.h"
 #include "srsran/support/test_utils.h"
 #include <gtest/gtest.h>
+#include <optional>
 
 using namespace srsran;
 
@@ -105,6 +106,100 @@ TEST_F(sched_no_ue_tester, test_rach_indication)
   test_scheduler_result_consistency(cell_cfg, sl_tx, res);
   ASSERT_TRUE(res.dl.ue_grants.empty());
   ASSERT_TRUE(not res.dl.rar_grants.empty());
+}
+
+TEST_F(sched_no_ue_tester, ntn_calendar_preflight_reports_matched_partial_and_missing_without_creating_a_gate)
+{
+  scheduler_expert_config  sched_cfg = config_helpers::make_default_scheduler_expert_config();
+  sched_cfg_dummy_notifier cfg_notif;
+  scheduler_impl           sch{scheduler_config{sched_cfg, cfg_notif}};
+
+  sched_cell_configuration_request_message cell_cfg_msg =
+      sched_config_helper::make_default_sched_cell_configuration_request();
+  ASSERT_TRUE(sch.handle_cell_configuration_request(cell_cfg_msg));
+
+  static constexpr uint32_t cycle_slots = 640;
+  std::optional<uint32_t>   ssb_slot;
+  std::optional<uint32_t>   prach_slot;
+  std::optional<uint32_t>   no_ssb_slot;
+  std::optional<uint32_t>   no_prach_slot;
+  for (uint32_t offset = 0; offset != cycle_slots; ++offset) {
+    const sched_result& result = sch.slot_indication(slot_point{0, offset}, cell_cfg_msg.cell_index);
+    ASSERT_TRUE(result.success);
+    if (!result.dl.bc.ssb_info.empty() && !ssb_slot.has_value()) {
+      ssb_slot = offset;
+    }
+    if (!result.ul.prachs.empty() && !prach_slot.has_value()) {
+      prach_slot = offset;
+    }
+    if (result.dl.bc.ssb_info.empty() && !no_ssb_slot.has_value()) {
+      no_ssb_slot = offset;
+    }
+    if (result.ul.prachs.empty() && !no_prach_slot.has_value()) {
+      no_prach_slot = offset;
+    }
+  }
+  ASSERT_TRUE(ssb_slot.has_value());
+  ASSERT_TRUE(prach_slot.has_value());
+  ASSERT_TRUE(no_ssb_slot.has_value());
+  ASSERT_TRUE(no_prach_slot.has_value());
+
+  ntn_access_calendar_request request;
+  request.operation       = ntn_access_calendar_operation::preflight;
+  request.cell_index      = cell_cfg_msg.cell_index;
+  request.version         = 1;
+  request.content_hash    = "sha256:preflight";
+  request.activation_slot = slot_point{0, 0};
+  request.validity_slots  = cycle_slots;
+  request.cycle_slots     = cycle_slots;
+  request.expectations.push_back({"G000001", ssb_slot.value(), 1, ntn_access_calendar_purpose::ssb});
+  request.expectations.push_back({"G000001", prach_slot.value(), 1, ntn_access_calendar_purpose::prach});
+
+  ntn_access_calendar_response response = sch.handle_ntn_access_calendar_update(request);
+  EXPECT_EQ(response.state, ntn_access_calendar_state::ready);
+  EXPECT_EQ(response.reason, ntn_access_calendar_reject_reason::none);
+  EXPECT_TRUE(response.preflight.performed);
+  EXPECT_TRUE(response.preflight.passed);
+  EXPECT_EQ(response.preflight.numerology, 0U);
+  EXPECT_EQ(response.preflight.expected_ssb, 1U);
+  EXPECT_EQ(response.preflight.matched_ssb, 1U);
+  EXPECT_EQ(response.preflight.expected_prach, 1U);
+  EXPECT_EQ(response.preflight.matched_prach, 1U);
+  EXPECT_EQ(response.preflight.max_ssb_gap_slots, cycle_slots);
+  EXPECT_EQ(response.preflight.max_prach_gap_slots, cycle_slots);
+  EXPECT_FALSE(response.preflight.first_unmatched_present);
+
+  request.expectations.push_back({"G000002", no_ssb_slot.value(), 1, ntn_access_calendar_purpose::ssb});
+  response = sch.handle_ntn_access_calendar_update(request);
+  EXPECT_EQ(response.state, ntn_access_calendar_state::rejected);
+  EXPECT_EQ(response.reason, ntn_access_calendar_reject_reason::static_opportunity_missing);
+  EXPECT_TRUE(response.preflight.performed);
+  EXPECT_FALSE(response.preflight.passed);
+  EXPECT_EQ(response.preflight.expected_ssb, 2U);
+  EXPECT_EQ(response.preflight.matched_ssb, 1U);
+  EXPECT_TRUE(response.preflight.first_unmatched_present);
+  EXPECT_EQ(response.preflight.first_unmatched_position_id, "G000002");
+  EXPECT_EQ(response.preflight.first_unmatched_purpose, ntn_access_calendar_purpose::ssb);
+  EXPECT_EQ(response.preflight.first_unmatched_start_slot_offset, no_ssb_slot.value());
+  EXPECT_EQ(response.preflight.first_unmatched_nof_slots, 1U);
+
+  request.expectations.clear();
+  request.expectations.push_back({"G000003", no_ssb_slot.value(), 1, ntn_access_calendar_purpose::ssb});
+  request.expectations.push_back({"G000003", no_prach_slot.value(), 1, ntn_access_calendar_purpose::prach});
+  response = sch.handle_ntn_access_calendar_update(request);
+  EXPECT_EQ(response.state, ntn_access_calendar_state::rejected);
+  EXPECT_EQ(response.reason, ntn_access_calendar_reject_reason::static_opportunity_missing);
+  EXPECT_EQ(response.preflight.matched_ssb, 0U);
+  EXPECT_EQ(response.preflight.matched_prach, 0U);
+  EXPECT_EQ(response.preflight.max_ssb_gap_slots, cycle_slots + 1U);
+  EXPECT_EQ(response.preflight.max_prach_gap_slots, cycle_slots + 1U);
+
+  ntn_access_calendar_request query;
+  query.operation    = ntn_access_calendar_operation::query;
+  query.cell_index   = cell_cfg_msg.cell_index;
+  query.version      = request.version;
+  query.content_hash = request.content_hash;
+  EXPECT_EQ(sch.handle_ntn_access_calendar_update(query).state, ntn_access_calendar_state::cleared);
 }
 
 TEST_F(sched_no_ue_tester, when_calendar_allows_only_prach_then_ssb_is_gated_without_gating_prach)

@@ -243,6 +243,7 @@ TEST_P(prach_tester, prach_sched_allocates_in_prach_configured_slots)
 {
   for (unsigned i = 0; i != nof_slots_run; ++i) {
     slot_indication();
+    ASSERT_EQ(prach_sch.has_prach_opportunity(sl), !res_grid[0].result.ul.prachs.empty());
     if (is_prach_slot()) {
       ASSERT_GE(1, nof_prach_occasions_allocated());
     } else {

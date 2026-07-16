@@ -70,6 +70,7 @@ public:
       result.reason = "calendar_not_found";
       return result;
     }
+    result.preflight_reports = record->preflight_reports;
     if (record_is_cleanup && request.operation == mac_ntn_access_calendar_operation::query) {
       result.reason = "rollback_cleanup_pending";
       return result;
@@ -161,6 +162,36 @@ public:
     prepared_record.cell_indexes     = {scheduler_requests[0].cell_index, scheduler_requests[1].cell_index};
     prepared_record.accepted_intents = accepted_intents;
 
+    std::optional<mac_ntn_access_calendar_status> preflight_failure_status;
+    std::string                                   preflight_failure_reason;
+    for (unsigned i = 0; i != scheduler_requests.size(); ++i) {
+      ntn_access_calendar_request preflight_request = scheduler_requests[i];
+      preflight_request.operation                   = ntn_access_calendar_operation::preflight;
+      const ntn_access_calendar_response response   = scheduler_handler(preflight_request);
+      result.preflight_reports[i]                   = map_preflight_report(response.preflight);
+
+      const bool scheduler_accepted = map_scheduler_result(result, response);
+      if ((!scheduler_accepted || !response.preflight.performed || !response.preflight.passed) &&
+          !preflight_failure_status.has_value()) {
+        preflight_failure_status = response.reason == ntn_access_calendar_reject_reason::unsupported
+                                       ? mac_ntn_access_calendar_status::unsupported
+                                       : mac_ntn_access_calendar_status::rejected;
+        if (!response.preflight.performed) {
+          preflight_failure_reason = "scheduler_preflight_not_performed";
+        } else if (!response.preflight.passed) {
+          preflight_failure_reason = result.reason.empty() ? "static_opportunity_mismatch" : result.reason;
+        } else {
+          preflight_failure_reason = result.reason;
+        }
+      }
+    }
+    if (preflight_failure_status.has_value()) {
+      result.status = preflight_failure_status.value();
+      result.reason = std::move(preflight_failure_reason);
+      return result;
+    }
+    prepared_record.preflight_reports = result.preflight_reports;
+
     bool all_armed = true;
     for (unsigned i = 0; i != scheduler_requests.size(); ++i) {
       const ntn_access_calendar_response response = scheduler_handler(scheduler_requests[i]);
@@ -202,6 +233,7 @@ private:
     std::string                    hash;
     std::array<du_cell_index_t, 2> cell_indexes{INVALID_DU_CELL_INDEX, INVALID_DU_CELL_INDEX};
     std::array<unsigned, 2>        accepted_intents{};
+    std::array<mac_ntn_access_calendar_preflight_report, 2> preflight_reports{};
     unsigned                       nof_cells = 0;
     std::chrono::system_clock::time_point valid_until{};
   };
@@ -235,6 +267,8 @@ private:
         return "invalid_cycle";
       case ntn_access_calendar_reject_reason::invalid_window:
         return "calendar_window_not_slot_aligned";
+      case ntn_access_calendar_reject_reason::static_opportunity_missing:
+        return "static_opportunity_missing";
       case ntn_access_calendar_reject_reason::activation_too_late:
         return "activation_too_late";
       case ntn_access_calendar_reject_reason::expired:
@@ -245,6 +279,44 @@ private:
         return "scheduler_command_queue_full";
     }
     return "unknown_scheduler_rejection";
+  }
+
+  static mac_ntn_access_calendar_preflight_report
+  map_preflight_report(const ntn_access_calendar_preflight_report& source)
+  {
+    mac_ntn_access_calendar_preflight_report target;
+    if (!source.performed) {
+      return target;
+    }
+
+    target.performed           = true;
+    target.passed              = source.passed;
+    target.numerology          = static_cast<uint8_t>(std::min(source.numerology, 0xffU));
+    target.expected_ssb        = source.expected_ssb;
+    target.matched_ssb         = source.matched_ssb;
+    target.expected_prach      = source.expected_prach;
+    target.matched_prach       = source.matched_prach;
+    target.max_ssb_gap_slots   = source.max_ssb_gap_slots;
+    target.max_prach_gap_slots = source.max_prach_gap_slots;
+    if (source.first_unmatched_present) {
+      mac_ntn_access_calendar_unmatched_intent unmatched;
+      unmatched.position_id       = source.first_unmatched_position_id;
+      unmatched.start_slot_offset = source.first_unmatched_start_slot_offset;
+      unmatched.nof_slots         = source.first_unmatched_nof_slots;
+      switch (source.first_unmatched_purpose) {
+        case ntn_access_calendar_purpose::ssb:
+          unmatched.purpose = mac_ntn_access_calendar_preflight_purpose::ssb;
+          break;
+        case ntn_access_calendar_purpose::prach:
+          unmatched.purpose = mac_ntn_access_calendar_preflight_purpose::prach;
+          break;
+        default:
+          unmatched.purpose = mac_ntn_access_calendar_preflight_purpose::invalid;
+          break;
+      }
+      target.first_unmatched.emplace(std::move(unmatched));
+    }
+    return target;
   }
 
   static bool map_scheduler_result(mac_ntn_access_calendar_result& result,

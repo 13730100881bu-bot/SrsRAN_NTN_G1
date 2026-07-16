@@ -23,8 +23,41 @@
 #include "cell_scheduler.h"
 #include "logging/scheduler_metrics_handler.h"
 #include "ue_scheduling/ue_scheduler_impl.h"
+#include <algorithm>
+#include <map>
 
 using namespace srsran;
+
+namespace {
+
+uint32_t compute_max_cyclic_gap(std::map<std::string, std::vector<uint32_t>>& opportunity_offsets, uint32_t cycle_slots)
+{
+  uint32_t max_gap = 0;
+  for (auto& position_opportunities : opportunity_offsets) {
+    std::vector<uint32_t>& offsets = position_opportunities.second;
+    if (offsets.empty()) {
+      // A position with no matched opportunity has no bounded cyclic gap. cycle + 1 is the smallest finite value that
+      // reports this condition without introducing another optional field.
+      max_gap = std::max(max_gap, cycle_slots + 1U);
+      continue;
+    }
+
+    std::sort(offsets.begin(), offsets.end());
+    offsets.erase(std::unique(offsets.begin(), offsets.end()), offsets.end());
+    if (offsets.size() == 1) {
+      max_gap = std::max(max_gap, cycle_slots);
+      continue;
+    }
+
+    for (unsigned i = 1; i != offsets.size(); ++i) {
+      max_gap = std::max(max_gap, offsets[i] - offsets[i - 1]);
+    }
+    max_gap = std::max(max_gap, cycle_slots - offsets.back() + offsets.front());
+  }
+  return max_gap;
+}
+
+} // namespace
 
 cell_scheduler::cell_scheduler(const scheduler_expert_config&                  sched_cfg,
                                const sched_cell_configuration_request_message& msg,
@@ -34,8 +67,7 @@ cell_scheduler::cell_scheduler(const scheduler_expert_config&                  s
   cell_cfg(cell_cfg_),
   res_grid(cell_cfg),
   access_calendar_numerology(to_numerology_value(cell_cfg.scs_common)),
-  access_calendar_minimum_lead_slots(
-      std::max(res_grid.max_dl_slot_alloc_delay, res_grid.max_ul_slot_alloc_delay) + 1),
+  access_calendar_minimum_lead_slots(std::max(res_grid.max_dl_slot_alloc_delay, res_grid.max_ul_slot_alloc_delay) + 1),
   event_logger(cell_cfg.cell_index, cell_cfg.pci),
   metrics(metrics_handler),
   result_logger(sched_cfg.log_broadcast_messages, cell_cfg.pci),
@@ -58,6 +90,11 @@ cell_scheduler::cell_scheduler(const scheduler_expert_config&                  s
 ntn_access_calendar_response
 cell_scheduler::handle_ntn_access_calendar_update(const ntn_access_calendar_request& request)
 {
+  // Preflight must remain ahead of lazy gate creation: it only inspects the immutable cell radio configuration.
+  if (request.operation == ntn_access_calendar_operation::preflight) {
+    return preflight_ntn_access_calendar(request);
+  }
+
   scheduler_ntn_access_calendar_gate* gate = access_calendar_gate.load(std::memory_order_acquire);
   if (gate == nullptr) {
     if (request.operation != ntn_access_calendar_operation::prepare) {
@@ -78,6 +115,115 @@ cell_scheduler::handle_ntn_access_calendar_update(const ntn_access_calendar_requ
     }
   }
   return gate->handle_update(request);
+}
+
+ntn_access_calendar_response
+cell_scheduler::preflight_ntn_access_calendar(const ntn_access_calendar_request& request) const
+{
+  ntn_access_calendar_response response;
+  response.version                   = request.version;
+  response.content_hash              = request.content_hash;
+  response.effective_activation_slot = request.activation_slot;
+  response.minimum_lead_slots        = access_calendar_minimum_lead_slots;
+  response.preflight.performed       = true;
+  response.preflight.numerology      = access_calendar_numerology;
+
+  auto reject = [&response](ntn_access_calendar_reject_reason reason) {
+    response.state            = ntn_access_calendar_state::rejected;
+    response.reason           = reason;
+    response.preflight.passed = false;
+    return response;
+  };
+
+  if (request.cell_index != cell_cfg.cell_index) {
+    return reject(ntn_access_calendar_reject_reason::cell_not_configured);
+  }
+  if (!request.activation_slot.valid() || request.activation_slot.numerology() != access_calendar_numerology) {
+    return reject(ntn_access_calendar_reject_reason::invalid_activation_slot);
+  }
+  if (request.cycle_slots == 0 || request.cycle_slots > MAX_NTN_ACCESS_CALENDAR_CYCLE_SLOTS) {
+    return reject(ntn_access_calendar_reject_reason::invalid_cycle);
+  }
+
+  std::vector<bool> ssb_opportunities(request.cycle_slots);
+  std::vector<bool> prach_opportunities(request.cycle_slots);
+  for (uint32_t offset = 0; offset != request.cycle_slots; ++offset) {
+    const slot_point sl         = request.activation_slot + offset;
+    ssb_opportunities[offset]   = ssb_sch.has_ssb_opportunity(sl);
+    prach_opportunities[offset] = prach_sch.has_prach_opportunity(sl);
+  }
+
+  std::map<std::string, std::vector<uint32_t>> ssb_matches_by_position;
+  std::map<std::string, std::vector<uint32_t>> prach_matches_by_position;
+  bool                                         invalid_expectation = false;
+
+  for (const ntn_access_calendar_expectation& expectation : request.expectations) {
+    const bool purpose_valid = expectation.purpose == ntn_access_calendar_purpose::ssb ||
+                               expectation.purpose == ntn_access_calendar_purpose::prach;
+    if (purpose_valid) {
+      uint32_t& expected_count = expectation.purpose == ntn_access_calendar_purpose::ssb
+                                     ? response.preflight.expected_ssb
+                                     : response.preflight.expected_prach;
+      ++expected_count;
+    }
+    const bool window_valid = expectation.nof_slots != 0 && expectation.start_slot_offset < request.cycle_slots &&
+                              expectation.nof_slots <= request.cycle_slots - expectation.start_slot_offset;
+    if (expectation.position_id.empty() || !purpose_valid || !window_valid) {
+      if (purpose_valid && !expectation.position_id.empty()) {
+        auto& matches_by_position = expectation.purpose == ntn_access_calendar_purpose::ssb ? ssb_matches_by_position
+                                                                                            : prach_matches_by_position;
+        matches_by_position[expectation.position_id];
+      }
+      invalid_expectation = true;
+      if (!response.preflight.first_unmatched_present) {
+        response.preflight.first_unmatched_present           = true;
+        response.preflight.first_unmatched_position_id       = expectation.position_id;
+        response.preflight.first_unmatched_purpose           = expectation.purpose;
+        response.preflight.first_unmatched_start_slot_offset = expectation.start_slot_offset;
+        response.preflight.first_unmatched_nof_slots         = expectation.nof_slots;
+      }
+      continue;
+    }
+
+    const std::vector<bool>& opportunities =
+        expectation.purpose == ntn_access_calendar_purpose::ssb ? ssb_opportunities : prach_opportunities;
+    std::map<std::string, std::vector<uint32_t>>& matches_by_position =
+        expectation.purpose == ntn_access_calendar_purpose::ssb ? ssb_matches_by_position : prach_matches_by_position;
+    std::vector<uint32_t>& matched_offsets = matches_by_position[expectation.position_id];
+
+    uint32_t& matched_count = expectation.purpose == ntn_access_calendar_purpose::ssb
+                                  ? response.preflight.matched_ssb
+                                  : response.preflight.matched_prach;
+
+    const auto opportunity_it = std::find(opportunities.begin() + expectation.start_slot_offset,
+                                          opportunities.begin() + expectation.start_slot_offset + expectation.nof_slots,
+                                          true);
+    if (opportunity_it != opportunities.begin() + expectation.start_slot_offset + expectation.nof_slots) {
+      ++matched_count;
+      matched_offsets.push_back(static_cast<uint32_t>(std::distance(opportunities.begin(), opportunity_it)));
+      continue;
+    }
+
+    if (!response.preflight.first_unmatched_present) {
+      response.preflight.first_unmatched_present           = true;
+      response.preflight.first_unmatched_position_id       = expectation.position_id;
+      response.preflight.first_unmatched_purpose           = expectation.purpose;
+      response.preflight.first_unmatched_start_slot_offset = expectation.start_slot_offset;
+      response.preflight.first_unmatched_nof_slots         = expectation.nof_slots;
+    }
+  }
+
+  response.preflight.max_ssb_gap_slots   = compute_max_cyclic_gap(ssb_matches_by_position, request.cycle_slots);
+  response.preflight.max_prach_gap_slots = compute_max_cyclic_gap(prach_matches_by_position, request.cycle_slots);
+  response.preflight.passed = !invalid_expectation &&
+                              response.preflight.matched_ssb == response.preflight.expected_ssb &&
+                              response.preflight.matched_prach == response.preflight.expected_prach;
+  response.state = response.preflight.passed ? ntn_access_calendar_state::ready : ntn_access_calendar_state::rejected;
+  response.reason = response.preflight.passed
+                        ? ntn_access_calendar_reject_reason::none
+                        : (invalid_expectation ? ntn_access_calendar_reject_reason::invalid_window
+                                               : ntn_access_calendar_reject_reason::static_opportunity_missing);
+  return response;
 }
 
 void cell_scheduler::handle_si_update_request(const si_scheduling_update_request& msg)

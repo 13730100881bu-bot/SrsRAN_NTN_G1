@@ -272,6 +272,17 @@ TEST_F(f1ap_du_gnbdu_resource_coordination_test, valid_access_calendar_is_forwar
   next_result.activation_slot              = slot_point{1, 42};
   next_result.accepted_intents_per_cell[0] = 1;
   next_result.accepted_intents_per_cell[1] = 1;
+  for (auto& report : next_result.preflight_reports) {
+    report.performed           = true;
+    report.passed              = true;
+    report.numerology          = 1;
+    report.expected_ssb        = 8;
+    report.matched_ssb         = 8;
+    report.expected_prach      = 1;
+    report.matched_prach       = 1;
+    report.max_ssb_gap_slots   = 8;
+    report.max_prach_gap_slots = 64;
+  }
   f1ap_du_cfg_handler.next_ntn_access_calendar_result = next_result;
 
   f1ap->handle_message(make_resource_coordination_request(11, update));
@@ -291,6 +302,10 @@ TEST_F(f1ap_du_gnbdu_resource_coordination_test, valid_access_calendar_is_forwar
   EXPECT_TRUE(decoded->accepted());
   EXPECT_EQ(decoded->activation_slot, next_result.activation_slot);
   EXPECT_EQ(decoded->accepted_intents_per_cell, next_result.accepted_intents_per_cell);
+  EXPECT_TRUE(decoded->preflight_reports[0].performed);
+  EXPECT_TRUE(decoded->preflight_reports[0].passed);
+  EXPECT_EQ(decoded->preflight_reports[0].expected_ssb, 8U);
+  EXPECT_EQ(decoded->preflight_reports[1].max_prach_gap_slots, 64U);
 }
 
 TEST_F(f1ap_du_gnbdu_resource_coordination_test, malformed_access_calendar_is_rejected_without_falling_through)

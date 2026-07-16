@@ -40,7 +40,42 @@ struct expected_scheduler_call {
   ntn_access_calendar_state         response_state;
   ntn_access_calendar_reject_reason response_reason   = ntn_access_calendar_reject_reason::none;
   bool                              command_consumed = true;
+  ntn_access_calendar_preflight_report response_preflight;
 };
+
+ntn_access_calendar_preflight_report make_preflight_report(bool passed, unsigned cell_index)
+{
+  ntn_access_calendar_preflight_report report;
+  report.performed           = true;
+  report.passed              = passed;
+  report.numerology          = 1;
+  report.expected_ssb        = 8 + cell_index;
+  report.matched_ssb         = passed ? report.expected_ssb : report.expected_ssb - 1;
+  report.expected_prach      = 1;
+  report.matched_prach       = passed ? 1 : 0;
+  report.max_ssb_gap_slots   = 160;
+  report.max_prach_gap_slots = 1280;
+  if (!passed) {
+    report.first_unmatched_present           = true;
+    report.first_unmatched_position_id       = "G000002";
+    report.first_unmatched_purpose           = ntn_access_calendar_purpose::prach;
+    report.first_unmatched_start_slot_offset = 640;
+    report.first_unmatched_nof_slots         = 5;
+  }
+  return report;
+}
+
+expected_scheduler_call make_preflight_call(du_cell_index_t cell_index, uint64_t version, bool passed = true)
+{
+  return {ntn_access_calendar_operation::preflight,
+          cell_index,
+          version,
+          passed ? ntn_access_calendar_state::ready : ntn_access_calendar_state::rejected,
+          passed ? ntn_access_calendar_reject_reason::none
+                 : ntn_access_calendar_reject_reason::static_opportunity_missing,
+          false,
+          make_preflight_report(passed, static_cast<unsigned>(cell_index))};
+}
 
 class scripted_scheduler
 {
@@ -67,6 +102,7 @@ public:
     response.effective_activation_slot = slot_point{0, 100};
     response.minimum_lead_slots        = 20;
     response.command_consumed          = expected.command_consumed;
+    response.preflight                 = expected.response_preflight;
     return response;
   }
 
@@ -114,7 +150,9 @@ TEST(mac_ntn_access_calendar_manager_test,
   mac_ntn_access_calendar_manager manager;
   const auto                      request            = make_update(1, mac_ntn_access_calendar_operation::prepare);
   const auto                      scheduler_requests = make_scheduler_requests(1);
-  scripted_scheduler scheduler{{ntn_access_calendar_operation::prepare,
+  scripted_scheduler scheduler{make_preflight_call(to_du_cell_index(0), 1),
+                                make_preflight_call(to_du_cell_index(1), 1),
+                                {ntn_access_calendar_operation::prepare,
                                  to_du_cell_index(0),
                                  1,
                                  ntn_access_calendar_state::ready,
@@ -137,12 +175,44 @@ TEST(mac_ntn_access_calendar_manager_test,
 }
 
 TEST(mac_ntn_access_calendar_manager_test,
+     when_second_cell_preflight_fails_then_both_reports_are_returned_without_any_prepare_side_effect)
+{
+  mac_ntn_access_calendar_manager manager;
+  const auto                      request            = make_update(3, mac_ntn_access_calendar_operation::prepare);
+  const auto                      scheduler_requests = make_scheduler_requests(3);
+  scripted_scheduler scheduler{make_preflight_call(to_du_cell_index(0), 3),
+                                make_preflight_call(to_du_cell_index(1), 3, false)};
+
+  const auto result = manager.handle_prepare(
+      request, scheduler_requests, std::array<unsigned, 2>{10, 10}, std::ref(scheduler));
+
+  EXPECT_EQ(result.status, mac_ntn_access_calendar_status::rejected);
+  EXPECT_EQ(result.reason, "static_opportunity_missing");
+  EXPECT_EQ(result.accepted_intents, (std::array<unsigned, 2>{0, 0}));
+  EXPECT_TRUE(result.preflight_reports[0].performed);
+  EXPECT_TRUE(result.preflight_reports[0].passed);
+  EXPECT_TRUE(result.preflight_reports[1].performed);
+  EXPECT_FALSE(result.preflight_reports[1].passed);
+  EXPECT_EQ(result.preflight_reports[1].expected_ssb, 9U);
+  EXPECT_EQ(result.preflight_reports[1].matched_ssb, 8U);
+  EXPECT_EQ(result.preflight_reports[1].expected_prach, 1U);
+  EXPECT_EQ(result.preflight_reports[1].matched_prach, 0U);
+  ASSERT_TRUE(result.preflight_reports[1].first_unmatched.has_value());
+  EXPECT_EQ(result.preflight_reports[1].first_unmatched->position_id, "G000002");
+  EXPECT_EQ(result.preflight_reports[1].first_unmatched->purpose,
+            mac_ntn_access_calendar_preflight_purpose::prach);
+  scheduler.verify_complete();
+}
+
+TEST(mac_ntn_access_calendar_manager_test,
      when_second_cell_rejects_prepare_then_same_key_is_blocked_until_partial_cleanup_converges)
 {
   mac_ntn_access_calendar_manager manager;
   const auto                      prepare_request    = make_update(7, mac_ntn_access_calendar_operation::prepare);
   const auto                      scheduler_requests = make_scheduler_requests(7);
-  scripted_scheduler prepare_scheduler{{ntn_access_calendar_operation::prepare,
+  scripted_scheduler prepare_scheduler{make_preflight_call(to_du_cell_index(0), 7),
+                                        make_preflight_call(to_du_cell_index(1), 7),
+                                        {ntn_access_calendar_operation::prepare,
                                          to_du_cell_index(0),
                                          7,
                                          ntn_access_calendar_state::ready},
@@ -205,7 +275,9 @@ TEST(mac_ntn_access_calendar_manager_test,
   for (uint64_t version : {1U, 2U}) {
     const auto prepare_request    = make_update(version, mac_ntn_access_calendar_operation::prepare);
     const auto scheduler_requests = make_scheduler_requests(version);
-    scripted_scheduler prepare_scheduler{{ntn_access_calendar_operation::prepare,
+    scripted_scheduler prepare_scheduler{make_preflight_call(to_du_cell_index(0), version),
+                                          make_preflight_call(to_du_cell_index(1), version),
+                                          {ntn_access_calendar_operation::prepare,
                                            to_du_cell_index(0),
                                            version,
                                            ntn_access_calendar_state::ready},
@@ -216,6 +288,8 @@ TEST(mac_ntn_access_calendar_manager_test,
     const auto prepare_result = manager.handle_prepare(
         prepare_request, scheduler_requests, std::array<unsigned, 2>{2, 2}, std::ref(prepare_scheduler));
     EXPECT_EQ(prepare_result.status, mac_ntn_access_calendar_status::ready);
+    EXPECT_EQ(prepare_result.preflight_reports[0].expected_ssb, 8U);
+    EXPECT_EQ(prepare_result.preflight_reports[1].expected_ssb, 9U);
     prepare_scheduler.verify_complete();
 
     const auto query_request = make_update(version, mac_ntn_access_calendar_operation::query);
@@ -229,6 +303,14 @@ TEST(mac_ntn_access_calendar_manager_test,
                                          ntn_access_calendar_state::applied}};
     const auto query_result = manager.handle_query_or_clear(query_request, std::ref(query_scheduler));
     EXPECT_EQ(query_result.status, mac_ntn_access_calendar_status::applied);
+    EXPECT_TRUE(query_result.preflight_reports[0].performed);
+    EXPECT_TRUE(query_result.preflight_reports[0].passed);
+    EXPECT_EQ(query_result.preflight_reports[0].expected_ssb, 8U);
+    EXPECT_EQ(query_result.preflight_reports[0].matched_ssb, 8U);
+    EXPECT_TRUE(query_result.preflight_reports[1].performed);
+    EXPECT_TRUE(query_result.preflight_reports[1].passed);
+    EXPECT_EQ(query_result.preflight_reports[1].expected_ssb, 9U);
+    EXPECT_EQ(query_result.preflight_reports[1].matched_ssb, 9U);
     query_scheduler.verify_complete();
   }
 
