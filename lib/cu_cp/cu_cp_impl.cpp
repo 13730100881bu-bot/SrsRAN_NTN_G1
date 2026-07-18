@@ -53,6 +53,7 @@
 #include "srsran/support/async/coroutine.h"
 #include "srsran/support/synchronization/sync_event.h"
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <dlfcn.h>
 #include <cmath>
@@ -65,6 +66,31 @@
 
 using namespace srsran;
 using namespace srs_cu_cp;
+
+static std::string normalize_ntn_calendar_hash_for_comparison(std::string value)
+{
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return std::tolower(c); });
+  if (value.rfind("sha256:", 0) != 0) {
+    value.insert(0, "sha256:");
+  }
+  return value;
+}
+
+static bool ntn_deployment_stage_may_have_installed_calendar(ntn_position_plan_deployment_stage stage)
+{
+  return stage == ntn_position_plan_deployment_stage::preparing ||
+         stage == ntn_position_plan_deployment_stage::ready ||
+         stage == ntn_position_plan_deployment_stage::applied;
+}
+
+static bool ntn_snapshot_matches_recorded_deployment(
+    const ntn_onboard_position_plan_state_snapshot& snapshot,
+    const ntn_onboard_position_plan_persistent_state& state)
+{
+  return snapshot.source.schedule_version == state.recorded_deployment_schedule_version &&
+         normalize_ntn_calendar_hash_for_comparison(snapshot.calendar_hash) ==
+             normalize_ntn_calendar_hash_for_comparison(state.recorded_deployment_calendar_hash);
+}
 
 static constexpr const char* ntn_access_state_none               = "none";
 static constexpr const char* ntn_access_state_access_active      = "access_active";
@@ -1036,6 +1062,89 @@ find_du_cell_by_nci(du_processor_repository& du_db, du_index_t du_index, nr_cell
   });
   return it != served_cells.end() ? &(*it) : nullptr;
 }
+
+const char*
+ntn_onboard_detail::get_ntn_onboard_du_cell_resolution_detail(ntn_onboard_du_cell_resolution_status status)
+{
+  switch (status) {
+    case ntn_onboard_du_cell_resolution_status::resolved:
+      return "resolved";
+    case ntn_onboard_du_cell_resolution_status::unavailable:
+      return "du_or_cells_unavailable";
+    case ntn_onboard_du_cell_resolution_status::missing:
+      return "missing_nci_pci_du_cell_mapping";
+    case ntn_onboard_du_cell_resolution_status::duplicate:
+      return "duplicate_nci_pci_du_cell_mapping";
+    case ntn_onboard_du_cell_resolution_status::cross_du:
+      return "two_onboard_cells_resolve_to_different_dus";
+  }
+  return "unknown_nci_pci_du_cell_mapping";
+}
+
+ntn_onboard_detail::ntn_onboard_du_cell_resolution
+ntn_onboard_detail::resolve_ntn_onboard_du_cells(
+    const std::vector<ntn_onboard_du_cell_candidate>&   candidates,
+    const std::array<ntn_onboard_cell_position_set, 2>& planned_cells)
+{
+  ntn_onboard_du_cell_resolution result;
+  std::array<unsigned, 2>        match_counts{};
+  std::array<du_index_t, 2>      matched_du_indexes{du_index_t::invalid, du_index_t::invalid};
+
+  for (const ntn_onboard_du_cell_candidate& candidate : candidates) {
+    for (unsigned i = 0; i != planned_cells.size(); ++i) {
+      const ntn_onboard_cell_identity& identity = planned_cells[i].identity;
+      if (candidate.nci == identity.nci && candidate.pci == identity.pci) {
+        ++match_counts[i];
+        if (match_counts[i] == 1) {
+          result.cells[i]       = candidate.cell;
+          matched_du_indexes[i] = candidate.du_index;
+        }
+      }
+    }
+  }
+
+  if (match_counts[0] > 1 || match_counts[1] > 1) {
+    result.status = ntn_onboard_du_cell_resolution_status::duplicate;
+    return result;
+  }
+  if (match_counts[0] == 0 && match_counts[1] == 0) {
+    result.status = ntn_onboard_du_cell_resolution_status::unavailable;
+    return result;
+  }
+  if (match_counts[0] != 1 || match_counts[1] != 1) {
+    result.status = ntn_onboard_du_cell_resolution_status::missing;
+    return result;
+  }
+  if (matched_du_indexes[0] != matched_du_indexes[1]) {
+    result.status = ntn_onboard_du_cell_resolution_status::cross_du;
+    return result;
+  }
+
+  result.status   = ntn_onboard_du_cell_resolution_status::resolved;
+  result.du_index = matched_du_indexes[0];
+  return result;
+}
+
+static ntn_onboard_detail::ntn_onboard_du_cell_resolution
+resolve_ntn_onboard_du_cells(du_processor_repository&                            du_db,
+                             const std::array<ntn_onboard_cell_position_set, 2>& planned_cells)
+{
+  std::vector<ntn_onboard_detail::ntn_onboard_du_cell_candidate> candidates;
+  for (du_index_t du_index : du_db.get_du_processor_indexes()) {
+    du_processor* processor = du_db.find_du_processor(du_index);
+    if (processor == nullptr || processor->get_context() == nullptr) {
+      continue;
+    }
+    for (const du_cell_configuration& cell : processor->get_context()->served_cells) {
+      candidates.push_back({du_index, cell.cgi.nci, cell.pci, &cell});
+    }
+  }
+  return ntn_onboard_detail::resolve_ntn_onboard_du_cells(candidates, planned_cells);
+}
+
+using ntn_onboard_detail::get_ntn_onboard_du_cell_resolution_detail;
+using ntn_onboard_detail::ntn_onboard_du_cell_resolution;
+using ntn_onboard_detail::ntn_onboard_du_cell_resolution_status;
 
 static srsran::du_cell_index_t to_f1ap_du_cell_index(srs_cu_cp::du_cell_index_t cell_index)
 {
@@ -2605,11 +2714,21 @@ cu_cp_impl::cu_cp_impl(const cu_cp_configuration& config_) :
     ntn_onboard_position_plan_ctrl.emplace(make_ntn_onboard_position_plan_config(cfg));
     ntn_position_plan_reload_timer = cfg.services.timers->create_unique_timer(*cfg.services.cu_cp_executor);
     ntn_position_plan_activation_timer = cfg.services.timers->create_unique_timer(*cfg.services.cu_cp_executor);
-    reload_ntn_onboard_position_plan();
+    restore_ntn_onboard_position_plan_state();
+    bool recovery_required = false;
+    {
+      std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
+      recovery_required =
+          ntn_onboard_position_plan_ctrl.has_value() && ntn_onboard_position_plan_ctrl->recovery_plan().has_value();
+    }
+    if (!recovery_required && !ntn_position_plan_state_write_blocked) {
+      reload_ntn_onboard_position_plan();
+    }
     if (position_plan_cfg.reload_period.count() > 0) {
       ntn_position_plan_reload_deadline = std::chrono::steady_clock::now() + position_plan_cfg.reload_period;
       schedule_ntn_onboard_position_plan_reload();
     }
+    schedule_ntn_onboard_position_plan_activation();
   }
 
   // Start statistics report timer.
@@ -8035,6 +8154,8 @@ cu_cp_ntn_runtime_status cu_cp_impl::get_current_ntn_runtime_status() const
   cu_cp_ntn_position_plan_status& position_status = status.onboard_position_plan;
   position_status.enabled      = cfg.mobility.onboard_position_plan.enabled;
   position_status.du_execution_enabled = cfg.mobility.onboard_position_plan.du_execution_enabled;
+  position_status.state_file_configured           = !cfg.mobility.onboard_position_plan.state_file.empty();
+  position_status.state_file_required             = position_status.enabled && position_status.du_execution_enabled;
   position_status.access_profile_id = cfg.mobility.onboard_position_plan.expected_access_profile_id.empty()
                                           ? "none"
                                           : cfg.mobility.onboard_position_plan.expected_access_profile_id;
@@ -8052,11 +8173,24 @@ cu_cp_ntn_runtime_status cu_cp_impl::get_current_ntn_runtime_status() const
                                      : cfg.mobility.onboard_position_plan.satellite_id;
   {
     std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
+    position_status.state_schema_version =
+        position_status.state_file_configured ? ntn_onboard_position_plan_persistent_state::current_schema_version : 0;
+    position_status.state_generation   = ntn_position_plan_state_generation;
+    position_status.state_hash         = ntn_position_plan_state_hash.empty() ? "none" : ntn_position_plan_state_hash;
+    position_status.state_store_status = ntn_position_plan_state_store_status;
+    position_status.state_store_error  = ntn_position_plan_state_error.empty() ? "none" : ntn_position_plan_state_error;
+    position_status.last_state_save_unix_ms = ntn_position_plan_state_last_save_unix_ms;
+    position_status.state_write_blocked     = ntn_position_plan_state_write_blocked;
     if (ntn_onboard_position_plan_ctrl.has_value()) {
       const auto& controller_cfg = ntn_onboard_position_plan_ctrl->config();
       position_status.stage          = to_string(ntn_onboard_position_plan_ctrl->stage());
       position_status.deployment_stage = to_string(ntn_onboard_position_plan_ctrl->deployment_stage());
       position_status.deployment_detail = ntn_onboard_position_plan_ctrl->deployment_detail();
+      position_status.recovery_stage              = to_string(ntn_onboard_position_plan_ctrl->recovery_stage());
+      position_status.recovery_detail             = ntn_onboard_position_plan_ctrl->recovery_detail();
+      position_status.catalog_version_high_water  = ntn_onboard_position_plan_ctrl->highest_catalog_version_seen();
+      position_status.schedule_version_high_water = ntn_onboard_position_plan_ctrl->highest_schedule_version_seen();
+      position_status.recovery_schedule_version   = ntn_onboard_position_plan_ctrl->recovery_schedule_version();
       position_status.execution_evidence =
           ntn_onboard_position_plan_ctrl->active_has_external_apply_evidence()
               ? "ssb_prach_software_gate_applied_no_position_or_rf_evidence"
@@ -11060,11 +11194,162 @@ bool cu_cp_impl::schedule_ue_task(ue_index_t ue_index, async_task<void> task)
   return ue_mng.find_ue_task_scheduler(ue_index)->schedule_async_task(std::move(task));
 }
 
+void cu_cp_impl::restore_ntn_onboard_position_plan_state()
+{
+  const auto& source_cfg = cfg.mobility.onboard_position_plan;
+  if (!source_cfg.du_execution_enabled) {
+    ntn_position_plan_state_store_status = "disabled";
+    return;
+  }
+
+  ntn_position_plan_state_store_status = "loading";
+  auto                        loaded   = load_ntn_onboard_position_plan_state(source_cfg.state_file);
+  std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
+  if (!ntn_onboard_position_plan_ctrl.has_value()) {
+    return;
+  }
+  if (!loaded.has_value()) {
+    ntn_position_plan_state_store_status  = "corrupt";
+    ntn_position_plan_state_error         = loaded.error();
+    ntn_position_plan_state_write_blocked = true;
+    ntn_onboard_position_plan_ctrl->record_external_rejection(ntn_position_plan_reject_reason::state_file_corrupt);
+    logger.error(
+        "Rejected NTN onboard position-plan state file='{}'. Cause: {}", source_cfg.state_file, loaded.error());
+    return;
+  }
+  if (!loaded->has_value()) {
+    ntn_position_plan_state_store_status = "first_boot";
+    ntn_position_plan_state_error.clear();
+    return;
+  }
+
+  const auto recovery_time = std::chrono::system_clock::now();
+  auto       restored      = ntn_onboard_position_plan_ctrl->restore_persistent_state(**loaded, recovery_time);
+  if (!restored.has_value()) {
+    ntn_position_plan_state_store_status  = "context_mismatch";
+    ntn_position_plan_state_error         = restored.error();
+    ntn_position_plan_state_write_blocked = true;
+    ntn_onboard_position_plan_ctrl->record_external_rejection(ntn_position_plan_reject_reason::state_context_mismatch,
+                                                              (*loaded)->highest_schedule_version);
+    logger.error("Rejected NTN onboard position-plan recovery state file='{}'. Cause: {}",
+                 source_cfg.state_file,
+                 restored.error());
+    return;
+  }
+  ntn_position_plan_clear_queue.clear();
+  for (const ntn_onboard_position_plan_clear_obligation& obligation : (*loaded)->outstanding_clears) {
+    ntn_activated_position_plan clear_plan;
+    clear_plan.source         = obligation.snapshot.source;
+    clear_plan.cell_positions = obligation.snapshot.cell_positions;
+    clear_plan.calendar_hash  = obligation.snapshot.calendar_hash;
+    ntn_position_plan_clear_queue.emplace_back(std::move(clear_plan), obligation.reason);
+  }
+  bool recovered_expired_clear = false;
+  const auto recover_expired_deployment = [&](const std::optional<ntn_onboard_position_plan_state_snapshot>& snapshot) {
+    if (!snapshot.has_value() || recovery_time < snapshot->source.valid_until ||
+        !ntn_snapshot_matches_recorded_deployment(*snapshot, **loaded)) {
+      return;
+    }
+    ntn_activated_position_plan clear_plan;
+    clear_plan.source         = snapshot->source;
+    clear_plan.cell_positions = snapshot->cell_positions;
+    clear_plan.calendar_hash  = snapshot->calendar_hash;
+    recovered_expired_clear =
+        queue_ntn_onboard_position_plan_clear_locked(clear_plan, "expired_deployment_recovered_after_restart") ||
+        recovered_expired_clear;
+  };
+  if (ntn_deployment_stage_may_have_installed_calendar((*loaded)->recorded_deployment_stage)) {
+    recover_expired_deployment((*loaded)->active);
+    recover_expired_deployment((*loaded)->pending);
+  }
+  ntn_position_plan_state_generation   = (*loaded)->generation;
+  ntn_position_plan_state_hash         = (*loaded)->state_hash;
+  ntn_position_plan_state_store_status = "loaded_reconciliation_required";
+  ntn_position_plan_state_error.clear();
+  const ntn_versioned_position_plan* restored_source = nullptr;
+  if ((*loaded)->pending.has_value()) {
+    restored_source = &(*loaded)->pending->source;
+  } else if ((*loaded)->active.has_value()) {
+    restored_source = &(*loaded)->active->source;
+  }
+  if (restored_source != nullptr) {
+    last_ntn_position_plan_file_signature = fmt::format("{}|{}|{}",
+                                                        restored_source->schedule_version,
+                                                        restored_source->content_hash,
+                                                        compute_ntn_position_plan_content_hash(*restored_source));
+  }
+  if (recovered_expired_clear) {
+    persist_ntn_onboard_position_plan_state_locked("expired_deployment_recovered_after_restart");
+  }
+  logger.info("Loaded NTN onboard position-plan recovery state generation={} high_water_schedule={} "
+              "recovery={} outstanding_clears={} (historical applied state is not live evidence)",
+              ntn_position_plan_state_generation,
+              (*loaded)->highest_schedule_version,
+              to_string(ntn_onboard_position_plan_ctrl->recovery_stage()),
+              ntn_position_plan_clear_queue.size());
+}
+
+cu_cp_impl::ntn_state_persist_outcome cu_cp_impl::persist_ntn_onboard_position_plan_state_locked(const char* reason)
+{
+  const auto& source_cfg = cfg.mobility.onboard_position_plan;
+  if (!source_cfg.du_execution_enabled) {
+    return ntn_state_persist_outcome::durable;
+  }
+  if (!ntn_onboard_position_plan_ctrl.has_value() || ntn_position_plan_state_write_blocked) {
+    return ntn_state_persist_outcome::not_committed;
+  }
+
+  if (ntn_position_plan_state_generation == std::numeric_limits<uint64_t>::max()) {
+    ntn_position_plan_state_store_status  = "generation_exhausted";
+    ntn_position_plan_state_error         = "state_generation_exhausted";
+    ntn_position_plan_state_write_blocked = true;
+    return ntn_state_persist_outcome::not_committed;
+  }
+  const uint64_t next_generation = ntn_position_plan_state_generation + 1;
+  auto           state           = ntn_onboard_position_plan_ctrl->make_persistent_state(next_generation);
+  state.outstanding_clears.reserve(ntn_position_plan_clear_queue.size());
+  for (const auto& [plan, clear_reason] : ntn_position_plan_clear_queue) {
+    state.outstanding_clears.push_back(
+        {{plan.source, plan.cell_positions, plan.calendar_hash}, clear_reason});
+  }
+  auto stored = store_ntn_onboard_position_plan_state_atomic(source_cfg.state_file, state);
+  if (!stored.has_value()) {
+    ntn_position_plan_state_store_status  = "write_failed";
+    ntn_position_plan_state_error         = stored.error();
+    ntn_position_plan_state_write_blocked = true;
+    logger.error("Failed to persist NTN onboard position-plan state reason={} file='{}'. Cause: {}",
+                 reason,
+                 source_cfg.state_file,
+                 stored.error());
+    return ntn_state_persist_outcome::not_committed;
+  }
+  ntn_position_plan_state_generation   = next_generation;
+  ntn_position_plan_state_hash         = stored->state_hash;
+  ntn_position_plan_state_last_save_unix_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+          .count();
+  if (!stored->durable) {
+    ntn_position_plan_state_store_status  = "committed_not_durable";
+    ntn_position_plan_state_error         = stored->durability_error;
+    ntn_position_plan_state_write_blocked = true;
+    logger.error("Committed NTN onboard position-plan state without confirmed directory durability reason={} "
+                 "file='{}'. Cause: {}",
+                 reason,
+                 source_cfg.state_file,
+                 stored->durability_error);
+    return ntn_state_persist_outcome::committed_not_durable;
+  }
+  ntn_position_plan_state_store_status = "stored";
+  ntn_position_plan_state_error.clear();
+  return ntn_state_persist_outcome::durable;
+}
+
 void cu_cp_impl::reload_ntn_onboard_position_plan()
 {
   {
     std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
-    if (!ntn_onboard_position_plan_ctrl.has_value()) {
+    if (!ntn_onboard_position_plan_ctrl.has_value() || ntn_position_plan_state_write_blocked ||
+        ntn_onboard_position_plan_ctrl->recovery_plan().has_value() || !ntn_position_plan_clear_queue.empty()) {
       return;
     }
   }
@@ -11094,7 +11379,8 @@ void cu_cp_impl::reload_ntn_onboard_position_plan()
     if (!ntn_onboard_position_plan_ctrl.has_value() || signature == last_ntn_position_plan_file_signature) {
       return;
     }
-    last_ntn_position_plan_file_signature = signature;
+    const ntn_onboard_position_plan_controller checkpoint       = *ntn_onboard_position_plan_ctrl;
+    const auto                                  clear_checkpoint = ntn_position_plan_clear_queue;
     if (source_cfg.du_execution_enabled && ntn_onboard_position_plan_ctrl->pending_plan().has_value() &&
         ntn_onboard_position_plan_ctrl->pending_plan()->source.schedule_version != plan->schedule_version &&
         (ntn_onboard_position_plan_ctrl->deployment_stage() == ntn_position_plan_deployment_stage::preparing ||
@@ -11103,6 +11389,25 @@ void cu_cp_impl::reload_ntn_onboard_position_plan()
       superseded_pending = *ntn_onboard_position_plan_ctrl->pending_plan();
     }
     result = ntn_onboard_position_plan_ctrl->submit(plan.value(), std::chrono::system_clock::now());
+    if (result.accepted && superseded_pending.has_value()) {
+      queue_ntn_onboard_position_plan_clear_locked(*superseded_pending, "superseded_by_new_checked_plan");
+    }
+    const ntn_state_persist_outcome persist_outcome =
+        result.accepted && source_cfg.du_execution_enabled
+            ? persist_ntn_onboard_position_plan_state_locked("checked_plan_accepted")
+            : ntn_state_persist_outcome::durable;
+    if (result.accepted && persist_outcome != ntn_state_persist_outcome::durable) {
+      if (persist_outcome == ntn_state_persist_outcome::not_committed) {
+        *ntn_onboard_position_plan_ctrl = checkpoint;
+        ntn_position_plan_clear_queue   = clear_checkpoint;
+      }
+      ntn_onboard_position_plan_ctrl->record_external_rejection(
+          ntn_position_plan_reject_reason::state_persistence_failure, plan->schedule_version);
+      result = {false, ntn_position_plan_stage::rejected, ntn_position_plan_reject_reason::state_persistence_failure};
+      superseded_pending.reset();
+    } else {
+      last_ntn_position_plan_file_signature = signature;
+    }
   }
   if (!result.accepted) {
     logger.warning("Rejected NTN onboard position plan satellite_id={} catalog_version={} schedule_version={} reason={}",
@@ -11120,7 +11425,7 @@ void cu_cp_impl::reload_ntn_onboard_position_plan()
               to_string(result.stage),
               plan->visible_l1_positions.size());
   if (superseded_pending.has_value()) {
-    queue_ntn_onboard_position_plan_clear(*superseded_pending, "superseded_by_new_checked_plan");
+    try_clear_ntn_onboard_position_plan_deployment();
   }
   if (source_cfg.du_execution_enabled) {
     try_prepare_ntn_onboard_position_plan();
@@ -11137,10 +11442,9 @@ void cu_cp_impl::try_prepare_ntn_onboard_position_plan()
   std::optional<ntn_activated_position_plan> pending_plan;
   {
     std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
-    if (!ntn_onboard_position_plan_ctrl.has_value() ||
+    if (!ntn_onboard_position_plan_ctrl.has_value() || ntn_position_plan_state_write_blocked ||
         ntn_onboard_position_plan_ctrl->deployment_stage() != ntn_position_plan_deployment_stage::not_sent ||
-        !ntn_onboard_position_plan_ctrl->pending_plan().has_value() ||
-        !ntn_position_plan_clear_queue.empty()) {
+        !ntn_onboard_position_plan_ctrl->pending_plan().has_value() || !ntn_position_plan_clear_queue.empty()) {
       return;
     }
     pending_plan = *ntn_onboard_position_plan_ctrl->pending_plan();
@@ -11155,70 +11459,70 @@ void cu_cp_impl::try_prepare_ntn_onboard_position_plan()
   const auto prepare_deadline =
       pending_plan->source.activation_epoch - cfg.mobility.onboard_position_plan.du_prepare_guard;
   if (now >= prepare_deadline) {
+    ntn_state_persist_outcome persist_outcome = ntn_state_persist_outcome::durable;
     {
       std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
       if (ntn_onboard_position_plan_ctrl.has_value()) {
-        ntn_onboard_position_plan_ctrl->reject_pending_deployment(
+        const bool rejected = ntn_onboard_position_plan_ctrl->reject_pending_deployment(
             pending_plan->source.schedule_version,
             pending_plan->calendar_hash,
             ntn_position_plan_reject_reason::du_prepare_timeout,
             "du_prepare_guard_reached_before_du_ready");
-      }
-    }
-    queue_ntn_onboard_position_plan_clear(*pending_plan, "du_prepare_guard_reached_before_du_ready");
-    return;
-  }
-
-  struct resolved_cell {
-    du_index_t                  du_index = du_index_t::invalid;
-    const du_cell_configuration* cell    = nullptr;
-  };
-  std::array<std::vector<resolved_cell>, 2> matches;
-  for (du_index_t du_index : du_db.get_du_processor_indexes()) {
-    du_processor* processor = du_db.find_du_processor(du_index);
-    if (processor == nullptr || processor->get_context() == nullptr) {
-      continue;
-    }
-    for (const du_cell_configuration& candidate : processor->get_context()->served_cells) {
-      for (unsigned i = 0; i != pending_plan->cell_positions.size(); ++i) {
-        const ntn_onboard_cell_identity& identity = pending_plan->cell_positions[i].identity;
-        if (candidate.cgi.nci == identity.nci && candidate.pci == identity.pci) {
-          matches[i].push_back({du_index, &candidate});
+        if (rejected) {
+          queue_ntn_onboard_position_plan_clear_locked(*pending_plan, "du_prepare_guard_reached_before_du_ready");
+          persist_outcome = persist_ntn_onboard_position_plan_state_locked("du_prepare_guard_rejection");
         }
       }
     }
+    if (persist_outcome == ntn_state_persist_outcome::durable) {
+      try_clear_ntn_onboard_position_plan_deployment();
+    }
+    schedule_ntn_onboard_position_plan_activation();
+    return;
   }
 
-  if (matches[0].size() != 1 || matches[1].size() != 1) {
-    const bool ambiguous = matches[0].size() > 1 || matches[1].size() > 1;
+  const ntn_onboard_du_cell_resolution resolution = resolve_ntn_onboard_du_cells(du_db, pending_plan->cell_positions);
+  if (resolution.status == ntn_onboard_du_cell_resolution_status::unavailable ||
+      resolution.status == ntn_onboard_du_cell_resolution_status::missing ||
+      resolution.status == ntn_onboard_du_cell_resolution_status::duplicate) {
+    const bool duplicate = resolution.status == ntn_onboard_du_cell_resolution_status::duplicate;
     std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
     if (ntn_onboard_position_plan_ctrl.has_value()) {
-      if (ambiguous) {
+      if (duplicate) {
         ntn_onboard_position_plan_ctrl->reject_pending_deployment(
             pending_plan->source.schedule_version,
             pending_plan->calendar_hash,
             ntn_position_plan_reject_reason::identity_mismatch,
-            "ambiguous_nci_pci_du_cell_mapping");
+            get_ntn_onboard_du_cell_resolution_detail(resolution.status));
       } else {
+        const bool detail_changed = ntn_onboard_position_plan_ctrl->deployment_detail() !=
+                                    get_ntn_onboard_du_cell_resolution_detail(resolution.status);
         ntn_onboard_position_plan_ctrl->mark_deployment_retryable(
-            pending_plan->source.schedule_version, pending_plan->calendar_hash, "du_or_cell_unavailable_retrying");
+            pending_plan->source.schedule_version,
+            pending_plan->calendar_hash,
+            get_ntn_onboard_du_cell_resolution_detail(resolution.status));
+        if (!detail_changed) {
+          return;
+        }
       }
+      persist_ntn_onboard_position_plan_state_locked(duplicate ? "du_identity_rejection" : "du_unavailable_retry");
     }
     return;
   }
-  if (matches[0][0].du_index != matches[1][0].du_index) {
+  if (resolution.status == ntn_onboard_du_cell_resolution_status::cross_du) {
     std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
     if (ntn_onboard_position_plan_ctrl.has_value()) {
       ntn_onboard_position_plan_ctrl->reject_pending_deployment(
           pending_plan->source.schedule_version,
           pending_plan->calendar_hash,
           ntn_position_plan_reject_reason::cross_du_calendar_not_supported,
-          "two_onboard_cells_resolve_to_different_dus");
+          get_ntn_onboard_du_cell_resolution_detail(resolution.status));
+      persist_ntn_onboard_position_plan_state_locked("cross_du_rejection");
     }
     return;
   }
 
-  du_processor* processor = du_db.find_du_processor(matches[0][0].du_index);
+  du_processor* processor = du_db.find_du_processor(resolution.du_index);
   if (processor == nullptr || processor->get_context() == nullptr) {
     return;
   }
@@ -11241,7 +11545,7 @@ void cu_cp_impl::try_prepare_ntn_onboard_position_plan()
   update.cells.reserve(2);
   for (unsigned i = 0; i != pending_plan->cell_positions.size(); ++i) {
     f1ap_ntn_access_calendar_cell cell;
-    cell.du_cell_index = to_f1ap_du_cell_index(matches[i][0].cell->cell_index);
+    cell.du_cell_index = to_f1ap_du_cell_index(resolution.cells[i]->cell_index);
     cell.nci           = pending_plan->cell_positions[i].identity.nci;
     cell.pci           = pending_plan->cell_positions[i].identity.pci;
     for (const ntn_access_calendar_intent& intent : pending_plan->access_calendar) {
@@ -11279,6 +11583,10 @@ void cu_cp_impl::try_prepare_ntn_onboard_position_plan()
     std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
     if (!ntn_onboard_position_plan_ctrl.has_value() ||
         !ntn_onboard_position_plan_ctrl->mark_deployment_preparing(update.schedule_version, update.calendar_hash)) {
+      return;
+    }
+    if (persist_ntn_onboard_position_plan_state_locked("du_prepare_dispatched") !=
+        ntn_state_persist_outcome::durable) {
       return;
     }
   }
@@ -11439,10 +11747,14 @@ void cu_cp_impl::try_prepare_ntn_onboard_position_plan()
                     ntn_position_plan_deployment_stage::preparing) {
               ntn_position_plan_prepare_dispatched.reset();
             }
+            if (should_clear_orphan) {
+              queue_ntn_onboard_position_plan_clear_locked(prepared_plan, "orphaned_or_late_prepare_response");
+            }
+            persist_ntn_onboard_position_plan_state_locked("du_prepare_response");
           }
         }
         if (should_clear_orphan) {
-          queue_ntn_onboard_position_plan_clear(prepared_plan, "orphaned_or_late_prepare_response");
+          try_clear_ntn_onboard_position_plan_deployment();
         }
         schedule_ntn_onboard_position_plan_activation();
         CORO_RETURN();
@@ -11452,6 +11764,7 @@ void cu_cp_impl::try_prepare_ntn_onboard_position_plan()
     if (ntn_onboard_position_plan_ctrl.has_value()) {
       ntn_onboard_position_plan_ctrl->mark_deployment_retryable(
           update.schedule_version, update.calendar_hash, "cu_cp_task_scheduler_unavailable_retrying");
+      persist_ntn_onboard_position_plan_state_locked("prepare_task_scheduler_unavailable");
     }
   }
 }
@@ -11465,60 +11778,91 @@ void cu_cp_impl::query_ntn_onboard_position_plan_application()
 
   std::optional<ntn_activated_position_plan> pending_plan;
   bool                                       query_for_prepare = false;
+  bool                                       query_for_recovery = false;
   {
     std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
-    if (!ntn_onboard_position_plan_ctrl.has_value() ||
-        !ntn_onboard_position_plan_ctrl->pending_plan().has_value()) {
+    if (!ntn_onboard_position_plan_ctrl.has_value() || ntn_position_plan_state_write_blocked ||
+        !ntn_position_plan_clear_queue.empty()) {
       return;
     }
-    const auto deployment = ntn_onboard_position_plan_ctrl->deployment_stage();
-    const auto& pending    = *ntn_onboard_position_plan_ctrl->pending_plan();
-    const bool prepare_was_dispatched =
-        ntn_position_plan_prepare_dispatched.has_value() &&
-        ntn_position_plan_prepare_dispatched->first == pending.source.schedule_version &&
-        ntn_position_plan_prepare_dispatched->second == pending.calendar_hash;
-    if (deployment != ntn_position_plan_deployment_stage::preparing &&
-        (deployment != ntn_position_plan_deployment_stage::ready ||
-         std::chrono::system_clock::now() <
-             ntn_onboard_position_plan_ctrl->pending_plan()->source.activation_epoch)) {
-      return;
-    }
-    if (deployment == ntn_position_plan_deployment_stage::preparing && !prepare_was_dispatched) {
-      return;
-    }
-    query_for_prepare = deployment == ntn_position_plan_deployment_stage::preparing;
-    pending_plan = *ntn_onboard_position_plan_ctrl->pending_plan();
-  }
-
-  std::optional<du_index_t> target_du;
-  for (du_index_t du_index : du_db.get_du_processor_indexes()) {
-    du_processor* processor = du_db.find_du_processor(du_index);
-    if (processor == nullptr || processor->get_context() == nullptr) {
-      continue;
-    }
-    unsigned matches = 0;
-    for (const du_cell_configuration& candidate : processor->get_context()->served_cells) {
-      for (const ntn_onboard_cell_position_set& planned_cell : pending_plan->cell_positions) {
-        matches += candidate.cgi.nci == planned_cell.identity.nci && candidate.pci == planned_cell.identity.pci;
-      }
-    }
-    if (matches == 2) {
-      if (target_du.has_value()) {
+    if (ntn_onboard_position_plan_ctrl->recovery_plan().has_value()) {
+      pending_plan       = *ntn_onboard_position_plan_ctrl->recovery_plan();
+      query_for_recovery = true;
+    } else {
+      if (!ntn_onboard_position_plan_ctrl->pending_plan().has_value()) {
         return;
       }
-      target_du = du_index;
+      const auto  deployment = ntn_onboard_position_plan_ctrl->deployment_stage();
+      const auto& pending    = *ntn_onboard_position_plan_ctrl->pending_plan();
+      const bool  prepare_was_dispatched =
+          ntn_position_plan_prepare_dispatched.has_value() &&
+          ntn_position_plan_prepare_dispatched->first == pending.source.schedule_version &&
+          ntn_position_plan_prepare_dispatched->second == pending.calendar_hash;
+      if (deployment != ntn_position_plan_deployment_stage::preparing &&
+          (deployment != ntn_position_plan_deployment_stage::ready ||
+           std::chrono::system_clock::now() <
+               ntn_onboard_position_plan_ctrl->pending_plan()->source.activation_epoch)) {
+        return;
+      }
+      if (deployment == ntn_position_plan_deployment_stage::preparing && !prepare_was_dispatched) {
+        return;
+      }
+      query_for_prepare = deployment == ntn_position_plan_deployment_stage::preparing;
+      pending_plan      = *ntn_onboard_position_plan_ctrl->pending_plan();
     }
   }
-  if (!target_du.has_value()) {
+
+  const ntn_onboard_du_cell_resolution resolution = resolve_ntn_onboard_du_cells(du_db, pending_plan->cell_positions);
+  if (resolution.status != ntn_onboard_du_cell_resolution_status::resolved) {
+    if (resolution.status == ntn_onboard_du_cell_resolution_status::unavailable) {
+      return;
+    }
+    if (query_for_recovery) {
+      {
+        std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
+        if (ntn_onboard_position_plan_ctrl.has_value()) {
+          const bool rejected = ntn_onboard_position_plan_ctrl->reject_recovery(
+              pending_plan->source.schedule_version,
+              pending_plan->calendar_hash,
+              ntn_position_plan_reject_reason::du_reconciliation_failed,
+              get_ntn_onboard_du_cell_resolution_detail(resolution.status));
+          if (rejected) {
+            queue_ntn_onboard_position_plan_clear_locked(*pending_plan, "du_recovery_cell_mapping_rejection");
+          }
+          persist_ntn_onboard_position_plan_state_locked("du_recovery_cell_mapping_rejection");
+        }
+      }
+      schedule_ntn_onboard_position_plan_activation();
+      try_clear_ntn_onboard_position_plan_deployment();
+    } else if (resolution.status == ntn_onboard_du_cell_resolution_status::duplicate ||
+               resolution.status == ntn_onboard_du_cell_resolution_status::cross_du) {
+      {
+        std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
+        if (ntn_onboard_position_plan_ctrl.has_value()) {
+          const bool rejected = ntn_onboard_position_plan_ctrl->reject_pending_deployment(
+              pending_plan->source.schedule_version,
+              pending_plan->calendar_hash,
+              resolution.status == ntn_onboard_du_cell_resolution_status::cross_du
+                  ? ntn_position_plan_reject_reason::cross_du_calendar_not_supported
+                  : ntn_position_plan_reject_reason::identity_mismatch,
+              get_ntn_onboard_du_cell_resolution_detail(resolution.status));
+          if (rejected) {
+            queue_ntn_onboard_position_plan_clear_locked(*pending_plan, "du_query_cell_mapping_rejection");
+          }
+          persist_ntn_onboard_position_plan_state_locked("du_query_cell_mapping_rejection");
+        }
+      }
+      try_clear_ntn_onboard_position_plan_deployment();
+    }
     return;
   }
-  du_processor* processor = du_db.find_du_processor(target_du.value());
+  du_processor* processor = du_db.find_du_processor(resolution.du_index);
   if (processor == nullptr) {
     return;
   }
 
   f1ap_ntn_access_calendar_update update;
-  update.operation            = f1ap_ntn_access_calendar_operation::query;
+  update.operation                = f1ap_ntn_access_calendar_operation::query;
   update.satellite_id         = pending_plan->source.satellite_id;
   update.catalog_version      = pending_plan->source.catalog_version;
   update.schedule_version     = pending_plan->source.schedule_version;
@@ -11539,10 +11883,15 @@ void cu_cp_impl::query_ntn_onboard_position_plan_application()
   async_task<f1ap_gnb_du_resource_coordination_response> f1ap_task =
       processor->get_f1ap_handler().handle_gnb_du_resource_coordination_request(request);
   auto completion_task =
-      [this, queried_plan = pending_plan.value(), query_for_prepare, update, f1ap_task = std::move(f1ap_task)](
-          coro_context<async_task<void>>& ctx) mutable {
+      [this,
+       queried_plan = pending_plan.value(),
+       query_for_prepare,
+       query_for_recovery,
+       update,
+         f1ap_task = std::move(f1ap_task)](coro_context<async_task<void>>& ctx) mutable {
         f1ap_gnb_du_resource_coordination_response response;
         bool should_clear_rejected = false;
+        bool clear_was_queued      = false;
         CORO_BEGIN(ctx);
         CORO_AWAIT_VALUE(response, f1ap_task);
         ntn_position_plan_query_in_flight = false;
@@ -11559,23 +11908,57 @@ void cu_cp_impl::query_ntn_onboard_position_plan_application()
               ntn_onboard_position_plan_ctrl->active_plan().has_value() &&
               ntn_onboard_position_plan_ctrl->active_plan()->source.schedule_version == update.schedule_version &&
               ntn_onboard_position_plan_ctrl->active_plan()->calendar_hash == update.calendar_hash;
+          const bool recovery_matches =
+              ntn_onboard_position_plan_ctrl.has_value() &&
+              ntn_onboard_position_plan_ctrl->recovery_plan().has_value() &&
+              ntn_onboard_position_plan_ctrl->recovery_plan()->source.schedule_version == update.schedule_version &&
+              ntn_onboard_position_plan_ctrl->recovery_plan()->calendar_hash == update.calendar_hash;
           const auto deployment = ntn_onboard_position_plan_ctrl.has_value()
                                       ? ntn_onboard_position_plan_ctrl->deployment_stage()
                                       : ntn_position_plan_deployment_stage::disabled;
-          if (active_matches && !pending_matches) {
+          const auto recovery_stage_before = ntn_onboard_position_plan_ctrl.has_value()
+                                                 ? ntn_onboard_position_plan_ctrl->recovery_stage()
+                                                 : ntn_position_plan_recovery_stage::disabled;
+          const bool active_before =
+              ntn_onboard_position_plan_ctrl.has_value() && ntn_onboard_position_plan_ctrl->active_plan().has_value();
+          const bool pending_before =
+              ntn_onboard_position_plan_ctrl.has_value() && ntn_onboard_position_plan_ctrl->pending_plan().has_value();
+          const bool recovery_before =
+              ntn_onboard_position_plan_ctrl.has_value() && ntn_onboard_position_plan_ctrl->recovery_plan().has_value();
+          const uint64_t recovery_version_before =
+              ntn_onboard_position_plan_ctrl.has_value()
+                  ? ntn_onboard_position_plan_ctrl->recovery_schedule_version()
+                  : 0;
+          const auto     rejection_before = ntn_onboard_position_plan_ctrl.has_value()
+                                                ? ntn_onboard_position_plan_ctrl->last_rejection_reason()
+                                                : ntn_position_plan_reject_reason::none;
+          const uint64_t rejected_version_before =
+              ntn_onboard_position_plan_ctrl.has_value()
+                  ? ntn_onboard_position_plan_ctrl->last_rejected_schedule_version()
+                  : 0;
+          if (query_for_recovery && !recovery_matches) {
+            // A newer recovery decision won the race; ignore this stale response.
+          } else if (!query_for_recovery && active_matches && !pending_matches) {
             // Ignore a duplicate query response for the plan that is already active.
-          } else if (ntn_onboard_position_plan_ctrl.has_value() && !pending_matches) {
+          } else if (!query_for_recovery && ntn_onboard_position_plan_ctrl.has_value() && !pending_matches) {
             should_clear_rejected = true;
           } else if (query_for_prepare && deployment == ntn_position_plan_deployment_stage::applied) {
             // The same plan has already reached stronger applied evidence through a later completion path.
           } else if (ntn_onboard_position_plan_ctrl.has_value() && response_time >= queried_plan.source.valid_until) {
-            ntn_onboard_position_plan_ctrl->reject_pending_deployment(
-                update.schedule_version,
-                update.calendar_hash,
-                ntn_position_plan_reject_reason::du_activation_not_applied,
-                "du_query_response_arrived_after_valid_until");
-            should_clear_rejected = true;
-          } else if (ntn_onboard_position_plan_ctrl.has_value() && !query_for_prepare &&
+            if (query_for_recovery) {
+              ntn_onboard_position_plan_ctrl->reject_recovery(update.schedule_version,
+                                                              update.calendar_hash,
+                                                              ntn_position_plan_reject_reason::du_reconciliation_failed,
+                                                              "du_recovery_query_arrived_after_valid_until");
+            } else {
+              ntn_onboard_position_plan_ctrl->reject_pending_deployment(
+                  update.schedule_version,
+                  update.calendar_hash,
+                  ntn_position_plan_reject_reason::du_activation_not_applied,
+                  "du_query_response_arrived_after_valid_until");
+              should_clear_rejected = true;
+            }
+          } else if (ntn_onboard_position_plan_ctrl.has_value() && !query_for_recovery && !query_for_prepare &&
                      response_time >=
                          queried_plan.source.activation_epoch + cfg.mobility.onboard_position_plan.du_apply_timeout) {
             ntn_onboard_position_plan_ctrl->reject_pending_deployment(
@@ -11584,7 +11967,7 @@ void cu_cp_impl::query_ntn_onboard_position_plan_application()
                 ntn_position_plan_reject_reason::du_activation_not_applied,
                 "du_application_response_arrived_after_deadline");
             should_clear_rejected = true;
-          } else if (ntn_onboard_position_plan_ctrl.has_value() && query_for_prepare &&
+          } else if (ntn_onboard_position_plan_ctrl.has_value() && !query_for_recovery && query_for_prepare &&
                      deployment == ntn_position_plan_deployment_stage::preparing &&
                      response_time >=
                          queried_plan.source.activation_epoch - cfg.mobility.onboard_position_plan.du_prepare_guard) {
@@ -11627,7 +12010,7 @@ void cu_cp_impl::query_ntn_onboard_position_plan_application()
                 response.calendar_result->schedule_version == update.schedule_version &&
                 response.calendar_result->source_content_hash == update.source_content_hash &&
                 response.calendar_result->calendar_hash == update.calendar_hash;
-            if (response_plan_matches && (pending_matches || active_matches) &&
+            if (response_plan_matches && (pending_matches || active_matches || recovery_matches) &&
                 update.schedule_version >= ntn_position_plan_static_preflight_schedule_version) {
               ntn_position_plan_static_preflight_schedule_version = update.schedule_version;
               ntn_position_plan_static_preflight_reports          = response.calendar_result->preflight_reports;
@@ -11636,68 +12019,157 @@ void cu_cp_impl::query_ntn_onboard_position_plan_application()
                 response.calendar_result->schedule_version != update.schedule_version ||
                 response.calendar_result->source_content_hash != update.source_content_hash ||
                 response.calendar_result->calendar_hash != update.calendar_hash) {
-              ntn_onboard_position_plan_ctrl->reject_pending_deployment(
-                  update.schedule_version,
-                  update.calendar_hash,
-                  ntn_position_plan_reject_reason::calendar_hash_mismatch,
-                  "du_query_response_version_or_hash_mismatch");
-              should_clear_rejected = true;
+              if (query_for_recovery) {
+                ntn_onboard_position_plan_ctrl->reject_recovery(
+                    update.schedule_version,
+                    update.calendar_hash,
+                    ntn_position_plan_reject_reason::du_reconciliation_failed,
+                    "du_recovery_response_version_or_hash_mismatch");
+              } else {
+                ntn_onboard_position_plan_ctrl->reject_pending_deployment(
+                    update.schedule_version,
+                    update.calendar_hash,
+                    ntn_position_plan_reject_reason::calendar_hash_mismatch,
+                    "du_query_response_version_or_hash_mismatch");
+                should_clear_rejected = true;
+              }
             } else if (response.calendar_result->status == f1ap_ntn_access_calendar_result_status::unsupported) {
-              ntn_onboard_position_plan_ctrl->reject_pending_deployment(
-                  update.schedule_version,
-                  update.calendar_hash,
-                  ntn_position_plan_reject_reason::execution_unsupported,
-                  response.calendar_result->reject_reason.empty() ? "scheduler_preflight_unsupported"
-                                                                  : response.calendar_result->reject_reason);
-              // A query can only follow an earlier prepare, so retain the existing best-effort clear for a possibly
-              // installed software gate even though the query capability itself is unsupported.
-              should_clear_rejected = true;
+              if (query_for_recovery) {
+                ntn_onboard_position_plan_ctrl->reject_recovery(
+                    update.schedule_version,
+                    update.calendar_hash,
+                    ntn_position_plan_reject_reason::du_reconciliation_failed,
+                    response.calendar_result->reject_reason.empty() ? "du_recovery_query_unsupported"
+                                                                    : response.calendar_result->reject_reason);
+              } else {
+                ntn_onboard_position_plan_ctrl->reject_pending_deployment(
+                    update.schedule_version,
+                    update.calendar_hash,
+                    ntn_position_plan_reject_reason::execution_unsupported,
+                    response.calendar_result->reject_reason.empty() ? "scheduler_preflight_unsupported"
+                                                                    : response.calendar_result->reject_reason);
+                // A normal query follows prepare, so a possibly installed gate is cleared best effort.
+                should_clear_rejected = true;
+              }
             } else if (response_carries_preflight && !preflight.accepted) {
-              ntn_onboard_position_plan_ctrl->reject_pending_deployment(
-                  update.schedule_version,
-                  update.calendar_hash,
-                  ntn_position_plan_reject_reason::static_opportunity_mismatch,
-                  preflight.detail);
-              should_clear_rejected = true;
+              if (query_for_recovery) {
+                ntn_onboard_position_plan_ctrl->reject_recovery(
+                    update.schedule_version,
+                    update.calendar_hash,
+                    ntn_position_plan_reject_reason::du_reconciliation_failed,
+                    preflight.detail);
+              } else {
+                ntn_onboard_position_plan_ctrl->reject_pending_deployment(
+                    update.schedule_version,
+                    update.calendar_hash,
+                    ntn_position_plan_reject_reason::static_opportunity_mismatch,
+                    preflight.detail);
+                should_clear_rejected = true;
+              }
             } else if (response_accepts_calendar &&
                        (static_cast<size_t>(response.calendar_result->accepted_intents_per_cell[0]) !=
                             expected_intents_per_cell[0] ||
                         static_cast<size_t>(response.calendar_result->accepted_intents_per_cell[1]) !=
                             expected_intents_per_cell[1])) {
-              ntn_onboard_position_plan_ctrl->reject_pending_deployment(
-                  update.schedule_version,
-                  update.calendar_hash,
-                  query_for_prepare ? ntn_position_plan_reject_reason::du_prepare_rejected
-                                    : ntn_position_plan_reject_reason::du_activation_not_applied,
-                  "du_query_accepted_intent_count_mismatch");
-              should_clear_rejected = true;
+              if (query_for_recovery) {
+                ntn_onboard_position_plan_ctrl->reject_recovery(
+                    update.schedule_version,
+                    update.calendar_hash,
+                    ntn_position_plan_reject_reason::du_reconciliation_failed,
+                    "du_recovery_accepted_intent_count_mismatch");
+              } else {
+                ntn_onboard_position_plan_ctrl->reject_pending_deployment(
+                    update.schedule_version,
+                    update.calendar_hash,
+                    query_for_prepare ? ntn_position_plan_reject_reason::du_prepare_rejected
+                                      : ntn_position_plan_reject_reason::du_activation_not_applied,
+                    "du_query_accepted_intent_count_mismatch");
+                should_clear_rejected = true;
+              }
             } else if (response.calendar_result->status == f1ap_ntn_access_calendar_result_status::preparing) {
               // Keep polling until both scheduler slot threads report armed or the prepare guard expires.
             } else if (response.calendar_result->status == f1ap_ntn_access_calendar_result_status::ready) {
-              ntn_onboard_position_plan_ctrl->mark_deployment_ready(update.schedule_version, update.calendar_hash);
+              if (!query_for_recovery) {
+                ntn_onboard_position_plan_ctrl->mark_deployment_ready(update.schedule_version, update.calendar_hash);
+              }
             } else if (response.calendar_result->status == f1ap_ntn_access_calendar_result_status::applied) {
-              ntn_onboard_position_plan_ctrl->mark_deployment_applied(update.schedule_version, update.calendar_hash);
-              ntn_onboard_position_plan_ctrl->advance_time(std::chrono::system_clock::now());
+              if (query_for_recovery) {
+                const auto recovery_fallback = ntn_onboard_position_plan_ctrl->recovery_fallback_plan();
+                if (ntn_onboard_position_plan_ctrl->confirm_recovery_applied(
+                        update.schedule_version, update.calendar_hash, response_time) &&
+                    recovery_fallback.has_value()) {
+                  clear_was_queued = queue_ntn_onboard_position_plan_clear_locked(
+                      *recovery_fallback, "recovered_pending_replaced_historical_active");
+                }
+              } else {
+                ntn_onboard_position_plan_ctrl->mark_deployment_applied(update.schedule_version, update.calendar_hash);
+                ntn_onboard_position_plan_ctrl->advance_time(response_time);
+              }
             } else if (response.calendar_result->status == f1ap_ntn_access_calendar_result_status::cleared ||
                        response.calendar_result->status == f1ap_ntn_access_calendar_result_status::rejected ||
                        response.calendar_result->status == f1ap_ntn_access_calendar_result_status::unsupported) {
-              ntn_onboard_position_plan_ctrl->reject_pending_deployment(
-                  update.schedule_version,
-                  update.calendar_hash,
-                  response.calendar_result->status == f1ap_ntn_access_calendar_result_status::unsupported
-                      ? ntn_position_plan_reject_reason::execution_unsupported
-                      : ntn_position_plan_reject_reason::du_activation_not_applied,
+              const std::string detail =
                   response.calendar_result->reject_reason.empty()
                       ? (response.calendar_result->status == f1ap_ntn_access_calendar_result_status::cleared
                              ? "calendar_cleared_before_application"
                              : "du_application_query_rejected")
-                      : response.calendar_result->reject_reason);
-              should_clear_rejected = true;
+                      : response.calendar_result->reject_reason;
+              if (query_for_recovery) {
+                ntn_onboard_position_plan_ctrl->reject_recovery(
+                    update.schedule_version,
+                    update.calendar_hash,
+                    ntn_position_plan_reject_reason::du_reconciliation_failed,
+                    detail);
+              } else {
+                ntn_onboard_position_plan_ctrl->reject_pending_deployment(
+                    update.schedule_version,
+                    update.calendar_hash,
+                    response.calendar_result->status == f1ap_ntn_access_calendar_result_status::unsupported
+                        ? ntn_position_plan_reject_reason::execution_unsupported
+                        : ntn_position_plan_reject_reason::du_activation_not_applied,
+                    detail);
+                should_clear_rejected = true;
+              }
             }
           }
+          const bool recovery_rejection_changed =
+              query_for_recovery && ntn_onboard_position_plan_ctrl.has_value() &&
+              ntn_onboard_position_plan_ctrl->last_rejected_schedule_version() == update.schedule_version &&
+              (rejection_before != ntn_onboard_position_plan_ctrl->last_rejection_reason() ||
+               rejected_version_before != ntn_onboard_position_plan_ctrl->last_rejected_schedule_version());
+          const bool du_confirms_calendar_absent =
+              response.calendar_result.has_value() &&
+              (response.calendar_result->status == f1ap_ntn_access_calendar_result_status::cleared ||
+               response.calendar_result->reject_reason == "calendar_not_found");
+          if (du_confirms_calendar_absent) {
+            should_clear_rejected = false;
+          }
+          if (recovery_rejection_changed && !du_confirms_calendar_absent) {
+            should_clear_rejected = true;
+          }
+          if (should_clear_rejected) {
+            clear_was_queued = queue_ntn_onboard_position_plan_clear_locked(
+                                   queried_plan,
+                                   query_for_recovery ? "rejected_recovery_calendar" : "du_application_query_rejected") ||
+                               clear_was_queued;
+          }
+          const bool controller_changed =
+              ntn_onboard_position_plan_ctrl.has_value() &&
+              (deployment != ntn_onboard_position_plan_ctrl->deployment_stage() ||
+               recovery_stage_before != ntn_onboard_position_plan_ctrl->recovery_stage() ||
+               active_before != ntn_onboard_position_plan_ctrl->active_plan().has_value() ||
+                pending_before != ntn_onboard_position_plan_ctrl->pending_plan().has_value() ||
+                recovery_before != ntn_onboard_position_plan_ctrl->recovery_plan().has_value() ||
+                recovery_version_before != ntn_onboard_position_plan_ctrl->recovery_schedule_version() ||
+                rejection_before != ntn_onboard_position_plan_ctrl->last_rejection_reason() ||
+                rejected_version_before != ntn_onboard_position_plan_ctrl->last_rejected_schedule_version());
+          if (controller_changed || clear_was_queued) {
+            persist_ntn_onboard_position_plan_state_locked(query_for_recovery ? "du_recovery_query_response"
+                                                                              : "du_application_query_response");
+          }
         }
-        if (should_clear_rejected) {
-          queue_ntn_onboard_position_plan_clear(queried_plan, "du_application_query_rejected");
+        if (clear_was_queued) {
+          try_clear_ntn_onboard_position_plan_deployment();
         }
         schedule_ntn_onboard_position_plan_activation();
         CORO_RETURN();
@@ -11707,21 +12179,28 @@ void cu_cp_impl::query_ntn_onboard_position_plan_application()
   }
 }
 
-void cu_cp_impl::queue_ntn_onboard_position_plan_clear(const ntn_activated_position_plan& plan, std::string reason)
+bool cu_cp_impl::queue_ntn_onboard_position_plan_clear_locked(const ntn_activated_position_plan& plan,
+                                                               std::string                        reason)
 {
-  {
-    std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
-    const bool already_queued = std::any_of(
-        ntn_position_plan_clear_queue.begin(), ntn_position_plan_clear_queue.end(), [&plan](const auto& entry) {
-          return entry.first.source.schedule_version == plan.source.schedule_version &&
-                 entry.first.calendar_hash == plan.calendar_hash;
-        });
-    if (!already_queued) {
-      ntn_position_plan_clear_queue.emplace_back(plan, std::move(reason));
-    }
+  const bool already_queued = std::any_of(
+      ntn_position_plan_clear_queue.begin(), ntn_position_plan_clear_queue.end(), [&plan](const auto& entry) {
+        return entry.first.source.schedule_version == plan.source.schedule_version &&
+               normalize_ntn_calendar_hash_for_comparison(entry.first.calendar_hash) ==
+                   normalize_ntn_calendar_hash_for_comparison(plan.calendar_hash);
+      });
+  if (already_queued) {
+    return false;
   }
-  try_clear_ntn_onboard_position_plan_deployment();
-  schedule_ntn_onboard_position_plan_activation();
+  if (ntn_position_plan_clear_queue.size() >= max_ntn_onboard_position_plan_clear_obligations) {
+    ntn_position_plan_state_store_status  = "clear_queue_overflow";
+    ntn_position_plan_state_error         = "too_many_outstanding_clears";
+    ntn_position_plan_state_write_blocked = true;
+    logger.error("Cannot queue NTN calendar clear schedule_version={}. Cause: too_many_outstanding_clears",
+                 plan.source.schedule_version);
+    return false;
+  }
+  ntn_position_plan_clear_queue.emplace_back(plan, std::move(reason));
+  return true;
 }
 
 void cu_cp_impl::try_clear_ntn_onboard_position_plan_deployment()
@@ -11733,39 +12212,21 @@ void cu_cp_impl::try_clear_ntn_onboard_position_plan_deployment()
   std::optional<std::pair<ntn_activated_position_plan, std::string>> queued;
   {
     std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
-    if (ntn_position_plan_clear_in_flight || ntn_position_plan_clear_queue.empty()) {
+    if (ntn_position_plan_state_write_blocked || ntn_position_plan_clear_in_flight ||
+        ntn_position_plan_clear_queue.empty()) {
       return;
     }
     queued = ntn_position_plan_clear_queue.front();
   }
 
-  std::optional<du_index_t> target_du;
-  for (du_index_t du_index : du_db.get_du_processor_indexes()) {
-    du_processor* processor = du_db.find_du_processor(du_index);
-    if (processor == nullptr || processor->get_context() == nullptr) {
-      continue;
-    }
-    unsigned matches = 0;
-    for (const du_cell_configuration& candidate : processor->get_context()->served_cells) {
-      for (const ntn_onboard_cell_position_set& planned_cell : queued->first.cell_positions) {
-        matches += candidate.cgi.nci == planned_cell.identity.nci && candidate.pci == planned_cell.identity.pci;
-      }
-    }
-    if (matches == 2) {
-      if (target_du.has_value()) {
-        logger.warning("Cannot clear NTN calendar schedule_version={}. Cause: ambiguous_du_mapping",
-                       queued->first.source.schedule_version);
-        return;
-      }
-      target_du = du_index;
-    }
-  }
-  if (!target_du.has_value()) {
-    logger.debug("Deferred NTN calendar clear schedule_version={}. Cause: du_unavailable",
-                 queued->first.source.schedule_version);
+  const ntn_onboard_du_cell_resolution resolution = resolve_ntn_onboard_du_cells(du_db, queued->first.cell_positions);
+  if (resolution.status != ntn_onboard_du_cell_resolution_status::resolved) {
+    logger.warning("Deferred NTN calendar clear schedule_version={}. Cause={}",
+                   queued->first.source.schedule_version,
+                   get_ntn_onboard_du_cell_resolution_detail(resolution.status));
     return;
   }
-  du_processor* processor = du_db.find_du_processor(target_du.value());
+  du_processor* processor = du_db.find_du_processor(resolution.du_index);
   if (processor == nullptr) {
     return;
   }
@@ -11804,6 +12265,7 @@ void cu_cp_impl::try_clear_ntn_onboard_position_plan_deployment()
       [this, update, f1ap_task = std::move(f1ap_task)](coro_context<async_task<void>>& ctx) mutable {
         f1ap_gnb_du_resource_coordination_response response;
         bool advance_clear_queue = false;
+        bool resume_plan_work    = false;
         CORO_BEGIN(ctx);
         CORO_AWAIT_VALUE(response, f1ap_task);
         {
@@ -11825,12 +12287,18 @@ void cu_cp_impl::try_clear_ntn_onboard_position_plan_deployment()
                           update.schedule_version,
                           ntn_position_plan_clear_queue.front().second);
               ntn_position_plan_clear_queue.erase(ntn_position_plan_clear_queue.begin());
-              advance_clear_queue = true;
+              const ntn_state_persist_outcome persist_outcome =
+                  persist_ntn_onboard_position_plan_state_locked("calendar_clear_confirmed");
+              advance_clear_queue = persist_outcome == ntn_state_persist_outcome::durable;
+              resume_plan_work    = advance_clear_queue && ntn_position_plan_clear_queue.empty();
             }
           }
         }
         if (advance_clear_queue) {
           try_clear_ntn_onboard_position_plan_deployment();
+        }
+        if (resume_plan_work) {
+          reload_ntn_onboard_position_plan();
         }
         schedule_ntn_onboard_position_plan_activation();
         CORO_RETURN();
@@ -11879,7 +12347,10 @@ void cu_cp_impl::schedule_ntn_onboard_position_plan_activation()
   {
     std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
     if (ntn_onboard_position_plan_ctrl.has_value()) {
-      if (ntn_onboard_position_plan_ctrl->pending_plan().has_value()) {
+      if (ntn_onboard_position_plan_ctrl->recovery_plan().has_value()) {
+        const auto& recovering = *ntn_onboard_position_plan_ctrl->recovery_plan();
+        next_deadline          = std::min(recovering.source.valid_until, now + std::chrono::milliseconds{500});
+      } else if (ntn_onboard_position_plan_ctrl->pending_plan().has_value()) {
         const auto& pending = *ntn_onboard_position_plan_ctrl->pending_plan();
         if (!cfg.mobility.onboard_position_plan.du_execution_enabled) {
           next_deadline = pending.source.activation_epoch;
@@ -11924,7 +12395,8 @@ void cu_cp_impl::schedule_ntn_onboard_position_plan_activation()
            ntn_onboard_position_plan_ctrl->active_plan()->source.valid_until < next_deadline.value())) {
         next_deadline = ntn_onboard_position_plan_ctrl->active_plan()->source.valid_until;
       }
-      if (!ntn_position_plan_clear_queue.empty() && !ntn_position_plan_clear_in_flight) {
+      if (!ntn_position_plan_state_write_blocked && !ntn_position_plan_clear_queue.empty() &&
+          !ntn_position_plan_clear_in_flight) {
         const auto clear_retry = now + std::chrono::milliseconds{500};
         next_deadline = next_deadline.has_value() ? std::min(next_deadline.value(), clear_retry) : clear_retry;
       }
@@ -11961,12 +12433,13 @@ void cu_cp_impl::on_ntn_onboard_position_plan_activation_timer_expired()
     return;
   }
 
-  const auto              now = std::chrono::system_clock::now();
-  bool                    should_prepare = false;
-  bool                    should_query   = false;
-  std::optional<uint64_t> activated_version;
+  const auto                                 now                      = std::chrono::system_clock::now();
+  bool                                       should_prepare           = false;
+  bool                                       should_query             = false;
+  bool                                       controller_state_changed = false;
+  std::optional<uint64_t>                    activated_version;
   std::optional<ntn_activated_position_plan> plan_to_clear;
-  std::string             plan_clear_reason;
+  std::string                                plan_clear_reason;
   {
     std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
     if (!ntn_onboard_position_plan_ctrl.has_value()) {
@@ -11979,55 +12452,81 @@ void cu_cp_impl::on_ntn_onboard_position_plan_activation_timer_expired()
         activated_version = ntn_onboard_position_plan_ctrl->active_plan()->source.schedule_version;
       }
     } else {
-      if (ntn_onboard_position_plan_ctrl->pending_plan().has_value() &&
-          now >= ntn_onboard_position_plan_ctrl->pending_plan()->source.valid_until &&
-          ntn_onboard_position_plan_ctrl->deployment_stage() != ntn_position_plan_deployment_stage::not_sent) {
-        plan_to_clear = *ntn_onboard_position_plan_ctrl->pending_plan();
-        plan_clear_reason = "pending_plan_expired";
-      }
-      // Always let the controller expire an old active plan. External mode still prevents an un-applied pending plan
-      // from being promoted.
-      if (ntn_onboard_position_plan_ctrl->advance_time(now) &&
-          ntn_onboard_position_plan_ctrl->active_plan().has_value()) {
-        activated_version = ntn_onboard_position_plan_ctrl->active_plan()->source.schedule_version;
-      }
-      if (ntn_onboard_position_plan_ctrl->pending_plan().has_value()) {
-        const auto& pending = *ntn_onboard_position_plan_ctrl->pending_plan();
-        const auto  deployment = ntn_onboard_position_plan_ctrl->deployment_stage();
-        const auto prepare_deadline =
-            pending.source.activation_epoch - cfg.mobility.onboard_position_plan.du_prepare_guard;
-        const auto apply_deadline =
-            pending.source.activation_epoch + cfg.mobility.onboard_position_plan.du_apply_timeout;
-        const bool prepare_was_dispatched =
-            ntn_position_plan_prepare_dispatched.has_value() &&
-            ntn_position_plan_prepare_dispatched->first == pending.source.schedule_version &&
-            ntn_position_plan_prepare_dispatched->second == pending.calendar_hash;
-        if (deployment == ntn_position_plan_deployment_stage::ready && now >= apply_deadline) {
-          plan_to_clear = pending;
-          plan_clear_reason = "du_application_deadline_missed";
-          ntn_onboard_position_plan_ctrl->reject_pending_deployment(
-              pending.source.schedule_version,
-              pending.calendar_hash,
-              ntn_position_plan_reject_reason::du_activation_not_applied,
-              "both_cell_application_not_confirmed_before_deadline");
-        } else if (now >= prepare_deadline &&
-            (deployment == ntn_position_plan_deployment_stage::not_sent ||
-             deployment == ntn_position_plan_deployment_stage::preparing)) {
-          plan_to_clear = pending;
-          plan_clear_reason = "du_prepare_guard_reached_before_du_ready";
-          ntn_onboard_position_plan_ctrl->reject_pending_deployment(
-              pending.source.schedule_version,
-              pending.calendar_hash,
-              ntn_position_plan_reject_reason::du_prepare_timeout,
-              "du_prepare_guard_reached_before_du_ready");
+      if (ntn_onboard_position_plan_ctrl->recovery_plan().has_value()) {
+        const auto recovering = *ntn_onboard_position_plan_ctrl->recovery_plan();
+        if (now >= recovering.source.valid_until) {
+          plan_to_clear     = recovering;
+          plan_clear_reason = "recovery_plan_expired";
+          ntn_onboard_position_plan_ctrl->advance_time(now);
+          controller_state_changed = true;
         } else {
-          should_prepare = deployment == ntn_position_plan_deployment_stage::not_sent;
-          should_query   = (deployment == ntn_position_plan_deployment_stage::preparing &&
-                            prepare_was_dispatched) ||
-                         (deployment == ntn_position_plan_deployment_stage::ready &&
-                          now >= pending.source.activation_epoch);
+          should_query = true;
+        }
+      } else {
+        if (ntn_onboard_position_plan_ctrl->pending_plan().has_value() &&
+            now >= ntn_onboard_position_plan_ctrl->pending_plan()->source.valid_until &&
+            ntn_onboard_position_plan_ctrl->deployment_stage() != ntn_position_plan_deployment_stage::not_sent) {
+          plan_to_clear     = *ntn_onboard_position_plan_ctrl->pending_plan();
+          plan_clear_reason = "pending_plan_expired";
+        }
+        // Always let the controller expire an old active plan. External mode still prevents an un-applied pending plan
+        // from being promoted.
+        const bool had_active_plan  = ntn_onboard_position_plan_ctrl->active_plan().has_value();
+        const bool had_pending_plan = ntn_onboard_position_plan_ctrl->pending_plan().has_value();
+        if (ntn_onboard_position_plan_ctrl->advance_time(now) &&
+            ntn_onboard_position_plan_ctrl->active_plan().has_value()) {
+          activated_version = ntn_onboard_position_plan_ctrl->active_plan()->source.schedule_version;
+        }
+        controller_state_changed = controller_state_changed ||
+                                   (had_active_plan != ntn_onboard_position_plan_ctrl->active_plan().has_value()) ||
+                                   (had_pending_plan != ntn_onboard_position_plan_ctrl->pending_plan().has_value());
+        if (ntn_onboard_position_plan_ctrl->pending_plan().has_value()) {
+          const auto& pending    = *ntn_onboard_position_plan_ctrl->pending_plan();
+          const auto  deployment = ntn_onboard_position_plan_ctrl->deployment_stage();
+          const auto  prepare_deadline =
+              pending.source.activation_epoch - cfg.mobility.onboard_position_plan.du_prepare_guard;
+          const auto apply_deadline =
+              pending.source.activation_epoch + cfg.mobility.onboard_position_plan.du_apply_timeout;
+          const bool prepare_was_dispatched =
+              ntn_position_plan_prepare_dispatched.has_value() &&
+              ntn_position_plan_prepare_dispatched->first == pending.source.schedule_version &&
+              ntn_position_plan_prepare_dispatched->second == pending.calendar_hash;
+          if (deployment == ntn_position_plan_deployment_stage::ready && now >= apply_deadline) {
+            plan_to_clear     = pending;
+            plan_clear_reason = "du_application_deadline_missed";
+            ntn_onboard_position_plan_ctrl->reject_pending_deployment(
+                pending.source.schedule_version,
+                pending.calendar_hash,
+                ntn_position_plan_reject_reason::du_activation_not_applied,
+                "both_cell_application_not_confirmed_before_deadline");
+          } else if (now >= prepare_deadline && (deployment == ntn_position_plan_deployment_stage::not_sent ||
+                                                 deployment == ntn_position_plan_deployment_stage::preparing)) {
+            plan_to_clear     = pending;
+            plan_clear_reason = "du_prepare_guard_reached_before_du_ready";
+            ntn_onboard_position_plan_ctrl->reject_pending_deployment(
+                pending.source.schedule_version,
+                pending.calendar_hash,
+                ntn_position_plan_reject_reason::du_prepare_timeout,
+                "du_prepare_guard_reached_before_du_ready");
+          } else {
+            should_prepare = deployment == ntn_position_plan_deployment_stage::not_sent;
+            should_query =
+                (deployment == ntn_position_plan_deployment_stage::preparing && prepare_was_dispatched) ||
+                (deployment == ntn_position_plan_deployment_stage::ready && now >= pending.source.activation_epoch);
+          }
         }
       }
+    }
+    if (plan_to_clear.has_value()) {
+      queue_ntn_onboard_position_plan_clear_locked(
+          *plan_to_clear,
+          plan_clear_reason.empty() ? "pending_deployment_rejected" : plan_clear_reason);
+    }
+    if (cfg.mobility.onboard_position_plan.du_execution_enabled &&
+        (controller_state_changed || activated_version.has_value() || plan_to_clear.has_value())) {
+      persist_ntn_onboard_position_plan_state_locked(activated_version.has_value() ? "plan_activated"
+                                                     : plan_to_clear.has_value()   ? "pending_plan_rejected"
+                                                                                   : "plan_state_advanced");
     }
   }
 
@@ -12036,12 +12535,10 @@ void cu_cp_impl::on_ntn_onboard_position_plan_activation_timer_expired()
                 activated_version.value(),
                 cfg.mobility.onboard_position_plan.du_execution_enabled
                     ? "ssb_prach_software_gate_applied_no_position_or_rf_evidence"
-                                                                         : "cu_cp_intent_only");
+                    : "cu_cp_intent_only");
   }
   if (plan_to_clear.has_value()) {
-    queue_ntn_onboard_position_plan_clear(*plan_to_clear,
-                                          plan_clear_reason.empty() ? "pending_deployment_rejected"
-                                                                    : plan_clear_reason);
+    try_clear_ntn_onboard_position_plan_deployment();
   }
   if (should_prepare) {
     try_prepare_ntn_onboard_position_plan();

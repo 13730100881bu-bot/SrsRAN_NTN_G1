@@ -67,6 +67,12 @@ void set_onboard_planning_context(cu_cp_unit_ntn_onboard_position_plan_config& p
   plan.expected_access_profile_hash       = "sha256:195786f4161e3b0fad6faa0605144948a7401c067a014bde684c1b29a8087d63";
 }
 
+void set_onboard_execution_context(cu_cp_unit_ntn_onboard_position_plan_config& plan)
+{
+  set_onboard_planning_context(plan);
+  plan.state_file = "ntn-onboard-position-plan-state.json";
+}
+
 void add_ntn_cell(cu_cp_unit_config& cfg, nr_cell_identity nci)
 {
   cu_cp_unit_cell_config_item cell;
@@ -257,6 +263,7 @@ TEST(cu_cp_unit_config, default_terrestrial_config_keeps_ntn_disabled)
   ASSERT_EQ(cu_cp_cfg.mobility.onboard_position_plan.du_prepare_horizon, std::chrono::milliseconds{4000});
   ASSERT_EQ(cu_cp_cfg.mobility.onboard_position_plan.du_apply_timeout, std::chrono::milliseconds{500});
   ASSERT_TRUE(cu_cp_cfg.mobility.onboard_position_plan.plan_json_file.empty());
+  ASSERT_TRUE(cu_cp_cfg.mobility.onboard_position_plan.state_file.empty());
 }
 
 TEST(cu_cp_unit_config, onboard_position_plan_is_an_independent_opt_in_profile)
@@ -278,7 +285,7 @@ TEST(cu_cp_unit_config, onboard_position_plan_is_an_independent_opt_in_profile)
   cfg.mobility_config.ntn_onboard_position_plan.max_analog_ports_per_satellite  = 32;
   cfg.mobility_config.ntn_onboard_position_plan.max_digital_ports_per_cell      = 64;
   cfg.mobility_config.ntn_onboard_position_plan.max_digital_ports_per_satellite = 128;
-  set_onboard_planning_context(cfg.mobility_config.ntn_onboard_position_plan);
+  set_onboard_execution_context(cfg.mobility_config.ntn_onboard_position_plan);
 
   ASSERT_TRUE(validate_cu_cp_unit_config(cfg));
   const srs_cu_cp::cu_cp_configuration cu_cp_cfg = generate_cu_cp_config(cfg);
@@ -291,6 +298,7 @@ TEST(cu_cp_unit_config, onboard_position_plan_is_an_independent_opt_in_profile)
   EXPECT_TRUE(cu_cp_cfg.mobility.onboard_position_plan.du_execution_enabled);
   EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.satellite_id, "P01-S01");
   EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.plan_json_file, "management-center-plan.json");
+  EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.state_file, "ntn-onboard-position-plan-state.json");
   EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.expected_catalog_id, "global-land-l1-v1");
   EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.expected_catalog_hash,
             "sha256:b39fe9c3ee9a9355b3546036b7f16e0fb858c953f8558cc4295122f2169fbe7a");
@@ -318,6 +326,7 @@ TEST(cu_cp_unit_config, onboard_position_plan_is_an_independent_opt_in_profile)
   EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.subvisit_duration, std::chrono::microseconds{2500});
   EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.activation_alignment, std::chrono::milliseconds{640});
   EXPECT_EQ(yaml_plan["expected_catalog_id"].as<std::string>(), "global-land-l1-v1");
+  EXPECT_EQ(yaml_plan["state_file"].as<std::string>(), "ntn-onboard-position-plan-state.json");
   EXPECT_EQ(yaml_plan["expected_catalog_hash"].as<std::string>(),
             "sha256:b39fe9c3ee9a9355b3546036b7f16e0fb858c953f8558cc4295122f2169fbe7a");
   EXPECT_EQ(yaml_plan["expected_identity_registry_version"].as<std::string>(), "mc-ntn-onboard-cell-registry-v1");
@@ -355,6 +364,33 @@ TEST(cu_cp_unit_config, enabled_onboard_position_plan_requires_exactly_two_stabl
   EXPECT_TRUE(validate_cu_cp_unit_config(cfg));
 }
 
+TEST(cu_cp_unit_config, onboard_position_plan_state_file_is_execution_only_and_must_be_distinct)
+{
+  cu_cp_unit_config cfg;
+  EXPECT_TRUE(validate_cu_cp_unit_config(cfg));
+
+  auto& plan          = cfg.mobility_config.ntn_onboard_position_plan;
+  plan.enabled        = true;
+  plan.satellite_id   = "P01-S01";
+  plan.plan_json_file = "management-center-plan.json";
+  plan.cell_ncis      = {0x123450001ULL, 0x123450002ULL};
+  plan.cell_pcis      = {101, 101};
+  EXPECT_TRUE(validate_cu_cp_unit_config(cfg));
+
+  plan.du_execution_enabled = true;
+  set_onboard_planning_context(plan);
+  EXPECT_FALSE(validate_cu_cp_unit_config(cfg));
+
+  plan.state_file = plan.plan_json_file;
+  EXPECT_FALSE(validate_cu_cp_unit_config(cfg));
+
+  plan.state_file = "recovery/../management-center-plan.json";
+  EXPECT_FALSE(validate_cu_cp_unit_config(cfg));
+
+  plan.state_file = "ntn-onboard-position-plan-state.json";
+  EXPECT_TRUE(validate_cu_cp_unit_config(cfg));
+}
+
 TEST(cu_cp_unit_config, du_calendar_execution_cannot_be_enabled_without_the_position_plan)
 {
   cu_cp_unit_config cfg;
@@ -368,7 +404,7 @@ TEST(cu_cp_unit_config, du_calendar_execution_cannot_be_enabled_without_the_posi
   plan.plan_json_file = "management-center-plan.json";
   plan.cell_ncis      = {0x123450001ULL, 0x123450002ULL};
   plan.cell_pcis      = {101, 101};
-  set_onboard_planning_context(plan);
+  set_onboard_execution_context(plan);
   plan.du_prepare_horizon_ms = plan.du_prepare_guard_ms;
   EXPECT_FALSE(validate_cu_cp_unit_config(cfg));
 
@@ -396,7 +432,7 @@ TEST(cu_cp_unit_config, onboard_execution_rejects_legacy_identity_authority_and_
   EXPECT_TRUE(validate_cu_cp_unit_config(cfg));
 
   plan.du_execution_enabled = true;
-  set_onboard_planning_context(plan);
+  set_onboard_execution_context(plan);
   cfg.mobility_config.ntn_location_mobility.enabled = true;
   EXPECT_FALSE(validate_cu_cp_unit_config(cfg));
 
@@ -415,7 +451,7 @@ TEST(cu_cp_unit_config, du_calendar_execution_rejects_profiles_outside_f1_and_sc
   plan.plan_json_file             = "management-center-plan.json";
   plan.cell_ncis                  = {0x123450001ULL, 0x123450002ULL};
   plan.cell_pcis                  = {101, 101};
-  set_onboard_planning_context(plan);
+  set_onboard_execution_context(plan);
 
   // The non-execution inventory can retain 257 positions, but the private F1 execution payload is bounded to 256.
   plan.max_l1_positions_per_cell      = 129;
@@ -1442,6 +1478,20 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_versioned_onboard_position_plan
   plan.access_profile_id        = "ntn-access-16a-64d-v1";
   plan.access_profile_hash      = "sha256:profile";
   plan.identity_authority       = "onboard_position_plan";
+  plan.state_file_configured                         = true;
+  plan.state_file_required                           = true;
+  plan.state_schema_version                          = 1;
+  plan.state_generation                              = 17;
+  plan.state_hash                                    = "sha256:state";
+  plan.state_store_status                            = "stored";
+  plan.state_store_error                             = "none";
+  plan.state_write_blocked                           = false;
+  plan.last_state_save_unix_ms                       = 639900;
+  plan.recovery_stage                                = "reconciling";
+  plan.recovery_detail                               = "awaiting_du_query";
+  plan.recovery_schedule_version                     = 19;
+  plan.catalog_version_high_water                    = 12;
+  plan.schedule_version_high_water                   = 22;
   plan.stage                    = "pending";
   plan.deployment_stage         = "ready";
   plan.deployment_detail        = "du_ready";
@@ -1497,6 +1547,14 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_versioned_onboard_position_plan
                         "access_profile_id=ntn-access-16a-64d-v1 access_profile_hash=sha256:profile "
                         "identity_authority=onboard_position_plan"),
             std::string::npos);
+  EXPECT_NE(output.find("NTN onboard state store: file_configured=yes file_required=yes schema_version=1 "
+                        "generation=17 state_hash=sha256:state status=stored error=none write_blocked=no "
+                        "last_save_unix_ms=639900"),
+            std::string::npos);
+  EXPECT_NE(output.find("NTN onboard recovery: stage=reconciling detail=awaiting_du_query schedule_version=19 "
+                        "catalog_version_high_water=12 schedule_version_high_water=22 "
+                        "evidence=persisted_state_is_not_du_or_rf_evidence"),
+            std::string::npos);
   EXPECT_NE(output.find("NTN onboard position plan received: present=yes catalog_version=12 schedule_version=22 "
                         "content_hash=sha256:rejected candidate_l1=256 activation_epoch_unix_ms=960000"),
             std::string::npos);
@@ -1519,6 +1577,25 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_versioned_onboard_position_plan
   EXPECT_NE(output.find("NTN onboard cell: nci=0x123450001 pci=101 active_l1=128 pending_l1=128 capacity=128"),
             std::string::npos);
   EXPECT_NE(output.find("NTN onboard cell: nci=0x123450002 pci=202 active_l1=128 pending_l1=128 capacity=128"),
+            std::string::npos);
+}
+
+TEST(cu_cp_unit_config, ntn_state_command_prints_disabled_onboard_state_defaults)
+{
+  fake_cu_cp_command_handler command_handler;
+
+  ntn_state_app_command command(command_handler);
+  ::testing::internal::CaptureStdout();
+  const std::array<std::string, 0> args = {};
+  command.execute(span<const std::string>{args});
+  const std::string output = ::testing::internal::GetCapturedStdout();
+
+  EXPECT_NE(output.find("NTN onboard state store: file_configured=no file_required=no schema_version=0 generation=0 "
+                        "state_hash=none status=disabled error=none write_blocked=no last_save_unix_ms=-1"),
+            std::string::npos);
+  EXPECT_NE(output.find("NTN onboard recovery: stage=disabled detail=state_recovery_disabled schedule_version=0 "
+                        "catalog_version_high_water=0 schedule_version_high_water=0 "
+                        "evidence=persisted_state_is_not_du_or_rf_evidence"),
             std::string::npos);
 }
 

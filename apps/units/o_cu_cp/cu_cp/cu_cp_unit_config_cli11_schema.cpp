@@ -628,6 +628,11 @@ static void configure_cli11_mobility_args(CLI::App& app, cu_cp_unit_mobility_con
              "Path to the management-center versioned position-plan JSON file")
       ->capture_default_str();
   add_option(*ntn_position_plan_subcmd,
+             "--state_file",
+             config.ntn_onboard_position_plan.state_file,
+             "Private durable recovery-state file; required when DU calendar execution is enabled")
+      ->capture_default_str();
+  add_option(*ntn_position_plan_subcmd,
              "--expected_catalog_id",
              config.ntn_onboard_position_plan.expected_catalog_id,
              "Expected frozen management-center L1 catalog identifier")

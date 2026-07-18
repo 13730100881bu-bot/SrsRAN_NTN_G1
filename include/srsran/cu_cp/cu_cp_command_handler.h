@@ -195,6 +195,20 @@ struct cu_cp_ntn_static_opportunity_status {
 struct cu_cp_ntn_position_plan_status {
   bool        enabled              = false;
   bool        du_execution_enabled = false;
+  bool                                               state_file_configured             = false;
+  bool                                               state_file_required               = false;
+  unsigned                                           state_schema_version              = 0;
+  uint64_t                                           state_generation                  = 0;
+  std::string                                        state_hash                        = "none";
+  std::string                                        state_store_status                = "disabled";
+  std::string                                        state_store_error                 = "none";
+  bool                                               state_write_blocked               = false;
+  int64_t                                            last_state_save_unix_ms           = -1;
+  std::string                                        recovery_stage                    = "disabled";
+  std::string                                        recovery_detail                   = "state_recovery_disabled";
+  uint64_t                                           recovery_schedule_version         = 0;
+  uint64_t                                           catalog_version_high_water        = 0;
+  uint64_t                                           schedule_version_high_water       = 0;
   unsigned    schema_version       = 0;
   std::string planning_run_id      = "none";
   std::string access_profile_id    = "none";

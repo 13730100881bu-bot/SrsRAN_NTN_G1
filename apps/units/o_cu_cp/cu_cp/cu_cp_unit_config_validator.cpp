@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <filesystem>
 #include <limits>
 #include <map>
 #include <set>
@@ -59,6 +60,20 @@ static bool is_canonical_ntn_satellite_id(const std::string& value)
   return value.size() == 7 && value[0] == 'P' && std::isdigit(static_cast<unsigned char>(value[1])) &&
          std::isdigit(static_cast<unsigned char>(value[2])) && value[3] == '-' && value[4] == 'S' &&
          std::isdigit(static_cast<unsigned char>(value[5])) && std::isdigit(static_cast<unsigned char>(value[6]));
+}
+
+static std::filesystem::path normalize_config_path(const std::string& value)
+{
+  const std::filesystem::path path{value};
+  std::error_code             ec;
+  std::filesystem::path       normalized = std::filesystem::weakly_canonical(path, ec);
+  if (!ec) {
+    return normalized.lexically_normal();
+  }
+
+  ec.clear();
+  normalized = std::filesystem::absolute(path, ec);
+  return (ec ? path : normalized).lexically_normal();
 }
 
 static bool validate_mobility_appconfig(gnb_id_t gnb_id, const cu_cp_unit_mobility_config& config)
@@ -198,6 +213,15 @@ static bool validate_mobility_appconfig(gnb_id_t gnb_id, const cu_cp_unit_mobili
     if (!is_canonical_ntn_satellite_id(position_plan_cfg.satellite_id) || position_plan_cfg.plan_json_file.empty()) {
       fmt::print("Invalid CU-CP configuration. NTN onboard position plan requires canonical Pxx-Syy satellite_id and "
                  "plan_json_file\n");
+      return false;
+    }
+    if (position_plan_cfg.du_execution_enabled && position_plan_cfg.state_file.empty()) {
+      fmt::print("Invalid CU-CP configuration. NTN DU calendar execution requires state_file\n");
+      return false;
+    }
+    if (!position_plan_cfg.state_file.empty() && normalize_config_path(position_plan_cfg.plan_json_file) ==
+                                                     normalize_config_path(position_plan_cfg.state_file)) {
+      fmt::print("Invalid CU-CP configuration. NTN plan_json_file and state_file must refer to distinct paths\n");
       return false;
     }
     if (position_plan_cfg.cell_ncis.size() != 2 || position_plan_cfg.cell_pcis.size() != 2) {

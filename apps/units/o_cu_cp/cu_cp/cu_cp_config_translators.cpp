@@ -550,6 +550,7 @@ srs_cu_cp::cu_cp_configuration srsran::generate_cu_cp_config(const cu_cp_unit_co
       cu_cfg.mobility_config.ntn_onboard_position_plan.satellite_id;
   out_cfg.mobility.onboard_position_plan.plan_json_file =
       cu_cfg.mobility_config.ntn_onboard_position_plan.plan_json_file;
+  out_cfg.mobility.onboard_position_plan.state_file = cu_cfg.mobility_config.ntn_onboard_position_plan.state_file;
   out_cfg.mobility.onboard_position_plan.expected_catalog_id =
       cu_cfg.mobility_config.ntn_onboard_position_plan.expected_catalog_id;
   out_cfg.mobility.onboard_position_plan.expected_catalog_hash =

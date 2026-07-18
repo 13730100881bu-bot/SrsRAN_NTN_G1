@@ -27,6 +27,7 @@ add_library(srsran_cu_cp_ntn_mobility STATIC
   ntn_beam_placement_planner.cpp
   ntn_qos_policy.cpp
   ntn_onboard_position_plan.cpp
+  ntn_onboard_position_plan_state.cpp
   ntn_satellite_state_updater.cpp
   ntn_service_switch_over_controller.cpp
   ntn_served_beam_scheduler.cpp

@@ -27,6 +27,7 @@ add_executable(ntn_mobility_test
   ntn_beam_rebalance_policy_test.cpp
   ntn_qos_policy_test.cpp
   ntn_onboard_position_plan_test.cpp
+  ntn_onboard_position_plan_state_test.cpp
   ntn_satellite_state_updater_test.cpp
   ntn_service_switch_over_controller_test.cpp
   ntn_served_beam_scheduler_test.cpp

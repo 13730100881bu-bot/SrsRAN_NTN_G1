@@ -269,6 +269,7 @@ struct cu_cp_unit_ntn_onboard_position_plan_config {
   bool                  du_execution_enabled = false;
   std::string           satellite_id;
   std::string           plan_json_file;
+  std::string           state_file;
   std::string           expected_catalog_id;
   std::string           expected_catalog_hash;
   std::string           expected_identity_registry_version;

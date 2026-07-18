@@ -276,6 +276,7 @@ build_cu_cp_ntn_onboard_position_plan_section(const cu_cp_unit_ntn_onboard_posit
   node["du_execution_enabled"] = config.du_execution_enabled;
   node["satellite_id"]     = config.satellite_id;
   node["plan_json_file"]   = config.plan_json_file;
+  node["state_file"]                         = config.state_file;
   node["expected_catalog_id"]                = config.expected_catalog_id;
   node["expected_catalog_hash"]              = config.expected_catalog_hash;
   node["expected_identity_registry_version"] = config.expected_identity_registry_version;

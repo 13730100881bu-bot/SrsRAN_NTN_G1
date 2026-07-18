@@ -251,6 +251,12 @@ cu_cp_test_environment::cu_cp_test_environment(cu_cp_test_env_params params_) :
   timers(64),
   amf_configs(std::move(params.amf_configs))
 {
+  if (params.ntn_recovered_calendar_intents_per_cell.has_value()) {
+    last_ntn_calendar_intents_per_cell = *params.ntn_recovered_calendar_intents_per_cell;
+  }
+  if (params.ntn_recovered_calendar_preflight_reports.has_value()) {
+    last_ntn_calendar_preflight_reports = *params.ntn_recovered_calendar_preflight_reports;
+  }
   // Initialize logging
   test_logger.set_level(srslog::basic_levels::debug);
   cu_cp_logger.set_level(srslog::basic_levels::debug);

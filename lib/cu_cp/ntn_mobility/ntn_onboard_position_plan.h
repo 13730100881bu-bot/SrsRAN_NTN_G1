@@ -118,6 +118,10 @@ enum class ntn_position_plan_deployment_stage {
   unsupported
 };
 
+/// Recovery progress for a persisted software-calendar snapshot. A loaded snapshot is never treated as live DU
+/// evidence until a matching query has been reconciled after restart.
+enum class ntn_position_plan_recovery_stage { disabled, no_state, loaded, reconciling, reconciled, failed };
+
 enum class ntn_position_plan_reject_reason {
   none,
   feature_disabled,
@@ -158,11 +162,16 @@ enum class ntn_position_plan_reject_reason {
   du_prepare_timeout,
   du_activation_not_applied,
   calendar_hash_mismatch,
-  execution_unsupported
+  execution_unsupported,
+  state_file_corrupt,
+  state_context_mismatch,
+  state_persistence_failure,
+  du_reconciliation_failed
 };
 
 const char* to_string(ntn_position_plan_stage stage);
 const char* to_string(ntn_position_plan_deployment_stage stage);
+const char* to_string(ntn_position_plan_recovery_stage stage);
 const char* to_string(ntn_position_plan_reject_reason reason);
 const char* to_string(ntn_access_calendar_direction direction);
 const char* to_string(ntn_access_calendar_purpose purpose);
@@ -252,6 +261,8 @@ struct ntn_position_plan_submit_result {
   ntn_position_plan_reject_reason reason   = ntn_position_plan_reject_reason::none;
 };
 
+struct ntn_onboard_position_plan_persistent_state;
+
 /// Decision produced by the private Initial UL active-plan auditor. It is not an RF execution result.
 enum class ntn_initial_access_plan_decision { accept, reject, audit_only };
 
@@ -338,14 +349,32 @@ public:
   /// Records a provider/parser failure without disturbing active or pending state.
   void record_external_rejection(ntn_position_plan_reject_reason reason, uint64_t schedule_version = 0);
 
+  /// Restores persisted high-water and checked plan snapshots without asserting live DU apply evidence.
+  expected<void, std::string> restore_persistent_state(const ntn_onboard_position_plan_persistent_state& state,
+                                                       std::chrono::system_clock::time_point             now);
+
+  /// Produces a persistence snapshot. The returned deployment state is historical and must be reconciled on load.
+  ntn_onboard_position_plan_persistent_state make_persistent_state(uint64_t generation) const;
+
+  /// Confirms a restart recovery candidate only after a matching, complete DU applied query response.
+  bool confirm_recovery_applied(uint64_t                              schedule_version,
+                                const std::string&                    calendar_hash,
+                                std::chrono::system_clock::time_point now);
+
+  /// Fails closed for the recovery candidate while retaining version high-water. If an in-flight pending plan was
+  /// selected ahead of the persisted active plan, failure continues reconciliation with that active fallback.
+  bool reject_recovery(uint64_t                        schedule_version,
+                       const std::string&              calendar_hash,
+                       ntn_position_plan_reject_reason reason,
+                       std::string                     detail);
+
   std::vector<ntn_access_calendar_intent>
-  build_access_calendar(uint64_t schedule_version,
+  build_access_calendar(uint64_t                                            schedule_version,
                         const std::array<ntn_onboard_cell_position_set, 2>& assignments) const;
 
-  ntn_access_calendar_audit
-  audit_access_calendar(uint64_t schedule_version,
-                        const std::array<ntn_onboard_cell_position_set, 2>& assignments,
-                        const std::vector<ntn_access_calendar_intent>&       intents) const;
+  ntn_access_calendar_audit audit_access_calendar(uint64_t                                            schedule_version,
+                                                  const std::array<ntn_onboard_cell_position_set, 2>& assignments,
+                                                  const std::vector<ntn_access_calendar_intent>&      intents) const;
 
   /// Audits complete sideband metadata against the currently active calendar without mutating admission state.
   ntn_initial_access_plan_audit audit_initial_access_event(const ntn_initial_access_plan_event& event) const;
@@ -362,35 +391,60 @@ public:
   const std::vector<ntn_l1_position>&     candidate_inventory() const { return last_candidate_inventory; }
   const std::optional<ntn_activated_position_plan>& active_plan() const { return active; }
   const std::optional<ntn_activated_position_plan>& pending_plan() const { return pending; }
+  const std::optional<ntn_activated_position_plan>& recovery_plan() const { return recovery_candidate; }
+  const std::optional<ntn_activated_position_plan>& recovery_fallback_plan() const
+  {
+    return recovery_fallback_active;
+  }
   /// True only while the current active plan was promoted after matching external applied feedback.
   bool active_has_external_apply_evidence() const { return active_external_apply_evidence; }
   ntn_position_plan_deployment_stage deployment_stage() const { return deployment; }
-  const std::string&                  deployment_detail() const { return deployment_reason; }
+  const std::string&                 deployment_detail() const { return deployment_reason; }
+  ntn_position_plan_recovery_stage   recovery_stage() const { return recovery; }
+  const std::string&                 recovery_detail() const { return recovery_reason; }
+  uint64_t                           recovery_schedule_version() const { return last_recovery_schedule_version; }
+  uint64_t                           highest_catalog_version_seen() const { return highest_catalog_version; }
+  uint64_t                           highest_schedule_version_seen() const { return highest_schedule_version; }
 
 private:
-  ntn_position_plan_reject_reason validate_plan(const ntn_versioned_position_plan&          plan,
+  ntn_position_plan_reject_reason validate_plan(const ntn_versioned_position_plan&    plan,
                                                 std::chrono::system_clock::time_point now) const;
-  std::array<ntn_onboard_cell_position_set, 2>
-  partition_positions(const std::vector<ntn_l1_position>& positions) const;
+  ntn_position_plan_reject_reason validate_plan_for_restore(const ntn_versioned_position_plan&    plan,
+                                                            std::chrono::system_clock::time_point now) const;
+  expected<ntn_activated_position_plan, std::string>
+  rebuild_persisted_snapshot(const ntn_versioned_position_plan&                  source,
+                             const std::array<ntn_onboard_cell_position_set, 2>& cell_positions,
+                             const std::string&                                  calendar_hash,
+                             std::chrono::system_clock::time_point               now) const;
+  std::array<ntn_onboard_cell_position_set, 2> partition_positions(const std::vector<ntn_l1_position>& positions) const;
   ntn_position_plan_submit_result reject(ntn_position_plan_reject_reason reason, uint64_t schedule_version);
 
-  ntn_onboard_position_plan_config            cfg;
-  ntn_position_plan_stage                     current_stage = ntn_position_plan_stage::disabled;
-  ntn_position_plan_reject_reason             last_rejection = ntn_position_plan_reject_reason::none;
-  uint64_t                                    last_rejected_version = 0;
-  bool                                        received_plan_present = false;
-  uint64_t                                    last_received_catalog = 0;
-  uint64_t                                    last_received_schedule = 0;
-  std::string                                 last_received_hash;
-  std::chrono::system_clock::time_point       last_received_activation{};
-  uint64_t                                    highest_catalog_version = 0;
-  uint64_t                                    highest_schedule_version = 0;
-  std::vector<ntn_l1_position>                last_candidate_inventory;
+  ntn_onboard_position_plan_config           cfg;
+  ntn_position_plan_stage                    current_stage          = ntn_position_plan_stage::disabled;
+  ntn_position_plan_reject_reason            last_rejection         = ntn_position_plan_reject_reason::none;
+  uint64_t                                   last_rejected_version  = 0;
+  bool                                       received_plan_present  = false;
+  uint64_t                                   last_received_catalog  = 0;
+  uint64_t                                   last_received_schedule = 0;
+  std::string                                last_received_hash;
+  std::chrono::system_clock::time_point      last_received_activation{};
+  uint64_t                                   highest_catalog_version  = 0;
+  uint64_t                                   highest_schedule_version = 0;
+  std::vector<ntn_l1_position>               last_candidate_inventory;
   std::optional<ntn_activated_position_plan> active;
   std::optional<ntn_activated_position_plan> pending;
-  bool                                      active_external_apply_evidence = false;
-  ntn_position_plan_deployment_stage         deployment = ntn_position_plan_deployment_stage::disabled;
-  std::string                                deployment_reason = "external_execution_disabled";
+  std::optional<ntn_activated_position_plan> recovery_candidate;
+  /// Persisted active plan kept hidden while a recorded in-flight pending deployment is reconciled first.
+  std::optional<ntn_activated_position_plan>   recovery_fallback_active;
+  std::optional<ntn_activated_position_plan>   deferred_pending;
+  bool                                         recovery_candidate_was_active = false;
+  std::array<ntn_onboard_cell_position_set, 2> sticky_partition{};
+  bool                                         active_external_apply_evidence = false;
+  ntn_position_plan_deployment_stage           deployment        = ntn_position_plan_deployment_stage::disabled;
+  std::string                                  deployment_reason = "external_execution_disabled";
+  ntn_position_plan_recovery_stage             recovery          = ntn_position_plan_recovery_stage::disabled;
+  std::string                                  recovery_reason   = "state_recovery_disabled";
+  uint64_t                                     last_recovery_schedule_version = 0;
 };
 
 /// Computes the canonical SHA-256 content hash used by the plan validator.

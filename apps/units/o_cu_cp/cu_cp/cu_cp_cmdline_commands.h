@@ -782,6 +782,24 @@ public:
                position_plan.access_profile_id,
                position_plan.access_profile_hash,
                position_plan.identity_authority);
+    fmt::print("NTN onboard state store: file_configured={} file_required={} schema_version={} generation={} "
+               "state_hash={} status={} error={} write_blocked={} last_save_unix_ms={}\n",
+               position_plan.state_file_configured ? "yes" : "no",
+               position_plan.state_file_required ? "yes" : "no",
+               position_plan.state_schema_version,
+               position_plan.state_generation,
+               position_plan.state_hash,
+               position_plan.state_store_status,
+               position_plan.state_store_error,
+               position_plan.state_write_blocked ? "yes" : "no",
+               position_plan.last_state_save_unix_ms);
+    fmt::print("NTN onboard recovery: stage={} detail={} schedule_version={} catalog_version_high_water={} "
+               "schedule_version_high_water={} evidence=persisted_state_is_not_du_or_rf_evidence\n",
+               position_plan.recovery_stage,
+               position_plan.recovery_detail,
+               position_plan.recovery_schedule_version,
+               position_plan.catalog_version_high_water,
+               position_plan.schedule_version_high_water);
     fmt::print("NTN onboard position plan received: present={} catalog_version={} schedule_version={} content_hash={} "
                "candidate_l1={} activation_epoch_unix_ms={}\n",
                position_plan.received_plan_present ? "yes" : "no",

@@ -89,6 +89,8 @@ struct cu_cp_test_env_params {
   bool                                                   ntn_calendar_prepare_reports_ready      = false;
   bool                                                   ntn_calendar_preflight_incomplete       = false;
   bool                                                   ntn_calendar_preflight_unsupported      = false;
+  std::optional<std::array<uint16_t, 2>>                                  ntn_recovered_calendar_intents_per_cell;
+  std::optional<std::array<f1ap_ntn_access_calendar_preflight_report, 2>> ntn_recovered_calendar_preflight_reports;
   bool                                                   ntn_resource_audit_rejects              = false;
 };
 

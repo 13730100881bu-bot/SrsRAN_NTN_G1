@@ -35,13 +35,14 @@
 #include "du_processor/du_processor_repository.h"
 #include "ngap_repository.h"
 #include "ntn_mobility/ntn_assistance_snapshot_generator.h"
+#include "ntn_mobility/ntn_beam_placement_planner.h"
 #include "ntn_mobility/ntn_beam_service_resource_manager.h"
 #include "ntn_mobility/ntn_beam_tac.h"
-#include "ntn_mobility/ntn_beam_placement_planner.h"
 #include "ntn_mobility/ntn_onboard_position_plan.h"
+#include "ntn_mobility/ntn_onboard_position_plan_state.h"
 #include "ntn_mobility/ntn_satellite_state_updater.h"
-#include "ntn_mobility/ntn_service_switch_over_controller.h"
 #include "ntn_mobility/ntn_served_beam_scheduler.h"
+#include "ntn_mobility/ntn_service_switch_over_controller.h"
 #include "ntn_mobility/ntn_sib19_assistance_builder.h"
 #include "ntn_mobility/ntn_sib19_broadcast_controller.h"
 #include "ntn_mobility/ntn_ue_capability_gate.h"
@@ -56,8 +57,8 @@
 #include "srsran/f1ap/ntn_ul_slot_resource_request.h"
 #include "srsran/nrppa/nrppa.h"
 #include "srsran/ran/plmn_identity.h"
-#include <dlfcn.h>
 #include <chrono>
+#include <dlfcn.h>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -67,6 +68,31 @@
 
 namespace srsran {
 namespace srs_cu_cp {
+
+namespace ntn_onboard_detail {
+
+enum class ntn_onboard_du_cell_resolution_status { resolved, unavailable, missing, duplicate, cross_du };
+
+struct ntn_onboard_du_cell_candidate {
+  du_index_t                   du_index = du_index_t::invalid;
+  nr_cell_identity             nci;
+  pci_t                        pci  = INVALID_PCI;
+  const du_cell_configuration* cell = nullptr;
+};
+
+struct ntn_onboard_du_cell_resolution {
+  ntn_onboard_du_cell_resolution_status       status   = ntn_onboard_du_cell_resolution_status::missing;
+  du_index_t                                  du_index = du_index_t::invalid;
+  std::array<const du_cell_configuration*, 2> cells{};
+};
+
+const char* get_ntn_onboard_du_cell_resolution_detail(ntn_onboard_du_cell_resolution_status status);
+
+ntn_onboard_du_cell_resolution
+resolve_ntn_onboard_du_cells(const std::vector<ntn_onboard_du_cell_candidate>&   candidates,
+                             const std::array<ntn_onboard_cell_position_set, 2>& planned_cells);
+
+} // namespace ntn_onboard_detail
 
 class cu_cp_common_task_scheduler : public common_task_scheduler
 {
@@ -671,10 +697,13 @@ private:
   void schedule_ntn_release_allowed_service_releases();
 
   void on_statistics_report_timer_expired();
+  enum class ntn_state_persist_outcome { durable, not_committed, committed_not_durable };
   void reload_ntn_onboard_position_plan();
+  void restore_ntn_onboard_position_plan_state();
+  ntn_state_persist_outcome persist_ntn_onboard_position_plan_state_locked(const char* reason);
   void try_prepare_ntn_onboard_position_plan();
   void query_ntn_onboard_position_plan_application();
-  void queue_ntn_onboard_position_plan_clear(const ntn_activated_position_plan& plan, std::string reason);
+  bool queue_ntn_onboard_position_plan_clear_locked(const ntn_activated_position_plan& plan, std::string reason);
   void try_clear_ntn_onboard_position_plan_deployment();
   void schedule_ntn_onboard_position_plan_reload();
   void schedule_ntn_onboard_position_plan_activation();
@@ -704,6 +733,12 @@ private:
   uint64_t                                                 ntn_position_plan_static_preflight_schedule_version = 0;
   std::array<f1ap_ntn_access_calendar_preflight_report, 2> ntn_position_plan_static_preflight_reports{};
   std::vector<std::pair<ntn_activated_position_plan, std::string>> ntn_position_plan_clear_queue;
+  uint64_t                                                         ntn_position_plan_state_generation = 0;
+  std::string                                                      ntn_position_plan_state_hash;
+  std::string                                                      ntn_position_plan_state_store_status = "disabled";
+  std::string                                                      ntn_position_plan_state_error;
+  int64_t                                                          ntn_position_plan_state_last_save_unix_ms = -1;
+  bool                                                             ntn_position_plan_state_write_blocked     = false;
 
   ntn_beam_placement_planner ntn_beam_planner;
   ntn_beam_placement_plan    current_ntn_beam_placement_plan;

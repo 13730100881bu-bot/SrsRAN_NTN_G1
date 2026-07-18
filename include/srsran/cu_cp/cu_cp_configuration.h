@@ -74,6 +74,8 @@ struct ntn_onboard_position_plan_source_config {
   bool                      du_execution_enabled = false;
   std::string               satellite_id;
   std::string               plan_json_file;
+  /// Private durable recovery state. Required only when DU calendar execution is enabled.
+  std::string               state_file;
   std::string               expected_catalog_id;
   std::string               expected_catalog_hash;
   std::string               expected_identity_registry_version;

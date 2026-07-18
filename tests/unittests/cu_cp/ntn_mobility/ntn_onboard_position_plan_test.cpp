@@ -21,9 +21,10 @@
  */
 
 #include "lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.h"
+#include "lib/cu_cp/ntn_mobility/ntn_onboard_position_plan_state.h"
+#include "nlohmann/json.hpp"
 #include "fmt/format.h"
 #include "gtest/gtest.h"
-#include "nlohmann/json.hpp"
 #include <algorithm>
 #include <map>
 #include <set>
@@ -618,6 +619,36 @@ TEST(ntn_onboard_position_plan, active_plan_is_marked_expired_at_valid_until)
   EXPECT_EQ(replay.reason, ntn_position_plan_reject_reason::non_monotonic_version);
 }
 
+TEST(ntn_onboard_position_plan, externally_applied_active_expiry_removes_the_live_deployment_claim)
+{
+  ntn_onboard_position_plan_config config = make_config();
+  config.require_external_apply           = true;
+  ntn_onboard_position_plan_controller controller(config);
+
+  ASSERT_TRUE(controller.submit(make_plan(4, 1, 1280), at_ms(1280)).accepted);
+  ASSERT_TRUE(controller.pending_plan().has_value());
+  const std::string calendar_hash = controller.pending_plan()->calendar_hash;
+  ASSERT_TRUE(controller.mark_deployment_preparing(1, calendar_hash));
+  ASSERT_TRUE(controller.mark_deployment_applied(1, calendar_hash));
+  ASSERT_TRUE(controller.advance_time(at_ms(1280)));
+  ASSERT_TRUE(controller.active_plan().has_value());
+  ASSERT_TRUE(controller.active_has_external_apply_evidence());
+
+  EXPECT_FALSE(controller.advance_time(at_ms(64000)));
+  EXPECT_FALSE(controller.active_plan().has_value());
+  EXPECT_FALSE(controller.active_has_external_apply_evidence());
+  EXPECT_EQ(controller.deployment_stage(), ntn_position_plan_deployment_stage::rejected);
+  EXPECT_EQ(controller.deployment_detail(), "active_plan_expired");
+
+  const ntn_onboard_position_plan_persistent_state state = controller.make_persistent_state(2);
+  EXPECT_FALSE(state.active.has_value());
+  EXPECT_FALSE(state.pending.has_value());
+  EXPECT_EQ(state.recorded_deployment_stage, ntn_position_plan_deployment_stage::rejected);
+  EXPECT_EQ(state.recorded_deployment_schedule_version, 0U);
+  EXPECT_TRUE(state.recorded_deployment_calendar_hash.empty());
+  EXPECT_EQ(state.highest_schedule_version, 1U);
+}
+
 TEST(ntn_onboard_position_plan, expired_active_plan_does_not_hide_a_valid_future_pending_plan)
 {
   ntn_onboard_position_plan_controller controller(make_config());
@@ -918,6 +949,263 @@ TEST(ntn_onboard_position_plan, access_calendar_hash_is_canonical_and_changes_wi
 
   reordered.front().start_time += std::chrono::microseconds{1};
   EXPECT_NE(compute_ntn_access_calendar_hash(1, reordered), controller.pending_plan()->calendar_hash);
+}
+
+TEST(ntn_onboard_position_plan, restart_prioritizes_recorded_inflight_pending_deployment_and_preserves_active_fallback)
+{
+  for (ntn_position_plan_deployment_stage recorded_stage : {ntn_position_plan_deployment_stage::preparing,
+                                                            ntn_position_plan_deployment_stage::ready,
+                                                            ntn_position_plan_deployment_stage::applied}) {
+    SCOPED_TRACE(to_string(recorded_stage));
+    ntn_onboard_position_plan_config config = make_config();
+    config.require_external_apply           = true;
+    ntn_onboard_position_plan_controller original(config);
+
+    ASSERT_TRUE(original.submit(make_plan(4, 1, 1280), at_ms(640)).accepted);
+    const std::string active_hash = original.pending_plan()->calendar_hash;
+    ASSERT_TRUE(original.mark_deployment_preparing(1, active_hash));
+    ASSERT_TRUE(original.mark_deployment_applied(1, active_hash));
+    ASSERT_TRUE(original.advance_time(at_ms(1280)));
+
+    ASSERT_TRUE(original.submit(make_plan(6, 2, 3200, 2), at_ms(1920)).accepted);
+    const std::string pending_hash = original.pending_plan()->calendar_hash;
+    ASSERT_TRUE(original.mark_deployment_preparing(2, pending_hash));
+    if (recorded_stage == ntn_position_plan_deployment_stage::ready ||
+        recorded_stage == ntn_position_plan_deployment_stage::applied) {
+      ASSERT_TRUE(original.mark_deployment_ready(2, pending_hash));
+    }
+    if (recorded_stage == ntn_position_plan_deployment_stage::applied) {
+      ASSERT_TRUE(original.mark_deployment_applied(2, pending_hash));
+    }
+
+    const ntn_onboard_position_plan_persistent_state crash_state = original.make_persistent_state(7);
+    ASSERT_TRUE(crash_state.active.has_value());
+    ASSERT_TRUE(crash_state.pending.has_value());
+    EXPECT_EQ(crash_state.active->source.schedule_version, 1U);
+    EXPECT_EQ(crash_state.pending->source.schedule_version, 2U);
+    EXPECT_EQ(crash_state.recorded_deployment_stage, recorded_stage);
+    EXPECT_EQ(crash_state.recorded_deployment_schedule_version, 2U);
+    EXPECT_EQ(crash_state.recorded_deployment_calendar_hash, pending_hash);
+
+    ntn_onboard_position_plan_controller restored(config);
+    ASSERT_TRUE(restored.restore_persistent_state(crash_state, at_ms(2000)).has_value());
+    EXPECT_FALSE(restored.active_plan().has_value());
+    EXPECT_FALSE(restored.pending_plan().has_value());
+    ASSERT_TRUE(restored.recovery_plan().has_value());
+    EXPECT_EQ(restored.recovery_plan()->source.schedule_version, 2U);
+    EXPECT_EQ(restored.deployment_stage(), ntn_position_plan_deployment_stage::preparing);
+    EXPECT_EQ(restored.recovery_stage(), ntn_position_plan_recovery_stage::reconciling);
+    EXPECT_EQ(restored.highest_schedule_version_seen(), 2U);
+
+    const ntn_onboard_position_plan_persistent_state second_crash_state = restored.make_persistent_state(8);
+    ASSERT_TRUE(second_crash_state.active.has_value());
+    ASSERT_TRUE(second_crash_state.pending.has_value());
+    EXPECT_EQ(second_crash_state.active->source.schedule_version, 1U);
+    EXPECT_EQ(second_crash_state.pending->source.schedule_version, 2U);
+    EXPECT_EQ(second_crash_state.recorded_deployment_stage, ntn_position_plan_deployment_stage::preparing);
+    EXPECT_EQ(second_crash_state.recorded_deployment_schedule_version, 2U);
+    EXPECT_EQ(second_crash_state.recorded_deployment_calendar_hash, pending_hash);
+
+    ntn_onboard_position_plan_controller restarted_again(config);
+    ASSERT_TRUE(restarted_again.restore_persistent_state(second_crash_state, at_ms(2100)).has_value());
+    ASSERT_TRUE(restarted_again.recovery_plan().has_value());
+    EXPECT_EQ(restarted_again.recovery_plan()->source.schedule_version, 2U);
+    EXPECT_EQ(restarted_again.deployment_stage(), ntn_position_plan_deployment_stage::preparing);
+    EXPECT_EQ(restarted_again.highest_schedule_version_seen(), 2U);
+  }
+}
+
+TEST(ntn_onboard_position_plan, matching_applied_recovery_of_inflight_pending_plan_atomically_replaces_fallback)
+{
+  ntn_onboard_position_plan_config config = make_config();
+  config.require_external_apply           = true;
+  ntn_onboard_position_plan_controller original(config);
+
+  ASSERT_TRUE(original.submit(make_plan(4, 1, 1280), at_ms(640)).accepted);
+  const std::string active_hash = original.pending_plan()->calendar_hash;
+  ASSERT_TRUE(original.mark_deployment_preparing(1, active_hash));
+  ASSERT_TRUE(original.mark_deployment_applied(1, active_hash));
+  ASSERT_TRUE(original.advance_time(at_ms(1280)));
+
+  ASSERT_TRUE(original.submit(make_plan(6, 2, 1920, 2), at_ms(1280)).accepted);
+  const std::string pending_hash = original.pending_plan()->calendar_hash;
+  ASSERT_TRUE(original.mark_deployment_preparing(2, pending_hash));
+  ASSERT_TRUE(original.mark_deployment_applied(2, pending_hash));
+
+  ntn_onboard_position_plan_controller restored(config);
+  ASSERT_TRUE(restored.restore_persistent_state(original.make_persistent_state(9), at_ms(2000)).has_value());
+  ASSERT_TRUE(restored.recovery_plan().has_value());
+  EXPECT_EQ(restored.recovery_plan()->source.schedule_version, 2U);
+
+  ASSERT_TRUE(restored.confirm_recovery_applied(2, pending_hash, at_ms(2000)));
+  ASSERT_TRUE(restored.active_plan().has_value());
+  EXPECT_EQ(restored.active_plan()->source.schedule_version, 2U);
+  EXPECT_TRUE(restored.active_has_external_apply_evidence());
+  EXPECT_FALSE(restored.pending_plan().has_value());
+  EXPECT_FALSE(restored.recovery_plan().has_value());
+  EXPECT_EQ(restored.deployment_stage(), ntn_position_plan_deployment_stage::applied);
+  EXPECT_EQ(restored.recovery_stage(), ntn_position_plan_recovery_stage::reconciled);
+  EXPECT_EQ(restored.highest_schedule_version_seen(), 2U);
+
+  const ntn_onboard_position_plan_persistent_state recovered_state = restored.make_persistent_state(10);
+  ASSERT_TRUE(recovered_state.active.has_value());
+  EXPECT_EQ(recovered_state.active->source.schedule_version, 2U);
+  EXPECT_FALSE(recovered_state.pending.has_value());
+  EXPECT_EQ(recovered_state.recorded_deployment_schedule_version, 2U);
+  EXPECT_EQ(recovered_state.recorded_deployment_calendar_hash, pending_hash);
+}
+
+TEST(ntn_onboard_position_plan, failed_inflight_pending_recovery_queries_active_fallback_without_version_regression)
+{
+  ntn_onboard_position_plan_config config = make_config();
+  config.require_external_apply           = true;
+  ntn_onboard_position_plan_controller original(config);
+
+  ASSERT_TRUE(original.submit(make_plan(4, 1, 1280), at_ms(640)).accepted);
+  const std::string active_hash = original.pending_plan()->calendar_hash;
+  ASSERT_TRUE(original.mark_deployment_preparing(1, active_hash));
+  ASSERT_TRUE(original.mark_deployment_applied(1, active_hash));
+  ASSERT_TRUE(original.advance_time(at_ms(1280)));
+  ASSERT_TRUE(original.submit(make_plan(6, 2, 3200, 2), at_ms(1920)).accepted);
+  const std::string pending_hash = original.pending_plan()->calendar_hash;
+  ASSERT_TRUE(original.mark_deployment_preparing(2, pending_hash));
+  ASSERT_TRUE(original.mark_deployment_ready(2, pending_hash));
+
+  ntn_onboard_position_plan_controller restored(config);
+  ASSERT_TRUE(restored.restore_persistent_state(original.make_persistent_state(11), at_ms(2000)).has_value());
+  ASSERT_TRUE(restored.recovery_plan().has_value());
+  EXPECT_EQ(restored.recovery_plan()->source.schedule_version, 2U);
+
+  ASSERT_TRUE(restored.reject_recovery(
+      2, pending_hash, ntn_position_plan_reject_reason::du_reconciliation_failed, "pending_du_state_rejected"));
+  EXPECT_FALSE(restored.active_plan().has_value());
+  EXPECT_FALSE(restored.pending_plan().has_value());
+  ASSERT_TRUE(restored.recovery_plan().has_value());
+  EXPECT_EQ(restored.recovery_plan()->source.schedule_version, 1U);
+  EXPECT_EQ(restored.deployment_stage(), ntn_position_plan_deployment_stage::preparing);
+  EXPECT_EQ(restored.deployment_detail(), "historical_active_fallback_requires_du_reconciliation");
+  EXPECT_EQ(restored.recovery_stage(), ntn_position_plan_recovery_stage::reconciling);
+  EXPECT_EQ(restored.recovery_schedule_version(), 1U);
+  EXPECT_EQ(restored.last_rejection_reason(), ntn_position_plan_reject_reason::du_reconciliation_failed);
+  EXPECT_EQ(restored.last_rejected_schedule_version(), 2U);
+  EXPECT_EQ(restored.highest_schedule_version_seen(), 2U);
+
+  const ntn_onboard_position_plan_persistent_state fallback_crash_state = restored.make_persistent_state(12);
+  ASSERT_TRUE(fallback_crash_state.active.has_value());
+  EXPECT_EQ(fallback_crash_state.active->source.schedule_version, 1U);
+  EXPECT_FALSE(fallback_crash_state.pending.has_value());
+  EXPECT_EQ(fallback_crash_state.recorded_deployment_stage, ntn_position_plan_deployment_stage::preparing);
+  EXPECT_EQ(fallback_crash_state.recorded_deployment_schedule_version, 1U);
+  EXPECT_EQ(fallback_crash_state.recorded_deployment_calendar_hash, active_hash);
+  EXPECT_EQ(fallback_crash_state.highest_schedule_version, 2U);
+
+  ntn_onboard_position_plan_controller restarted_again(config);
+  ASSERT_TRUE(restarted_again.restore_persistent_state(fallback_crash_state, at_ms(2100)).has_value());
+  ASSERT_TRUE(restarted_again.recovery_plan().has_value());
+  EXPECT_EQ(restarted_again.recovery_plan()->source.schedule_version, 1U);
+  EXPECT_EQ(restarted_again.highest_schedule_version_seen(), 2U);
+  ASSERT_TRUE(restarted_again.confirm_recovery_applied(1, active_hash, at_ms(2100)));
+  ASSERT_TRUE(restarted_again.active_plan().has_value());
+  EXPECT_EQ(restarted_again.active_plan()->source.schedule_version, 1U);
+  EXPECT_TRUE(restarted_again.active_has_external_apply_evidence());
+  EXPECT_EQ(restarted_again.highest_schedule_version_seen(), 2U);
+}
+
+TEST(ntn_onboard_position_plan, restart_restore_keeps_high_water_but_requires_fresh_du_applied_evidence)
+{
+  ntn_onboard_position_plan_config config = make_config();
+  config.require_external_apply           = true;
+  ntn_onboard_position_plan_controller original(config);
+
+  ASSERT_TRUE(original.submit(make_plan(8, 1, 1280), at_ms(640)).accepted);
+  const std::string active_hash = original.pending_plan()->calendar_hash;
+  ASSERT_TRUE(original.mark_deployment_preparing(1, active_hash));
+  ASSERT_TRUE(original.mark_deployment_applied(1, active_hash));
+  ASSERT_TRUE(original.advance_time(at_ms(1280)));
+  ASSERT_TRUE(original.submit(make_plan(10, 2, 3200, 2), at_ms(1920)).accepted);
+
+  const ntn_onboard_position_plan_persistent_state state = original.make_persistent_state(7);
+  ntn_onboard_position_plan_controller             restored(config);
+  ASSERT_TRUE(restored.restore_persistent_state(state, at_ms(2000)).has_value());
+
+  EXPECT_FALSE(restored.active_plan().has_value());
+  EXPECT_FALSE(restored.active_has_external_apply_evidence());
+  ASSERT_TRUE(restored.recovery_plan().has_value());
+  EXPECT_EQ(restored.recovery_plan()->source.schedule_version, 1U);
+  EXPECT_EQ(restored.deployment_stage(), ntn_position_plan_deployment_stage::preparing);
+  EXPECT_EQ(restored.recovery_stage(), ntn_position_plan_recovery_stage::reconciling);
+  EXPECT_EQ(restored.highest_catalog_version_seen(), 2U);
+  EXPECT_EQ(restored.highest_schedule_version_seen(), 2U);
+
+  EXPECT_FALSE(restored.confirm_recovery_applied(1, "sha256:stale", at_ms(2000)));
+  EXPECT_TRUE(restored.confirm_recovery_applied(1, active_hash, at_ms(2000)));
+  ASSERT_TRUE(restored.active_plan().has_value());
+  EXPECT_EQ(restored.active_plan()->source.schedule_version, 1U);
+  EXPECT_TRUE(restored.active_has_external_apply_evidence());
+  ASSERT_TRUE(restored.pending_plan().has_value());
+  EXPECT_EQ(restored.pending_plan()->source.schedule_version, 2U);
+  EXPECT_EQ(restored.deployment_stage(), ntn_position_plan_deployment_stage::not_sent);
+  EXPECT_EQ(restored.recovery_stage(), ntn_position_plan_recovery_stage::reconciled);
+  EXPECT_EQ(restored.recovery_schedule_version(), 1U);
+
+  const auto replay = restored.submit(make_plan(10, 2, 3200, 2), at_ms(2100));
+  EXPECT_FALSE(replay.accepted);
+  EXPECT_EQ(replay.reason, ntn_position_plan_reject_reason::non_monotonic_version);
+  ASSERT_TRUE(restored.active_plan().has_value());
+  const auto active_owners = make_owner_map(*restored.active_plan());
+
+  ASSERT_TRUE(restored.submit(make_plan(9, 3, 3840, 3), at_ms(2100)).accepted);
+  ASSERT_TRUE(restored.pending_plan().has_value());
+  const auto updated_owners = make_owner_map(*restored.pending_plan());
+  for (const auto& [position_id, owner] : active_owners) {
+    EXPECT_EQ(updated_owners.at(position_id), owner) << position_id;
+  }
+}
+
+TEST(ntn_onboard_position_plan, failed_restart_reconciliation_preserves_deferred_plan_and_version_high_water)
+{
+  ntn_onboard_position_plan_config config = make_config();
+  config.require_external_apply           = true;
+  ntn_onboard_position_plan_controller original(config);
+
+  ASSERT_TRUE(original.submit(make_plan(4, 1, 1280), at_ms(640)).accepted);
+  const std::string active_hash = original.pending_plan()->calendar_hash;
+  ASSERT_TRUE(original.mark_deployment_preparing(1, active_hash));
+  ASSERT_TRUE(original.mark_deployment_applied(1, active_hash));
+  ASSERT_TRUE(original.advance_time(at_ms(1280)));
+  ASSERT_TRUE(original.submit(make_plan(6, 2, 3200, 2), at_ms(1920)).accepted);
+
+  ntn_onboard_position_plan_controller restored(config);
+  ASSERT_TRUE(restored.restore_persistent_state(original.make_persistent_state(3), at_ms(2000)).has_value());
+  ASSERT_TRUE(restored.recovery_plan().has_value());
+  EXPECT_TRUE(restored.reject_recovery(
+      1, active_hash, ntn_position_plan_reject_reason::du_reconciliation_failed, "du_state_not_applied"));
+
+  EXPECT_FALSE(restored.active_plan().has_value());
+  EXPECT_FALSE(restored.active_has_external_apply_evidence());
+  ASSERT_TRUE(restored.pending_plan().has_value());
+  EXPECT_EQ(restored.pending_plan()->source.schedule_version, 2U);
+  EXPECT_EQ(restored.highest_schedule_version_seen(), 2U);
+  EXPECT_EQ(restored.recovery_stage(), ntn_position_plan_recovery_stage::failed);
+  EXPECT_EQ(restored.last_rejection_reason(), ntn_position_plan_reject_reason::du_reconciliation_failed);
+}
+
+TEST(ntn_onboard_position_plan, restore_rejects_context_drift_without_installing_persisted_active_state)
+{
+  ntn_onboard_position_plan_config config = make_config();
+  config.require_external_apply           = true;
+  ntn_onboard_position_plan_controller original(config);
+  ASSERT_TRUE(original.submit(make_plan(4, 1, 1280), at_ms(640)).accepted);
+
+  ntn_onboard_position_plan_persistent_state state = original.make_persistent_state(1);
+  state.planning_context.identity_registry_hash =
+      "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  ntn_onboard_position_plan_controller restored(config);
+  auto                                 result = restored.restore_persistent_state(state, at_ms(640));
+  ASSERT_FALSE(result.has_value());
+  EXPECT_FALSE(restored.active_plan().has_value());
+  EXPECT_FALSE(restored.pending_plan().has_value());
+  EXPECT_FALSE(restored.recovery_plan().has_value());
 }
 
 TEST(ntn_onboard_position_plan, disabled_profile_has_no_active_or_pending_plan)
