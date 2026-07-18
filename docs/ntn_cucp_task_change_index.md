@@ -1,6 +1,6 @@
 # NTN CU-CP Task Change Index
 
-Last updated: 2026-07-15
+Last updated: 2026-07-18
 
 This file maps the CUCP task chain to the main feature changes and
 representative code areas. It is a compact lookup table for future agents.
@@ -112,6 +112,7 @@ them casually.
 | CUCP-036 | Versioned access-calendar cross-layer deployment: private F1AP prepare/query/clear, same-DU two-cell validation, both-slot-thread armed barrier, configurable prepare/apply deadlines, persistent rollback cleanup, extended validity, `mu=4`-exact wall-clock mapping, execution-envelope startup validation, opt-in scheduler SSB/PRACH software gate, applied/clear feedback and Web candidate plan exporter backed by a versioned explicit identity registry. Default off. Evidence explicitly stops before position/port beam steering and RF application. | `include/srsran/f1ap/ntn_access_calendar.h`, F1AP resource-coordination procedures, `du_manager_impl.*`, `include/srsran/mac/mac_manager.h`, `lib/mac/mac_impl.h`, `lib/mac/mac_ntn_access_calendar_manager.h`, `lib/mac/mac_ntn_access_calendar_compiler.h`, `lib/mac/mac_dl/mac_cell_time_mapper_impl.*`, `include/srsran/scheduler/ntn_access_calendar.h`, `lib/scheduler/ntn_access_calendar_gate.h`, `cell_scheduler.*`, `lib/cu_cp/cu_cp_impl.*`, `web_replicas/ntn_beam_planner/app/position-plan-model.ts`, `app/onboard-cell-identity-registry.json`, `docs/ntn_access_calendar_cross_layer_execution.md`, focused F1AP/DU/MAC/scheduler/CU-CP/Web tests. |
 | CUCP-037 | Initial UL active-plan audit contract and activation-integrity hardening. RNTI lease ownership is cell-scoped even when onboard cells reuse PCI, and duplicate entries in one batch fail atomically; deployment feedback cannot regress; prepare/query feedback must preserve the complete intent count. A private pure auditor matches proposed satellite/version/hash, stable NCI/PCI, L1 owner, PRACH occasion and UL port against the current active plan. No production Initial UL transport or RF evidence is claimed. | `lib/cu_cp/ntn_mobility/ntn_beam_service_resource_manager.*`, `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.*`, `lib/cu_cp/cu_cp_impl.cpp`, CU-CP test environment, `ntn_beam_service_resource_manager_test.cpp`, `ntn_onboard_position_plan_test.cpp`, `cu_cp_ntn_mobility_test.cpp`, roadmap/catalog/runtime-contract and access-plan documentation. |
 | CUCP-038 | Fail-safe DU resource-audit completeness and RNTI lifecycle reconciliation. Private codec v2 independently qualifies RNTI and UE-slot snapshots; v1 is incomplete by default. MAC retains pending/consumed/expired leases with enforced expiry; exact-generation/full-set ACK validation, `ack_unknown` same-generation recovery, unresolved-pool generation gating, recoverable audit conflicts and indexed snapshot lookup close the CU/DU software-state loop. Same-DU C-RNTI values remain unique, SR/SRS repair records the DU-applied request, and SIB19 feedback is generation/state guarded. UE-slot mapping and durable terminal GC/reuse remain incomplete. This is not endurance or RF evidence. | Implementation commits `465e8c6` and `2ad0b1b`. Representative areas: `include/srsran/f1ap/ntn_rnti_lease_pool.h`, `include/srsran/mac/mac_manager.h`, `lib/mac/rnti_manager.h`, `lib/du/du_high/du_manager/du_manager_impl.cpp`, `lib/cu_cp/ntn_mobility/ntn_beam_service_resource_manager.*`, `lib/cu_cp/cu_cp_impl.*`, focused F1AP/DU/MAC/CU-CP tests and these NTN documents. |
+| CUCP-039 | Durable onboard-plan restart recovery. Execution mode requires a private `state_file` that is atomically replaced with version high-water marks, active/pending plans, stable two-cell partition, hashes, activation state, lower-layer software deployment state and exact cleanup obligations. Restart revalidates the saved plan and queries DU before exposing `active/applied`; partial or mismatched feedback fails closed. Expired deployments retain cleanup work without clearing a different valid fallback. Read-only OAM reports storage and recovery health. Default-off terrestrial behavior is unchanged, and `applied` remains software-gate evidence rather than RF evidence. A trusted monotonic anchor for whole-file rollback/deletion and DU connection-generation binding remain follow-up work. | `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan_state.*`, `ntn_onboard_position_plan.*`, `lib/cu_cp/cu_cp_impl.*`, private CU-CP configuration and `ntn_state`, focused state/controller/CU-CP/config tests, runtime-contract and memory documentation. |
 
 ## Current Useful Validation Notes
 
@@ -244,3 +245,30 @@ RU/RF telemetry or long-duration endurance. Terminal-history GC and durable
 C-RNTI reuse remain required before claiming namespace stability. With NTN
 inactive, terrestrial selection/default outcomes are preserved; added
 synchronization overhead is not a performance-equivalence claim.
+
+CUCP-039 closeout evidence (2026-07-18):
+
+```bash
+cmake --build build/ai-clean --target srsran_cu_cp -j1
+cmake --build build/ai-clean --target cu_cp_test -j1
+build/ai-clean/tests/unittests/cu_cp/cu_cp_test \
+  --gtest_filter='cu_cp_ntn_mobility_test.restart_*:cu_cp_ntn_mobility_test.default_cu_cp_rejects_ntn_satellite_state_updates'
+build/ai-clean/tests/unittests/cu_cp/ntn_mobility/ntn_mobility_test \
+  --gtest_filter='ntn_onboard_position_plan.*:ntn_onboard_position_plan_state.*'
+build/ai-clean/tests/unittests/apps/units/o_cu_cp/cu_cp/cu_cp_unit_config_test \
+  --gtest_filter='cu_cp_unit_config.ntn_state_command_*:cu_cp_unit_config.onboard_position_plan_*:cu_cp_unit_config.default_terrestrial_config_keeps_ntn_disabled'
+```
+
+`srsran_cu_cp` and `cu_cp_test` built successfully. The restart/default-disabled
+CU-CP group passed 7/7, the plan/controller/state group passed 45/45, and the
+configuration/read-only-status group passed 7/7. `git diff --check` also passed.
+The first bounded `cu_cp_test` attempt spent 604 seconds rebuilding the large
+CU-CP archive and was stopped without a compiler error; later incremental runs
+finished the target and found two test-construction errors, which were corrected
+before the final passing run.
+
+No split demo was run because this slice changes private restart storage and
+reuses the already tested calendar query/clear path; the mock-DU integration
+proves ordering and fail-closed behavior, not a live device restart. No PHY,
+RU/RF, Web/GIS or generated ASN.1 files changed. A trusted monotonic anchor for
+whole-file rollback/deletion and DU connection-generation binding remain open.

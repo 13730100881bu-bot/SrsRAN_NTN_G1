@@ -171,6 +171,47 @@ response cannot regress `applied` to `ready` or `not_sent`. Prepare and query
 acceptance require matching catalog/schedule version, source/calendar hashes and
 the complete accepted intent count for both cells.
 
+`applied` is evidence that the matching SSB/PRACH software gate is installed.
+It is not evidence of antenna steering, a transmitted or received beam, PHY
+execution, RU state, or RF output.
+
+## onboard_plan_recovery_state
+
+When DU calendar execution is enabled, CU-CP requires a private `state_file`.
+Dry-run mode does not require it. The file is atomically replaced and records:
+
+- the highest accepted catalog and schedule versions;
+- the active and pending plans, including their exact two-cell L1 partition,
+  source/calendar hashes, activation epoch and validity;
+- the last known lower-layer software deployment state; and
+- calendar cleanup tasks that still need confirmation.
+
+The saved deployment state is history, not live evidence. At restart CU-CP
+rechecks the schema, hashes, planning context, satellite and cell identities,
+versions and validity. It then queries DU for the exact plan version/hash before
+showing that plan as `active` or `applied`. Only complete matching feedback for
+both cells can restore those labels. Missing, incomplete, expired or mismatched
+feedback fails closed and cannot replace a still-valid old plan.
+
+If a saved deployment has expired, CU-CP records an exact cleanup task and keeps
+that task across later restarts until clear feedback is confirmed. A cleanup
+task is tied to the expired version/hash and must not clear a different active
+fallback plan.
+
+The read-only `ntn_state` view exposes whether a state file is configured and
+required, its schema/generation/hash, the last save result and error, whether
+writes are blocked, the catalog/schedule high-water marks, and recovery
+stage/detail. These fields describe CU-CP storage and DU software reconciliation;
+they are not RF telemetry. With the onboard NTN profile disabled, none of this
+changes the terrestrial path.
+
+This file is a recovery aid, not a trust anchor. Its own high-water marks live
+inside the same file, so replacing the entire file with an older valid copy or
+deleting it cannot yet be distinguished from an earlier state or first boot. A
+separate trusted monotonic anchor is needed for that protection. Recovery
+queries also do not yet bind the DU connection generation, so feedback crossing
+a disconnect/reconnect boundary needs an additional freshness guard.
+
 ## initial_access_plan_audit
 
 A CU-CP-private, side-effect-free comparison of complete proposed Initial UL

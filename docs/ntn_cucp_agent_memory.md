@@ -1,6 +1,6 @@
 # NTN CU-CP Agent Memory
 
-Last updated: 2026-07-12
+Last updated: 2026-07-18
 
 This file is the compact handoff memory for future conversations. It keeps the
 durable NTN CU-CP design context without pulling in the old project-management
@@ -180,6 +180,27 @@ Use a staged validation ladder:
   distinct. Long runtime deadlines are timer-sliced, and status/reload/activation
   share one synchronization boundary. It deliberately does not inject L1 into
   the legacy per-beam NCI table or claim DU/RF application.
+- CUCP-039 makes execution-mode restart recovery conservative. When
+  `du_execution_enabled=true`, a private `state_file` is required. CU-CP
+  atomically records the highest accepted versions, active and pending plans,
+  their two-cell L1 partition and hashes, activation/validity times, the last
+  lower-layer software deployment state, and any calendar cleanup still owed.
+  On restart, CU-CP validates that record again and queries DU before showing a
+  recovered plan as `active` or `applied`; missing, partial, expired, or
+  mismatched feedback fails closed. An expired deployment becomes a durable
+  cleanup task identified by its exact version/hash, so cleanup cannot erase a
+  different still-valid fallback plan. Read-only `ntn_state` output reports the
+  state-file generation/hash/save result, version high-water marks, recovery
+  stage/detail and whether writes are blocked. The feature remains default-off,
+  so the terrestrial path does not load, save, query, or clear this NTN state.
+  Here `applied` means only that the matching SSB/PRACH software gate was found;
+  it is not antenna, beam steering, PHY, RU, or RF evidence.
+- Two recovery protections remain follow-up work. Because the version
+  high-water marks and snapshots are kept in the same file, replacing or
+  deleting that whole file cannot be detected without a separate trusted
+  monotonic anchor. DU reconnects also do not yet carry a connection generation
+  into the recovery query, so stale feedback across a disconnect needs an
+  additional binding before this can be called replay-safe.
 - In the current runtime prototype, analog access beams are access groups over
   digital beams:
   - RRC setup/reestablishment gate
@@ -378,6 +399,12 @@ For a more detailed task-to-change lookup, use
   in-flight state and operation result. This is software-state evidence only
   and does not close connection epoch, authentication, anti-replay, long-term
   lease GC/reuse, Initial UL position or RF evidence gaps.
+- CUCP-039: private durable onboard-plan state and restart reconciliation. DU
+  execution requires `state_file`; historical `applied` data is hidden until a
+  complete matching DU query succeeds, while expired deployments retain exact
+  cleanup work across restart. Read-only recovery status is exposed without
+  changing the default terrestrial path. Whole-file rollback/deletion and DU
+  connection-generation binding remain open protections.
 
 ## Protocol References
 
