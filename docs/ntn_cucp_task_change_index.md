@@ -1,6 +1,6 @@
 # NTN CU-CP Task Change Index
 
-Last updated: 2026-07-18
+Last updated: 2026-07-19
 
 This file maps the CUCP task chain to the main feature changes and
 representative code areas. It is a compact lookup table for future agents.
@@ -113,6 +113,7 @@ them casually.
 | CUCP-037 | Initial UL active-plan audit contract and activation-integrity hardening. RNTI lease ownership is cell-scoped even when onboard cells reuse PCI, and duplicate entries in one batch fail atomically; deployment feedback cannot regress; prepare/query feedback must preserve the complete intent count. A private pure auditor matches proposed satellite/version/hash, stable NCI/PCI, L1 owner, PRACH occasion and UL port against the current active plan. No production Initial UL transport or RF evidence is claimed. | `lib/cu_cp/ntn_mobility/ntn_beam_service_resource_manager.*`, `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.*`, `lib/cu_cp/cu_cp_impl.cpp`, CU-CP test environment, `ntn_beam_service_resource_manager_test.cpp`, `ntn_onboard_position_plan_test.cpp`, `cu_cp_ntn_mobility_test.cpp`, roadmap/catalog/runtime-contract and access-plan documentation. |
 | CUCP-038 | Fail-safe DU resource-audit completeness and RNTI lifecycle reconciliation. Private codec v2 independently qualifies RNTI and UE-slot snapshots; v1 is incomplete by default. MAC retains pending/consumed/expired leases with enforced expiry; exact-generation/full-set ACK validation, `ack_unknown` same-generation recovery, unresolved-pool generation gating, recoverable audit conflicts and indexed snapshot lookup close the CU/DU software-state loop. Same-DU C-RNTI values remain unique, SR/SRS repair records the DU-applied request, and SIB19 feedback is generation/state guarded. UE-slot mapping and durable terminal GC/reuse remain incomplete. This is not endurance or RF evidence. | Implementation commits `465e8c6` and `2ad0b1b`. Representative areas: `include/srsran/f1ap/ntn_rnti_lease_pool.h`, `include/srsran/mac/mac_manager.h`, `lib/mac/rnti_manager.h`, `lib/du/du_high/du_manager/du_manager_impl.cpp`, `lib/cu_cp/ntn_mobility/ntn_beam_service_resource_manager.*`, `lib/cu_cp/cu_cp_impl.*`, focused F1AP/DU/MAC/CU-CP tests and these NTN documents. |
 | CUCP-039 | Durable onboard-plan restart recovery. Execution mode requires a private `state_file` that is atomically replaced with version high-water marks, active/pending plans, stable two-cell partition, hashes, activation state, lower-layer software deployment state and exact cleanup obligations. Restart revalidates the saved plan and queries DU before exposing `active/applied`; partial or mismatched feedback fails closed. Expired deployments retain cleanup work without clearing a different valid fallback. Read-only OAM reports storage and recovery health. Default-off terrestrial behavior is unchanged, and `applied` remains software-gate evidence rather than RF evidence. A trusted monotonic anchor for whole-file rollback/deletion and DU connection-generation binding remain follow-up work. | `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan_state.*`, `ntn_onboard_position_plan.*`, `lib/cu_cp/cu_cp_impl.*`, private CU-CP configuration and `ntn_state`, focused state/controller/CU-CP/config tests, runtime-contract and memory documentation. |
+| CUCP-040 | DU reconnect-safe onboard-plan recovery. CU-CP binds prepare completions to the DU connection generation and exact plan, while query/clear also carry a request-instance guard. It hides application evidence immediately on disconnect, persists the recovery state, and accepts it again only after a matching response from the live connection. A future prepared plan cannot clear the current plan before `activation_epoch`; early confirmation keeps the new plan hidden as pending, and the normal path switches and cleans up only after the epoch. If that pending plan expires before a delayed timer runs, the historical fallback returns to live-DU reconciliation. Read-only `ntn_state` exposes the active calendar hash, cleanup queue head and state-storage health. Expired `not_sent` plans do not generate clears. A confirmed clear is removed from the live queue only after a successful durable state write; write failure leaves the obligation unchanged in fail-closed memory, and a durably removed clear is not repeated after restart. State schema v2 independently retains the complete latest parsed candidate inventory, including a rejected 257-position input, across cleanup and repeated restart without promoting it or changing accepted version high-water; schema v1 remains readable. Default-off terrestrial behavior is unchanged; this is CU/DU software-state evidence, not RF evidence. | `lib/cu_cp/du_processor/du_processor_repository.cpp`, `lib/cu_cp/cu_cp_impl*`, `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.*`, `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan_state.*`, `include/srsran/cu_cp/cu_cp_command_handler.h`, O-CU-CP `ntn_state`, focused controller/state/CU-CP/config tests. |
 
 ## Current Useful Validation Notes
 
@@ -272,3 +273,45 @@ reuses the already tested calendar query/clear path; the mock-DU integration
 proves ordering and fail-closed behavior, not a live device restart. No PHY,
 RU/RF, Web/GIS or generated ASN.1 files changed. A trusted monotonic anchor for
 whole-file rollback/deletion and DU connection-generation binding remain open.
+
+CUCP-040 closeout evidence (2026-07-19):
+
+```bash
+cmake --build build/ai-clean --target ntn_mobility_test -j1
+build/ai-clean/tests/unittests/cu_cp/ntn_mobility/ntn_mobility_test \
+  --gtest_filter='ntn_onboard_position_plan.*:ntn_onboard_position_plan_state.*'
+ctest --test-dir build/ai-clean -R 'ntn_mobility' --output-on-failure
+cmake --build build/ai-clean --target srsran_cu_cp -j1
+cmake --build build/ai-clean --target cu_cp_test -j1
+build/ai-clean/tests/unittests/cu_cp/cu_cp_test \
+  --gtest_filter='cu_cp_ntn_mobility_test.restart_*:cu_cp_ntn_mobility_test.du_disconnect_*:cu_cp_ntn_mobility_test.disconnect_during_recovery_query_*:cu_cp_ntn_mobility_test.future_recovered_update_*:cu_cp_ntn_mobility_test.live_active_expiry_*:cu_cp_ntn_mobility_test.default_cu_cp_rejects_ntn_satellite_state_updates'
+cmake --build build/ai-clean --target cu_cp_unit_config_test -j1
+build/ai-clean/tests/unittests/apps/units/o_cu_cp/cu_cp/cu_cp_unit_config_test \
+  --gtest_filter='cu_cp_unit_config.ntn_state_command_*:cu_cp_unit_config.default_terrestrial_config_keeps_ntn_disabled'
+cmake --build build/ai-clean --target du_processor_test_helpers -j1
+```
+
+`ntn_mobility_test` built successfully; its complete position-plan/state group
+passed 53/53. `srsran_cu_cp` and `cu_cp_test` built successfully. The final
+disconnect/reconnect, future-epoch, live/restart expiry, cleanup (including
+forced state-write failure), state-schema migration, 257-position observation
+and default-disabled group passed 14/14; the four most direct reconnect/expiry
+cases also passed 4/4 separately. `cu_cp_unit_config_test` built successfully
+and its read-only status/default-disabled group passed 5/5. The DU processor test helper also
+compiled and linked after its mocks were brought up to the current CU-CP private
+interfaces. `git diff --check` passed.
+
+The broad `ctest -R ntn_mobility` expression matched 177 old and new tests,
+so it was bounded rather than treated as a focused gate. The run was stopped at
+about 290 seconds after 25/177 had passed and test 26 had started; no assertion
+failure was reported. It is recorded as incomplete, not as a full pass.
+
+No split demo was run because this slice does not change the existing private F1
+calendar payload or scheduler execution path. The mock-DU tests exercise a real
+CU-CP disconnect/reconnect lifecycle and response ordering, but do not prove
+SCTP transport endurance, authenticated replay protection, position/port beam
+steering, PHY/OFH execution or RU/RF telemetry. Whole-state-file rollback or
+deletion still requires a separate trusted monotonic anchor. F1AP common
+transaction cancellation during DU teardown remains a follow-up lifecycle
+hardening item; CU-CP generation/request guards prevent those stale completions
+from restoring NTN application evidence.

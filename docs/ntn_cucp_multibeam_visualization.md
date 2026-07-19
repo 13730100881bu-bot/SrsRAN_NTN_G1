@@ -1,8 +1,8 @@
 # CU-CP NTN 多波束方案可视化
 
-> 本文和配图记录早期 satellite state→beam placement→handover→NGAP 主链，尚未完整呈现后续 64 个地固 NR 小区、星载再生 CU-CP、analog/digital 双层波束、RNTI lease、SR/SRS applied feedback、SIB19 和 UE capability gate。图中的旧 beam-to-NCI 关系只用于追溯当前原型，不代表目标架构。当前完整总览请阅读 [NTN CU-CP 中文主方案](ntn_cucp_solution_overview.md)。
+> 本文和配图记录早期 satellite state→beam placement→handover→NGAP 主链。历史上曾讨论过 64 个地固 NR 小区，但该模型已经废弃；当前目标是每星两个长期星载小区，地面 L1/L2 不拥有永久 NCI/PCI。图中的旧 beam-to-NCI 关系只用于追溯 legacy 原型，也未完整呈现后续 analog/digital 双层波束、RNTI lease、SR/SRS applied feedback、SIB19 和 UE capability gate。当前完整总览请阅读 [NTN CU-CP 中文主方案](ntn_cucp_solution_overview.md)。
 
-下面这张图是当前 CU-CP v1 多波束方案的图片版。它把 satellite state、visible pool、hopping window、DU placement、UE 位置驱动 handover、NGAP 位置上报和责任边界放在同一张图里，便于整体检查。
+下面这张图是历史 CU-CP v1 多波束方案的图片版。它把 satellite state、visible pool、hopping window、DU placement、UE 位置驱动 handover、NGAP 位置上报和责任边界放在同一张图里，便于追溯早期实现。
 
 <img src="assets/ntn_cucp_multibeam_overview.png" alt="CU-CP NTN 多波束控制面方案" width="100%">
 

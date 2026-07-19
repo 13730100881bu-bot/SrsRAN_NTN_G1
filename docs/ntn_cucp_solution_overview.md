@@ -58,9 +58,9 @@
 
 旧 `Walker Delta 53°:720/30/1`、大陆及海南 `2,620/18,208` 波位目录和一天 120 s 采样数字只作为历史中国样例保留。旧样例曾得到 `720/720` 离散快照、`1,261,561` 个旧 owner 变化/释放等结果；这些数字不能外推到全球 mask，也不是事件驱动 handover 报告。
 
-### 2.2 当前工作区运行原型
+### 2.2 Legacy beam-table 运行路径（仍保留）
 
-当前代码与示例配置仍是确定、可重复的单星 LEO/NGSO 控制面原型。下面的数字用于说明已经存在的实现，不能当成上一节目标载荷已经实现。
+当前代码仍保留一条确定、可重复的单星 LEO/NGSO legacy beam-table 控制面路径。下面的数字只用于说明这条历史兼容路径，不能当成上一节双小区载荷已经实现，也不能与其资源限制混用。
 
 | 项目 | 当前基线 | 如何理解 |
 |---|---|---|
@@ -255,6 +255,16 @@ SIB19 描述网络侧的卫星 assistance 和小区广播状态，应该随着 b
 
 L1 跨星时不迁移 NCI：源、目标分别使用自己的星载 NCI/PCI。只有二者 NCI/PCI 不同，目标才可以为发现/测量做重叠广播；这仍不代表 serving 已切换。目标 ready、DU `applied` 且到达对齐 640 ms 的 activation epoch 后，proposal 才能提交为 serving。连接态 UE 通过 HO/CHO，空闲态 UE 通过重选；同星在两个 NCI 之间重新分组也属于小区关系变化。当前 CU-CP 已实现单星计划的原子切换和软件 gate；全球跨星 ownership producer、UE 跨星流程与 RF 执行仍未闭环。
 
+### 8.5 计划更新、重启和 DU 重连
+
+管理中心计划不是“读到文件就立即生效”。CU-CP 先记录最新解析计划的版本、hash、启用时间和完整 L1 清单，用于只读观测，再校验规划上下文、两个长期小区身份、版本、有效期和 hash，随后做双小区划分和 640 ms 日历审计。新计划全部通过后才成为 pending；即使 DU 提前报告软件 `applied`，仍要等到 `activation_epoch` 才能替换 active。
+
+执行模式使用私有状态文件保存 accepted version high-water、active/pending、双小区划分、软件下发状态和待确认清理任务。状态 schema v2 还把“最新成功解析输入的摘要”作为独立只读观测保存，内容是 catalog/schedule version、content hash、activation epoch 和完整 candidate inventory，不是原始 JSON 的逐字段副本。因此收到 257 条 L1 时，系统会完整显示 257 条并报告 `schedule_overflow`，但它不会提高 accepted high-water、不会激活，也不会替换旧有效计划；旧计划清理和再次重启后，这 257 条仍不会被裁剪或回退成旧 inventory。
+
+DU 断开会立即使旧连接上的 `applied` 证据失效。CU-CP 保留计划和旧计划恢复副本，重连后只接受当前连接、当前请求、同一 version/hash 的完整回复；旧连接迟到的反馈不会恢复状态。未来计划若在启用前再次断开，历史 active fallback 仍保留。DU 确认 clear 后，CU-CP 先 durable 保存“不再包含该任务”的新状态，成功后才从内存删除，避免断电或重启造成清理任务丢失。
+
+这套机制解决的是 CU/DU 软件状态恢复。状态文件还不是可信单调锚点，本地连接代次也不是发送方认证；它们都不能证明 RF beam steering、真实 PRACH 接收或全球连续覆盖。
+
 ## 9. 资源一致性和可观测性
 
 CU-CP 是 NTN 资源权威，但分布式系统可能因为超时、重连或部分失败出现“CU-CP 认为已下发，DU 实际没有”的情况。因此当前方案包含 consistency auditor 和 repair executor：
@@ -303,6 +313,7 @@ CU-CP 是 NTN 资源权威，但分布式系统可能因为超时、重连或部
 | 全球 exact visible inventory 与 assignment | 规划中 | 目录和 coarse CLI 可作为输入 | 7 天事件驱动审计 `not_run`，`selectedScenario=null` |
 | `128 × 2 = 256` 日历硬保证 | 已有测试覆盖 | 最差 80 ms 日历 168 次机会，配置取 128/小区 | 尚无真实 guard/功率/带宽和 PHY/RU 证据 |
 | 版本化波位表、双小区划分与软件 activation gate | 已有测试覆盖 | CU-CP 完整 inventory、hash/version、80/640 ms 日历、原子切换与 DU/MAC software feedback | 尚无全球 producer、可信 Initial UL position 或 RF 证据 |
+| 计划重启、DU 重连与持久化清理 | 已有测试覆盖 | 历史 applied 隐藏、当前连接精确核对、旧回复隔离、future epoch fallback、257 条观测和 durable cleanup 均有 focused tests | 尚无可信单调存储、发送方认证、live SCTP endurance 或设备回执 |
 | Initial UL active-plan audit | 已有测试覆盖 | 私有纯审计器可核对完整 sideband 测试输入 | 标准 F1AP Initial UL 不携带 position/version/hash/RO/port；production gate 未接入 |
 | 全球位置接管与 PCI 冲突图 | 规划中 | 已明确唯一 primary、ready/applied 和 activation gate | 尚无全球连续时间/RF 证据 |
 | 多星、SGP4、真实 RRC 位置、Rel-17 UE、PHY/RU 执行 | 规划中 | 已明确后续方向和边界 | 尚无完整实现或系统证据 |
@@ -329,6 +340,8 @@ CU-CP 是 NTN 资源权威，但分布式系统可能因为超时、重连或部
 9. 每个 L1 在一个 epoch 最多一个 primary owner；只有 target 与 source 的 NCI/PCI 不同，才允许发现/测量重叠广播。
 10. `128/256` 是当前 20 ms occasion、4-occasion 滑窗、三相位端口数和每端口 4×2.5 ms 子访问模型的最差相位硬保证；它不是协议或硬件常量，真实 PHY/RU/RF 仍待验证。
 11. 即使没有 UE，所有 active L1 仍必须按 `80 ms` 目标重访期限周期发送 SSB；每个有效 PRACH RO 都必须有对应接收波束。
+12. DU 断开后，旧连接上的软件 `applied` 立即失效；只有当前连接的完整精确查询可以恢复。
+13. 257 条输入必须完整保留并拒绝执行，不能因重启、清理或旧 active snapshot 被裁剪成 256 条或更少。
 
 ## 12. 下一阶段路线
 

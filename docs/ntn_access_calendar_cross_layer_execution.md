@@ -11,8 +11,15 @@ ntn_onboard_position_plan:
   du_prepare_horizon_ms: 4000
   du_prepare_guard_ms: 1000
   du_apply_timeout_ms: 500
-  satellite_id: P01-S001
+  satellite_id: P01-S01
   plan_json_file: /path/to/management-center-plan.json
+  state_file: /path/to/private-recovery-state.json
+  expected_catalog_id: global-land-l1-v1
+  expected_catalog_hash: "sha256:<catalog hash>"
+  expected_identity_registry_version: mc-ntn-onboard-cell-registry-v1
+  expected_identity_registry_hash: "sha256:<registry hash>"
+  expected_access_profile_id: ntn-access-16a-64d-v1
+  expected_access_profile_hash: "sha256:<profile hash>"
   cell_ncis: [4886691841, 4886691842]
   cell_pcis: [101, 101]
 ```
@@ -33,6 +40,8 @@ not_sent -> preparing -> ready -> applied
 `preparing` 表示 scheduler command 已入队但两个 cell 的 slot thread 尚未全部确认 armed；只有两侧都消费同一 version/hash 后才进入 `ready`。prepare 和 query 的 `preparing/ready/applied` 反馈都必须保持同一 catalog/schedule version、source/calendar hash，并完整回报两个小区的 accepted intent 数；只有匹配的 `applied` feedback 到达后，CU-CP 才允许 pending plan 在 `activation_epoch` 后变为 active。deployment 反馈只允许单调前进且同状态幂等：同一计划已被 query 推到 `ready/applied` 后，较早的 prepare completion 被忽略；guard 前暂时无 response 会回到 `not_sent` 重试。错版本/hash、intent 数不完整、明确终止失败或超过 guard/apply deadline 才 reject 并 clear，新计划失败不改变旧 active。
 
 `du_prepare_horizon_ms`、`du_prepare_guard_ms` 和 `du_apply_timeout_ms` 是可配置软件时限，不是协议常量。CU-CP 只在 plain-SFN 可无歧义映射的 prepare horizon 内下发；guard 前未 armed，或 activation 后 apply timeout 内未两侧 applied，都会回滚。prepare/query/clear 使用独立异步 lane，丢失的 F1 response 不会阻塞 clear。
+
+执行模式只接受 schema v2 输入，并要求独立 `state_file`。v2 把 catalog、identity registry 和 access profile 的 ID/hash 纳入计划上下文和 `content_hash`；旧 schema v1 只允许 dry-run。当前 satellite registry 使用 `Pxx-Syy`，例如 `P01-S01`，CU-CP 不再接受旧文档样例 `P01-S001`。
 
 开启 DU execution 时，启动校验还会提前约束当前实现包络：最多 256 个 L1、最多 2560 个 intent，并保证一个 PRACH cycle 在最密的 NR numerology `mu=4` 下不超过 scheduler gate 的 16384 slots。该限制只作用于执行 profile；关闭 DU execution 时，管理中心下发的完整 candidate inventory 仍可保留 257 个及以上 L1，再由计划状态明确报告 `schedule_overflow`，不会在输入层裁剪。
 
@@ -70,6 +79,16 @@ plain `slot_point` 只有约 5.12 s 的 wrap-safe activation horizon。CU-CP 会
 
 MAC 的 wall-clock/slot mapper 使用纳秒精度；`mu=4` 的 62.5 microsecond slot 不会被截断成 62 microseconds。日历的微秒输入只有在乘以 cell slot rate 后得到整数 slot 时才接受，未对齐窗口会显式拒绝。
 
+## 重启、重连和清理
+
+`state_file` 原子保存 accepted version high-water、active/pending 计划、双小区划分、source/calendar hash、启用时间、历史软件下发状态和仍需确认的清理任务。状态 schema v2 还独立保存最新成功解析输入的只读摘要：catalog/schedule version、content hash、activation epoch 和完整 candidate inventory。它不是原始 JSON 的逐字段副本。被 `schedule_overflow` 拒绝的 257 条 L1 可以高于 accepted high-water，但不会成为 active/pending 或 DU 下发权威；清理旧计划和再次重启后仍保留 257 条。
+
+启动时，历史 `applied` 只表示上次进程看到的软件状态。CU-CP 会隐藏它，并查询 live DU 的同一 version/hash；只有两个小区的完整 matching result 才恢复 `active/applied`。
+
+DU 断开时，CU-CP 在 served-cell context 被删除前让该连接上的应用证据失效。prepare 使用 DU connection generation 和计划身份保护；query/clear 还使用独立 request id。旧连接迟到的反馈不能改变新连接上的状态。未来计划即使提前得到 `applied`，仍需等待 `activation_epoch`，其历史 active fallback 会跨再次断开保留；未来计划失败或过期时，fallback 重新向 live DU 核对。
+
+clear 采用先落盘、后删内存队首的顺序。若 DU 已确认 clear，但不含该队首的新状态无法 durable 保存，CU-CP 保留原 cleanup obligation 并阻止继续写入。崩溃后它可能按同一 version/hash 幂等重试，这是有意的 at-least-once 语义：允许安全重复，禁止静默丢失。状态文件仍不是可信单调锚点：整文件被旧合法副本替换或删除，需要外部可信存储才能检测。
+
 ## 证据边界
 
 当前 `applied` 的准确含义是：
@@ -104,7 +123,7 @@ CUCP-037 在 CU-CP 私有 position-plan controller 中增加了无副作用审�
 - 同一窗口是否有配对 `prach_ul_beam`，且 cell-local `port_id` 匹配；
 - external-execution profile 是否保留当前 active plan 的 software-gate applied snapshot。
 
-结果使用 `accept/reject/audit_only` 和机器可读原因。`accept` 只说明“提供的 metadata 与当前 CU-CP active plan/software-gate snapshot 匹配”，不验证发送方身份，也没有接收时刻 freshness/anti-replay，不说明 position steering 或 RF 已执行。`active_has_external_apply_evidence` 目前还是 controller snapshot；DU 断连/重连后尚无 connection-epoch reconciliation，因此不能把它当作跨重连持久 telemetry。
+结果使用 `accept/reject/audit_only` 和机器可读原因。`accept` 只说明“提供的 metadata 与当前 CU-CP active plan/software-gate snapshot 匹配”，不验证发送方身份，也没有接收时刻 freshness/anti-replay，不说明 position steering 或 RF 已执行。DU 断连会立即隐藏 `active_has_external_apply_evidence`，只有当前连接的 matching query 才能恢复；这解决本地连接代次污染，但仍不是经过认证的跨重连 telemetry。
 
 标准 F1AP Initial UL 目前只有 CGI、C-RNTI 和 RRC container，不携带上述 position/version/hash/RO/port 证据。生产 `handle_ue_setup_request()` 因而没有接入这个审计器，也绝不能通过 legacy beam-to-NCI table 推导 `G######`。下一步若要成为真实 admission gate，需要一个明确授权、版本化且可鉴别来源的最小 sideband；RAR 低时延路径仍留在 DU/MAC，原始 PRACH 检测仍留在 PHY/DU。
 

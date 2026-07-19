@@ -1,6 +1,6 @@
 # NTN fork：官方 srsRAN 基线与 Git 提交序列
 
-Last updated: 2026-07-14
+Last updated: 2026-07-19
 
 ## 权威基线
 
@@ -93,6 +93,30 @@ upstream 是真实改进，但不是 NTN 功能。产品代码阶段采用已有
 逐层重放，避免按目录猜测 `cu_cp_impl.cpp`、`f1ap_cu_impl.cpp` 等 mixed
 hub file 的 hunk 归属。
 
+## 当前设计收敛分支
+
+官方差异整理完成后，当前工程在独立分支继续做星载双小区模型收敛：
+
+- branch: `codex/ntn-design-convergence`
+- base: `codex/ntn-upstream-series@96f18a9`
+- personal remote: `origin` → `13730100881bu-bot/SrsRAN_NTN_G1`
+- 当前已推送代码基线: `263db8a`
+
+已经分笔推送的提交为：
+
+| Commit | 作用 |
+|---|---|
+| `7870b4e` | 规划输入绑定 catalog、identity registry 和 access profile |
+| `38b4440` | 双小区 640 ms 接入日历与三阶段资源模型 |
+| `93f1c6f` | DU 静态 SSB/PRACH opportunity 预检 |
+| `8dc2299` | active/pending 计划持久化与重启核对 |
+| `3081409` | 模型收敛与验证证据文档 |
+| `263db8a` | DU 重连后重新核对日历、过期清理和状态观测 |
+
+CUCP-040 在此基础上继续补充：DU 断开后旧软件证据立即失效、旧连接反馈隔离、未来启用时刻前的 fallback、cleanup durable commit，以及状态 schema v2 对最新输入摘要和完整 candidate inventory 的独立保存。该摘要不是原始 JSON 的逐字段副本。代码/测试已作为 `263db8a` 单独推送；说明文档仍作为下一笔提交管理。两笔都使用显式路径暂存，不使用 `git add .`。最终验证结果以 [Task Change Index](ntn_cucp_task_change_index.md) 的 CUCP-040 closeout 为准。
+
+这个分支不会整体合并 `codex/ntn-feature-history` 的 Web/GIS 历史；全球 planner 仍作为独立管理中心输入来源。generated ASN.1、PHY、RU/RF 和 Web/GIS 不属于 CUCP-040 改动范围。
+
 ## 明确排除和修正
 
 以下内容没有进入 official-based 历史：
@@ -126,7 +150,7 @@ hub file 的 hunk 归属。
 access calendar 当前仍是 software intent/gate。它证明计划、反馈和软件侧
 准入闭环，不证明 RF beam steering、真实 PRACH detector 或空口覆盖已经执行。
 
-## 验证
+## official-based 整理阶段验证
 
 本轮整理不改变最终 C++ 业务内容；官方分支代码路径与整理前已验证成果树
 逐 blob 一致。focused validation 记录：

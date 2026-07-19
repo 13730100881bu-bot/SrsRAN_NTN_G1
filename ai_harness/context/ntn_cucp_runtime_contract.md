@@ -18,11 +18,17 @@ is retained before schedule-capacity checks and is never truncated by the
 
 ## versioned_position_plan
 
-One satellite's management-center input: `satellite_id`, catalog/schedule
+One satellite's management-center input. Schema v2 contains an exact-keyed
+planning context (`planning_run_id`, catalog id/hash, identity-registry
+version/hash and access-profile id/hash), `satellite_id`, catalog/schedule
 versions, canonical content hash, validity, activation epoch, exactly two
 explicit stable onboard NCI/PCI identities, and the complete visible L1 list.
-NCI is opaque and is not derived from satellite id, coordinates, position id or
-cell ordinal.
+Each L1 also carries the frozen 7-bit `child_mask`; this stage validates and
+stores it without creating digital-service runtime state. NCI is opaque and is
+not derived from satellite id, coordinates, position id or cell ordinal.
+
+Schema v1 is accepted only for dry-run. DU execution rejects v1 because it is
+not bound to the complete planning context.
 
 ## onboard_cell_position_set
 
@@ -184,7 +190,18 @@ Dry-run mode does not require it. The file is atomically replaced and records:
 - the active and pending plans, including their exact two-cell L1 partition,
   source/calendar hashes, activation epoch and validity;
 - the last known lower-layer software deployment state; and
-- calendar cleanup tasks that still need confirmation.
+- calendar cleanup tasks that still need confirmation; and
+- a read-only summary of the latest successfully parsed management-center
+  input: catalog/schedule version, content hash, activation epoch and the
+  complete candidate inventory. This is not a byte-for-byte copy of the source
+  JSON and is never deployment authority.
+
+State schema v2 adds that received observation. It may describe a rejected
+257-position overflow input whose version is above the accepted high-water; it
+does not become partition, identity, activation or DU-application authority.
+Cleanup and repeated restart must preserve it without truncation. State schema
+v1 remains readable and may reconstruct its observation from the newest stored
+active/pending snapshot. An explicit v2 `received_plan:null` stays empty.
 
 The saved deployment state is history, not live evidence. At restart CU-CP
 rechecks the schema, hashes, planning context, satellite and cell identities,
@@ -198,19 +215,53 @@ that task across later restarts until clear feedback is confirmed. A cleanup
 task is tied to the expired version/hash and must not clear a different active
 fallback plan.
 
+The same rule applies while running: an applied active plan that reaches
+`valid_until` queues its exact version/hash even when a future plan is still
+pending and `not_sent`. An expired plan that was never sent creates no DU clear.
+
+A confirmed clear uses a two-step durable commit: CU-CP first writes the next
+state without the live queue head, and removes that head from memory only after
+the write is durable. A write failure leaves the obligation unchanged and
+blocks further state changes. `committed_not_durable` also remains fail closed
+because a crash may expose either the old or new directory entry.
+This is at-least-once cleanup: after an uncommitted failure the same exact
+version/hash may be retried, so DU clear must be idempotent. The guarantee is no
+silent loss, not exactly-once delivery.
+
+DU application evidence is connection-scoped. Disconnect immediately hides
+the old `active/applied` evidence and moves the affected plan to reconciliation.
+Prepare completions are guarded by DU connection generation and exact plan;
+query and clear also carry request-instance guards. Only a complete response
+from the current live connection for the same two cells and version/hash can
+restore evidence. Responses from an older connection are ignored.
+
+An early `applied` result for a future plan does not cross its
+`activation_epoch` and does not clear the historical active fallback. The
+fallback survives repeated disconnects before that epoch. If the update expires
+or fails, the fallback itself must be reconciled with the live DU before it is
+shown as active again.
+
+If that hidden fallback reaches its own `valid_until` before the future plan is
+decided, its calendar validity already prevents further authorization, but the
+explicit clear can be delayed until the future plan activates or fails. Queuing
+that clear exactly at the fallback deadline is a remaining lifecycle hardening
+item; this limitation must not be described as RF or device cleanup evidence.
+
 The read-only `ntn_state` view exposes whether a state file is configured and
 required, its schema/generation/hash, the last save result and error, whether
 writes are blocked, the catalog/schedule high-water marks, and recovery
-stage/detail. These fields describe CU-CP storage and DU software reconciliation;
-they are not RF telemetry. With the onboard NTN profile disabled, none of this
-changes the terrestrial path.
+stage/detail. It also exposes the active calendar hash and cleanup queue head
+version/hash/reason. These fields describe CU-CP storage and DU software
+reconciliation; they are not RF telemetry. With the onboard NTN profile
+disabled, none of this changes the terrestrial path.
 
 This file is a recovery aid, not a trust anchor. Its own high-water marks live
 inside the same file, so replacing the entire file with an older valid copy or
 deleting it cannot yet be distinguished from an earlier state or first boot. A
-separate trusted monotonic anchor is needed for that protection. Recovery
-queries also do not yet bind the DU connection generation, so feedback crossing
-a disconnect/reconnect boundary needs an additional freshness guard.
+separate trusted monotonic anchor is needed for that protection. CU-CP now binds
+calendar feedback to its local DU connection generation and request instance,
+but that local freshness guard is not sender authentication or transport-level
+anti-replay.
 
 ## initial_access_plan_audit
 

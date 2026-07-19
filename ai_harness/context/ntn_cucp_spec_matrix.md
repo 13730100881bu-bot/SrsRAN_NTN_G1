@@ -1,10 +1,18 @@
 # NTN CU-CP Spec Matrix
 
-## Accepted CU-CP NTN schema
+## Accepted CU-CP NTN schemas
 
-The accepted CU-CP-facing NTN configuration path remains:
+The legacy beam-table, UE policy and mobility path remains:
 
 - `mobility_config.ntn_location_mobility`
+
+The separately opt-in onboard two-cell plan path is:
+
+- `ntn_onboard_position_plan`
+
+The second path does not replace or reinterpret legacy beam IDs. In execution
+mode, the two profiles must not both become identity authority for the same
+cells; dry-run coexistence remains observation-only.
 
 The accepted satellite state source values remain:
 
@@ -12,8 +20,8 @@ The accepted satellite state source values remain:
 - `circular_orbit`
 - `tle`
 
-Future tasks must reuse this schema. Do not introduce a parallel `cu_cp.ntn`
-schema unless a human-approved task explicitly requests a migration.
+Future tasks must reuse these schemas. Do not introduce another parallel
+`cu_cp.ntn` schema unless a human-approved task explicitly requests a migration.
 
 ## Feature classification
 
@@ -59,15 +67,36 @@ schema unless a human-approved task explicitly requests a migration.
 | O-DU / flexible_o_du | Out of scope | No | Do not modify. |
 | GIS site behavior | Out of scope | No | Do not modify. |
 
-## Default CU-CP NTN policy
+## Separate CU-CP NTN policy profiles
+
+The two profiles below coexist for compatibility but are not one resource
+model. Future work must not feed legacy beam-table IDs or limits into the
+onboard position-plan identity/calendar path.
+
+### Legacy beam-table profile
 
 - Configuration root: `mobility_config.ntn_location_mobility`.
 - New access and HO admission elevation: `50 deg`.
 - Loaded service beam limit: `max_nof_loaded_service_beams = 0` means no CU-CP cap.
-- Default LEO beam hierarchy: `843` digital service beams, `137` analog access beams, `109` full clusters and `28` edge partial clusters.
-- Default example active windows: `max_nof_active_analog_access_beams = 16`, `max_nof_loaded_digital_service_beams = 64`.
+- Legacy LEO hierarchy: `843` digital service beams, `137` analog access beams,
+  `109` full clusters and `28` edge partial clusters.
+- Legacy example active windows: `max_nof_active_analog_access_beams = 16`,
+  `max_nof_loaded_digital_service_beams = 64`.
 - Stale ephemeris: stop new access, keep existing UEs in draining when possible.
 - NGAP reporting: AMF control enabled, local forwarding disabled by default.
+
+### Onboard position-plan profile
+
+- Configuration root: `ntn_onboard_position_plan`; feature and DU execution are
+  independently opt-in and default disabled.
+- Each satellite has two stable opaque NCI/PCI identities. NCI is never derived
+  from satellite, position or legacy beam IDs.
+- Each cell has `16 analog / 64 digital` resources; the satellite has `32/128`.
+  Resources are not borrowed across the two cells in this profile.
+- The configurable software-calendar envelope is 128 L1 per cell and 256 L1
+  per satellite. Complete candidate inventory is never clipped to that limit.
+- `applied` is matching CU/DU/MAC software-gate evidence, not PHY, RU or RF
+  execution evidence.
 
 ## General rule
 

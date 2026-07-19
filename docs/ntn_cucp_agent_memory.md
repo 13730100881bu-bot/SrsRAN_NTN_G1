@@ -1,6 +1,6 @@
 # NTN CU-CP Agent Memory
 
-Last updated: 2026-07-18
+Last updated: 2026-07-19
 
 This file is the compact handoff memory for future conversations. It keeps the
 durable NTN CU-CP design context without pulling in the old project-management
@@ -54,14 +54,15 @@ Use a staged validation ladder:
 ### Deployment Profile
 
 - The product target is an onboard regenerative gNB: CU-CP is deployed on each
-  satellite. The current working implementation remains a single-satellite
-  LEO/NGSO control-plane prototype; do not describe the multi-satellite target
-  as runtime-complete.
-- The current runtime example remains 500 km, 50 degree minimum elevation, and
+  satellite. The legacy beam-table path remains a single-satellite LEO/NGSO
+  control-plane prototype; do not describe the multi-satellite target as
+  runtime-complete.
+- The legacy runtime example uses 500 km, 50 degree minimum elevation and a
   15 km digital service radius. Do not confuse it with the global planning seed.
-- Current deployment profile name: `leo_ngso`.
-- The current prototype uses 843 digital service beams, 137 analog access
-  beams, 16 active analog beams, and 256 loaded digital beams.
+- Legacy deployment profile name: `leo_ngso`.
+- The legacy beam-table prototype uses 843 digital service beams, 137 analog
+  access beams, 16 active analog beams and 256 loaded digital beams. These are
+  not the onboard position-plan profile's `2 cells × 16/64` resource limits.
 - The next-stage target covers global land from 57 degrees south to 57 degrees
   north. It starts the search from `Walker Delta 60°:3528/42/0` at 500 km, but
   this is a seed, not a selected or accepted constellation. `selectedScenario`
@@ -195,13 +196,48 @@ Use a staged validation ladder:
   so the terrestrial path does not load, save, query, or clear this NTN state.
   Here `applied` means only that the matching SSB/PRACH software gate was found;
   it is not antenna, beam steering, PHY, RU, or RF evidence.
-- Two recovery protections remain follow-up work. Because the version
-  high-water marks and snapshots are kept in the same file, replacing or
-  deleting that whole file cannot be detected without a separate trusted
-  monotonic anchor. DU reconnects also do not yet carry a connection generation
-  into the recovery query, so stale feedback across a disconnect needs an
-  additional binding before this can be called replay-safe.
-- In the current runtime prototype, analog access beams are access groups over
+- CUCP-040 closes the CU-CP side of the DU reconnect gap for onboard calendars.
+  Prepare completions are bound to the DU connection generation and exact plan;
+  query and clear also use an exact request-instance guard. Disconnect
+  immediately hides previous application evidence, persists a recovery candidate and retries only after a
+  matching two-cell NCI/PCI mapping is available on a live connection. A future
+  pending plan remains behind its `activation_epoch`: `ready` is polled without
+  clearing the current plan. Even an early `applied` response keeps the new plan
+  hidden as pending and does not clear the historical fallback; promotion still
+  waits for the epoch. If that pending plan expires before a delayed timer can
+  activate it, the historical fallback returns to live-DU reconciliation and
+  the expired plan is cleaned separately. Cleanup queue head
+  version/hash/reason and the active calendar hash are visible in `ntn_state`.
+  Expired `not_sent` plans create no cleanup. An applied active plan queues its
+  exact version/hash for cleanup at expiry even when a future plan is still
+  pending and `not_sent`. A confirmed cleanup is removed
+  from the live queue only after a durable state write; write failure leaves it
+  unchanged in fail-closed memory, while a durably removed cleanup is not sent
+  again after restart. If the file replacement succeeds but directory durability
+  cannot be confirmed (`committed_not_durable`), CU-CP remains blocked because a
+  crash may expose either the old or the new cleanup record.
+  State schema v2 also stores a separate read-only summary of the latest
+  successfully parsed management-center input: catalog/schedule version,
+  content hash, activation epoch and the complete candidate inventory. It is
+  not a byte-for-byte source-JSON copy. This preserves all 257 entries of a
+  rejected overflow plan across cleanup and repeated restart without advancing the accepted-version
+  high-water mark or making that input deployable. Schema v1 remains readable;
+  only v1 may reconstruct this observation from its latest active/pending
+  snapshot, while an explicit v2 `received_plan:null` remains empty.
+- Remaining recovery protections are narrower. Because version high-water marks
+  and snapshots are kept in the same file, replacing or deleting the whole file
+  cannot be detected without a separate trusted monotonic anchor. F1AP DU stop
+  still lacks explicit cancellation of every common transaction; CU-CP now
+  ignores any late calendar completion from that old connection, but lifecycle
+  cancellation and noisy teardown logs should still be hardened separately.
+  `state_store_error` is also a detailed diagnostic string and can include the
+  configured state path; a future OAM hardening pass should expose a stable
+  machine code while leaving path details only in logs.
+- A future early-applied plan can hide the historical fallback until its own
+  activation/failure decision. If that fallback expires first, its validity
+  gate prevents further use, but the explicit clear is currently delayed until
+  that decision; exact-deadline cleanup is a remaining lifecycle hardening item.
+- In the legacy beam-table prototype, analog access beams are access groups over
   digital beams:
   - RRC setup/reestablishment gate
   - pre-service relocation
