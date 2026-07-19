@@ -587,10 +587,22 @@ TEST(ntn_onboard_position_plan, rejects_satellite_hash_version_validity_activati
 
   ntn_onboard_position_plan_controller version_controller(make_config());
   ASSERT_TRUE(version_controller.submit(make_plan(4, 2, 1280, 2), at_ms(1280)).accepted);
-  ntn_versioned_position_plan old_version = make_plan(4, 2, 2560, 1);
+  ntn_versioned_position_plan old_version = make_plan(3, 1, 2560, 1);
   const auto version_result = version_controller.submit(old_version, at_ms(1920));
   EXPECT_FALSE(version_result.accepted);
   EXPECT_EQ(version_result.reason, ntn_position_plan_reject_reason::non_monotonic_version);
+  // candidate_inventory is the complete most recently received management input, even when that input is rejected.
+  // The accepted/active plan is reported separately and must not be changed by the replay.
+  EXPECT_EQ(version_controller.last_received_schedule_version(), 1U);
+  EXPECT_EQ(version_controller.candidate_inventory().size(), 3U);
+  EXPECT_EQ(version_controller.highest_schedule_version_seen(), 2U);
+  ASSERT_TRUE(version_controller.active_plan().has_value());
+  EXPECT_EQ(version_controller.active_plan()->source.schedule_version, 2U);
+  EXPECT_EQ(version_controller.active_plan()->source.visible_l1_positions.size(), 4U);
+  const ntn_onboard_position_plan_persistent_state replay_state = version_controller.make_persistent_state(2);
+  ASSERT_TRUE(replay_state.received_plan.has_value());
+  EXPECT_EQ(replay_state.received_plan->schedule_version, 1U);
+  EXPECT_EQ(replay_state.received_plan->candidate_inventory.size(), 3U);
 }
 
 TEST(ntn_onboard_position_plan, rejects_identity_change_without_changing_active_cell_identity)
@@ -954,6 +966,72 @@ TEST(ntn_onboard_position_plan, expired_early_applied_update_falls_back_to_live_
   EXPECT_EQ(restarted.highest_schedule_version_seen(), 2U);
   EXPECT_EQ(restarted.candidate_inventory().size(), 6U);
   EXPECT_EQ(restarted.last_received_schedule_version(), 2U);
+}
+
+TEST(ntn_onboard_position_plan, replacement_failure_reconciles_historical_plan_hidden_by_early_applied_update)
+{
+  ntn_onboard_position_plan_config config = make_config();
+  config.require_external_apply           = true;
+  ntn_onboard_position_plan_controller controller(config);
+
+  ASSERT_TRUE(controller.submit(make_plan(4, 1, 1280), at_ms(640)).accepted);
+  const std::string active_hash = controller.pending_plan()->calendar_hash;
+  ASSERT_TRUE(controller.mark_deployment_preparing(1, active_hash));
+  ASSERT_TRUE(controller.mark_deployment_applied(1, active_hash));
+  ASSERT_TRUE(controller.advance_time(at_ms(1280)));
+
+  ASSERT_TRUE(controller.submit(make_plan(6, 2, 3200, 2), at_ms(1920)).accepted);
+  const std::string early_hash = controller.pending_plan()->calendar_hash;
+  ASSERT_TRUE(controller.mark_deployment_preparing(2, early_hash));
+  ASSERT_TRUE(controller.mark_deployment_applied(2, early_hash));
+  ASSERT_TRUE(controller.require_du_reconciliation_after_connection_loss({}));
+  ASSERT_TRUE(controller.confirm_recovery_applied(2, early_hash, at_ms(2000)));
+  ASSERT_TRUE(controller.recovery_fallback_plan().has_value());
+  EXPECT_EQ(controller.recovery_fallback_plan()->source.schedule_version, 1U);
+
+  ASSERT_TRUE(controller.submit(make_plan(8, 3, 3840, 3), at_ms(2100)).accepted);
+  ASSERT_TRUE(controller.pending_plan().has_value());
+  const std::string replacement_hash = controller.pending_plan()->calendar_hash;
+  EXPECT_EQ(controller.pending_plan()->source.schedule_version, 3U);
+  EXPECT_EQ(controller.candidate_inventory().size(), 8U);
+
+  ASSERT_TRUE(controller.reject_pending_deployment(3,
+                                                    replacement_hash,
+                                                    ntn_position_plan_reject_reason::du_prepare_rejected,
+                                                    "replacement_prepare_failed"));
+  EXPECT_FALSE(controller.active_plan().has_value());
+  EXPECT_FALSE(controller.pending_plan().has_value());
+  ASSERT_TRUE(controller.recovery_plan().has_value());
+  EXPECT_EQ(controller.recovery_plan()->source.schedule_version, 1U);
+  EXPECT_EQ(controller.recovery_stage(), ntn_position_plan_recovery_stage::reconciling);
+  EXPECT_EQ(controller.deployment_stage(), ntn_position_plan_deployment_stage::preparing);
+  EXPECT_EQ(controller.last_rejection_reason(), ntn_position_plan_reject_reason::du_prepare_rejected);
+  EXPECT_EQ(controller.last_rejected_schedule_version(), 3U);
+  EXPECT_EQ(controller.highest_schedule_version_seen(), 3U);
+  EXPECT_EQ(controller.candidate_inventory().size(), 8U);
+
+  const ntn_onboard_position_plan_persistent_state fallback_state = controller.make_persistent_state(6);
+  ASSERT_TRUE(fallback_state.active.has_value());
+  EXPECT_EQ(fallback_state.active->source.schedule_version, 1U);
+  EXPECT_FALSE(fallback_state.pending.has_value());
+  ASSERT_TRUE(fallback_state.received_plan.has_value());
+  EXPECT_EQ(fallback_state.received_plan->schedule_version, 3U);
+  EXPECT_EQ(fallback_state.received_plan->candidate_inventory.size(), 8U);
+  EXPECT_EQ(fallback_state.recorded_deployment_stage, ntn_position_plan_deployment_stage::preparing);
+  EXPECT_EQ(fallback_state.recorded_deployment_schedule_version, 1U);
+  EXPECT_EQ(fallback_state.recorded_deployment_calendar_hash, active_hash);
+
+  ntn_onboard_position_plan_controller restarted(config);
+  ASSERT_TRUE(restarted.restore_persistent_state(fallback_state, at_ms(2200)).has_value());
+  ASSERT_TRUE(restarted.recovery_plan().has_value());
+  EXPECT_EQ(restarted.recovery_plan()->source.schedule_version, 1U);
+  EXPECT_EQ(restarted.highest_schedule_version_seen(), 3U);
+  EXPECT_EQ(restarted.candidate_inventory().size(), 8U);
+  ASSERT_TRUE(restarted.confirm_recovery_applied(1, active_hash, at_ms(2200)));
+  ASSERT_TRUE(restarted.active_plan().has_value());
+  EXPECT_EQ(restarted.active_plan()->source.schedule_version, 1U);
+  EXPECT_TRUE(restarted.active_has_external_apply_evidence());
+  EXPECT_FALSE(restarted.recovery_plan().has_value());
 }
 
 TEST(ntn_onboard_position_plan, deployment_rejection_removes_only_matching_pending_and_preserves_old_active)

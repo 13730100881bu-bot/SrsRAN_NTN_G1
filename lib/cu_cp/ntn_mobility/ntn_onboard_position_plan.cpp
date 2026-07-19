@@ -2026,11 +2026,31 @@ bool ntn_onboard_position_plan_controller::reject_pending_deployment(
       normalize_hash(pending->calendar_hash) != normalize_hash(calendar_hash)) {
     return false;
   }
+  const std::string failure_detail = detail.empty() ? to_string(reason) : detail;
   pending.reset();
+  if (recovery_fallback_active.has_value()) {
+    // A newer plan can supersede an early-applied future update while the historical active plan is intentionally
+    // hidden. If that newer deployment fails, return to live-DU reconciliation of the historical plan instead of
+    // losing the only safe fallback until the next process restart.
+    recovery_candidate            = std::move(recovery_fallback_active);
+    recovery_fallback_active.reset();
+    recovery_candidate_was_active = true;
+    deferred_pending.reset();
+    active.reset();
+    active_external_apply_evidence = false;
+    deployment                     = ntn_position_plan_deployment_stage::preparing;
+    deployment_reason              = "historical_active_fallback_requires_du_reconciliation";
+    recovery                       = ntn_position_plan_recovery_stage::reconciling;
+    recovery_reason = fmt::format("pending_deployment_failed_querying_historical_active_fallback:{}", failure_detail);
+    last_recovery_schedule_version = recovery_candidate->source.schedule_version;
+    reject(reason, schedule_version);
+    current_stage = ntn_position_plan_stage::pending;
+    return true;
+  }
   deployment = reason == ntn_position_plan_reject_reason::execution_unsupported
                    ? ntn_position_plan_deployment_stage::unsupported
                    : ntn_position_plan_deployment_stage::rejected;
-  deployment_reason = detail.empty() ? to_string(reason) : std::move(detail);
+  deployment_reason = std::move(failure_detail);
   reject(reason, schedule_version);
   return true;
 }
