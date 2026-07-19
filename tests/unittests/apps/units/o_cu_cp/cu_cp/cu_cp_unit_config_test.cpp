@@ -1480,7 +1480,7 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_versioned_onboard_position_plan
   plan.identity_authority       = "onboard_position_plan";
   plan.state_file_configured                         = true;
   plan.state_file_required                           = true;
-  plan.state_schema_version                          = 1;
+  plan.state_schema_version                          = 2;
   plan.state_generation                              = 17;
   plan.state_hash                                    = "sha256:state";
   plan.state_store_status                            = "stored";
@@ -1500,6 +1500,7 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_versioned_onboard_position_plan
   plan.active_catalog_version   = 10;
   plan.active_schedule_version  = 20;
   plan.active_content_hash      = "sha256:active";
+  plan.active_calendar_hash     = "sha256:active-calendar";
   plan.active_activation_epoch_unix_ms = 320000;
   plan.pending_catalog_version  = 11;
   plan.pending_schedule_version = 21;
@@ -1521,6 +1522,11 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_versioned_onboard_position_plan
   plan.max_prach_interval_ms    = 640;
   plan.last_rejection           = "schedule_overflow";
   plan.last_rejected_schedule_version = 22;
+  plan.clear_queue_depth                  = 2;
+  plan.clear_in_flight                    = true;
+  plan.clear_queue_head_schedule_version = 18;
+  plan.clear_queue_head_calendar_hash     = "sha256:clear-calendar";
+  plan.clear_queue_head_reason            = "expired_deployment_recovered_after_restart";
   plan.cells[0] = {nr_cell_identity::create(0x123450001ULL).value(), 101, 128, 128, 128, 16, 16, 64};
   plan.cells[1] = {nr_cell_identity::create(0x123450002ULL).value(), 202, 128, 128, 128, 16, 16, 64};
   plan.static_preflight_schedule_version             = 21;
@@ -1547,7 +1553,7 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_versioned_onboard_position_plan
                         "access_profile_id=ntn-access-16a-64d-v1 access_profile_hash=sha256:profile "
                         "identity_authority=onboard_position_plan"),
             std::string::npos);
-  EXPECT_NE(output.find("NTN onboard state store: file_configured=yes file_required=yes schema_version=1 "
+  EXPECT_NE(output.find("NTN onboard state store: file_configured=yes file_required=yes schema_version=2 "
                         "generation=17 state_hash=sha256:state status=stored error=none write_blocked=no "
                         "last_save_unix_ms=639900"),
             std::string::npos);
@@ -1559,16 +1565,21 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_versioned_onboard_position_plan
                         "content_hash=sha256:rejected candidate_l1=256 activation_epoch_unix_ms=960000"),
             std::string::npos);
   EXPECT_NE(output.find("NTN onboard position plan active: catalog_version=10 schedule_version=20 "
-                        "content_hash=sha256:active activation_epoch_unix_ms=320000"),
+                        "content_hash=sha256:active calendar_hash=sha256:active-calendar "
+                        "activation_epoch_unix_ms=320000"),
             std::string::npos);
   EXPECT_NE(output.find("NTN onboard position plan pending: catalog_version=11 schedule_version=21 "
                         "content_hash=sha256:pending calendar_hash=sha256:calendar activation_epoch_unix_ms=640000"),
             std::string::npos);
   EXPECT_NE(output.find("NTN access calendar intent: schedule_version=21 intents=2560 ssb=2048 prach_ro=256 "
                         "prach_ul_beam=256 max_ssb_interval_ms=80 "
-                        "max_prach_interval_ms=640 "
-                        "prach_ro_without_beam=0 resource_conflicts=0 deployment_detail=du_ready "
-                        "evidence=intent_or_control_plane_only clear_queue=0 clear_in_flight=no"),
+                         "max_prach_interval_ms=640 "
+                         "prach_ro_without_beam=0 resource_conflicts=0 deployment_detail=du_ready "
+                         "evidence=intent_or_control_plane_only"),
+            std::string::npos);
+  EXPECT_NE(output.find("NTN calendar clear queue: depth=2 in_flight=yes head_schedule_version=18 "
+                        "head_calendar_hash=sha256:clear-calendar "
+                        "head_reason=expired_deployment_recovered_after_restart"),
             std::string::npos);
   EXPECT_NE(output.find("NTN static opportunity preflight: schedule_version=21 nci=0x123450001 pci=101 "
                         "performed=yes passed=yes numerology=1 ssb=1024/1024 prach=128/128 "
@@ -1596,6 +1607,12 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_disabled_onboard_state_defaults
   EXPECT_NE(output.find("NTN onboard recovery: stage=disabled detail=state_recovery_disabled schedule_version=0 "
                         "catalog_version_high_water=0 schedule_version_high_water=0 "
                         "evidence=persisted_state_is_not_du_or_rf_evidence"),
+            std::string::npos);
+  EXPECT_NE(output.find("NTN onboard position plan active: catalog_version=0 schedule_version=0 content_hash=none "
+                        "calendar_hash=none activation_epoch_unix_ms=-1"),
+            std::string::npos);
+  EXPECT_NE(output.find("NTN calendar clear queue: depth=0 in_flight=no head_schedule_version=0 "
+                        "head_calendar_hash=none head_reason=none"),
             std::string::npos);
 }
 

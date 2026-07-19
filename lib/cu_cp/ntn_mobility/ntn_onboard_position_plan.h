@@ -356,7 +356,12 @@ public:
   /// Produces a persistence snapshot. The returned deployment state is historical and must be reconciled on load.
   ntn_onboard_position_plan_persistent_state make_persistent_state(uint64_t generation) const;
 
-  /// Confirms a restart recovery candidate only after a matching, complete DU applied query response.
+  /// Hides any plan whose DU application evidence belonged to a lost connection. The plan and its version high-water
+  /// are retained as a recovery candidate until a matching query succeeds on a live DU connection.
+  bool require_du_reconciliation_after_connection_loss(std::string detail);
+
+  /// Confirms a recovery candidate only after a matching, complete DU applied query response. A future pending plan
+  /// remains pending until activation_epoch and cannot trigger early cleanup of its historical fallback.
   bool confirm_recovery_applied(uint64_t                              schedule_version,
                                 const std::string&                    calendar_hash,
                                 std::chrono::system_clock::time_point now);

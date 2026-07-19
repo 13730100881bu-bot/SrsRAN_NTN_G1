@@ -76,6 +76,33 @@ expected<uint64_t, std::string> parse_uint64(const json& value, const std::strin
   return value.get<uint64_t>();
 }
 
+expected<int64_t, std::string> parse_int64(const json& value, const std::string& context)
+{
+  if (value.is_number_unsigned()) {
+    const uint64_t parsed = value.get<uint64_t>();
+    if (parsed > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+      return make_unexpected(fmt::format("{} exceeds signed 64-bit range", context));
+    }
+    return static_cast<int64_t>(parsed);
+  }
+  if (!value.is_number_integer()) {
+    return make_unexpected(fmt::format("{} must be an integer", context));
+  }
+  return value.get<int64_t>();
+}
+
+expected<double, std::string> parse_finite_number(const json& value, const std::string& context)
+{
+  if (!value.is_number()) {
+    return make_unexpected(fmt::format("{} must be a number", context));
+  }
+  const double parsed = value.get<double>();
+  if (!std::isfinite(parsed)) {
+    return make_unexpected(fmt::format("{} must be finite", context));
+  }
+  return parsed;
+}
+
 expected<std::string, std::string> parse_string(const json& value, const std::string& context)
 {
   if (!value.is_string()) {
@@ -171,6 +198,14 @@ json encode_identity(const ntn_onboard_cell_identity& identity)
   return {{"nci", identity.nci.value()}, {"pci", identity.pci}};
 }
 
+json encode_l1_position(const ntn_l1_position& position)
+{
+  return {{"position_id", position.position_id},
+          {"latitude_deg", position.latitude_deg},
+          {"longitude_deg", position.longitude_deg},
+          {"child_mask", position.child_mask}};
+}
+
 json encode_source_plan(const ntn_versioned_position_plan& plan)
 {
   json root = {
@@ -193,12 +228,22 @@ json encode_source_plan(const ntn_versioned_position_plan& plan)
   }
   root["visible_l1_positions"] = json::array();
   for (const ntn_l1_position& position : plan.visible_l1_positions) {
-    root["visible_l1_positions"].push_back({{"position_id", position.position_id},
-                                            {"latitude_deg", position.latitude_deg},
-                                            {"longitude_deg", position.longitude_deg},
-                                            {"child_mask", position.child_mask}});
+    root["visible_l1_positions"].push_back(encode_l1_position(position));
   }
   return root;
+}
+
+json encode_received_observation(const ntn_onboard_position_plan_received_observation& observation)
+{
+  json result = {{"catalog_version", observation.catalog_version},
+                 {"schedule_version", observation.schedule_version},
+                 {"content_hash", observation.content_hash},
+                 {"activation_epoch_unix_ms", to_unix_milliseconds(observation.activation_epoch)}};
+  result["candidate_inventory"] = json::array();
+  for (const ntn_l1_position& position : observation.candidate_inventory) {
+    result["candidate_inventory"].push_back(encode_l1_position(position));
+  }
+  return result;
 }
 
 json encode_cell_position_set(const ntn_onboard_cell_position_set& assignment)
@@ -258,6 +303,10 @@ json encode_state_payload(const ntn_onboard_position_plan_persistent_state& stat
   }
   payload["active"]             = state.active.has_value() ? encode_snapshot(*state.active) : json(nullptr);
   payload["pending"]            = state.pending.has_value() ? encode_snapshot(*state.pending) : json(nullptr);
+  if (state.schema_version >= 2) {
+    payload["received_plan"] =
+        state.received_plan.has_value() ? encode_received_observation(*state.received_plan) : json(nullptr);
+  }
   payload["outstanding_clears"] = json::array();
   for (const ntn_onboard_position_plan_clear_obligation& obligation : state.outstanding_clears) {
     payload["outstanding_clears"].push_back(encode_clear_obligation(obligation));
@@ -351,6 +400,93 @@ expected<std::array<ntn_onboard_cell_position_set, 2>, std::string> decode_parti
   return result;
 }
 
+expected<ntn_l1_position, std::string> decode_l1_position(const json& value, const std::string& context)
+{
+  if (auto error = validate_exact_object_keys(
+          value, context.c_str(), {"position_id", "latitude_deg", "longitude_deg", "child_mask"});
+      error.has_value()) {
+    return make_unexpected(std::move(*error));
+  }
+  auto position_id = parse_string(value.at("position_id"), fmt::format("{}.position_id", context));
+  auto latitude    = parse_finite_number(value.at("latitude_deg"), fmt::format("{}.latitude_deg", context));
+  auto longitude   = parse_finite_number(value.at("longitude_deg"), fmt::format("{}.longitude_deg", context));
+  auto child_mask  = parse_uint64(value.at("child_mask"), fmt::format("{}.child_mask", context));
+  if (!position_id.has_value()) {
+    return make_unexpected(position_id.error());
+  }
+  if (!latitude.has_value()) {
+    return make_unexpected(latitude.error());
+  }
+  if (!longitude.has_value()) {
+    return make_unexpected(longitude.error());
+  }
+  if (!child_mask.has_value()) {
+    return make_unexpected(child_mask.error());
+  }
+  if (child_mask.value() > std::numeric_limits<uint8_t>::max()) {
+    return make_unexpected(fmt::format("{}.child_mask exceeds uint8 range", context));
+  }
+  return ntn_l1_position{std::move(position_id.value()),
+                         latitude.value(),
+                         longitude.value(),
+                         static_cast<uint8_t>(child_mask.value())};
+}
+
+expected<ntn_onboard_position_plan_received_observation, std::string>
+decode_received_observation(const json& value)
+{
+  if (auto error = validate_exact_object_keys(value,
+                                              "received_plan",
+                                              {"catalog_version",
+                                               "schedule_version",
+                                               "content_hash",
+                                               "activation_epoch_unix_ms",
+                                               "candidate_inventory"});
+      error.has_value()) {
+    return make_unexpected(std::move(*error));
+  }
+  auto catalog_version  = parse_uint64(value.at("catalog_version"), "received_plan.catalog_version");
+  auto schedule_version = parse_uint64(value.at("schedule_version"), "received_plan.schedule_version");
+  auto content_hash     = parse_string(value.at("content_hash"), "received_plan.content_hash");
+  auto activation_ms    = parse_int64(value.at("activation_epoch_unix_ms"),
+                                   "received_plan.activation_epoch_unix_ms");
+  if (!catalog_version.has_value()) {
+    return make_unexpected(catalog_version.error());
+  }
+  if (!schedule_version.has_value()) {
+    return make_unexpected(schedule_version.error());
+  }
+  if (!content_hash.has_value()) {
+    return make_unexpected(content_hash.error());
+  }
+  if (!activation_ms.has_value()) {
+    return make_unexpected(activation_ms.error());
+  }
+  const json& inventory = value.at("candidate_inventory");
+  if (!inventory.is_array()) {
+    return make_unexpected(std::string{"received_plan.candidate_inventory must be an array"});
+  }
+  if (inventory.size() > max_ntn_onboard_position_plan_observed_positions) {
+    return make_unexpected(std::string{"received_plan.candidate_inventory is too large"});
+  }
+
+  ntn_onboard_position_plan_received_observation result;
+  result.catalog_version  = catalog_version.value();
+  result.schedule_version = schedule_version.value();
+  result.content_hash     = std::move(content_hash.value());
+  result.activation_epoch =
+      std::chrono::system_clock::time_point{std::chrono::milliseconds{activation_ms.value()}};
+  result.candidate_inventory.reserve(inventory.size());
+  for (size_t i = 0; i != inventory.size(); ++i) {
+    auto position = decode_l1_position(inventory[i], fmt::format("received_plan.candidate_inventory[{}]", i));
+    if (!position.has_value()) {
+      return make_unexpected(position.error());
+    }
+    result.candidate_inventory.push_back(std::move(position.value()));
+  }
+  return result;
+}
+
 expected<ntn_onboard_position_plan_state_snapshot, std::string> decode_snapshot(const json&        value,
                                                                                 const std::string& context)
 {
@@ -415,35 +551,61 @@ expected<ntn_position_plan_deployment_stage, std::string> parse_deployment_stage
 
 expected<ntn_onboard_position_plan_persistent_state, std::string> decode_state(const json& root)
 {
-  if (auto error = validate_exact_object_keys(root,
-                                              "root",
-                                              {"state_schema_version",
-                                               "generation",
-                                               "state_hash",
-                                               "satellite_id",
-                                               "planning_context",
-                                               "onboard_cells",
-                                               "high_water",
-                                               "active",
-                                               "pending",
-                                               "sticky_partition",
-                                               "outstanding_clears",
-                                               "deployment"});
-      error.has_value()) {
-    return make_unexpected(std::move(*error));
+  if (!root.is_object()) {
+    return make_unexpected(std::string{"root must be an object"});
   }
-
-  ntn_onboard_position_plan_persistent_state result;
-  auto schema       = parse_uint64(root.at("state_schema_version"), "state_schema_version");
-  auto generation   = parse_uint64(root.at("generation"), "generation");
-  auto state_hash   = parse_string(root.at("state_hash"), "state_hash");
-  auto satellite_id = parse_string(root.at("satellite_id"), "satellite_id");
+  if (!root.contains("state_schema_version")) {
+    return make_unexpected(std::string{"missing field 'root.state_schema_version'"});
+  }
+  auto schema = parse_uint64(root.at("state_schema_version"), "state_schema_version");
   if (!schema.has_value()) {
     return make_unexpected(schema.error());
   }
   if (schema.value() > std::numeric_limits<unsigned>::max()) {
     return make_unexpected(std::string{"state_schema_version exceeds unsigned range"});
   }
+  if (schema.value() != 1 && schema.value() != ntn_onboard_position_plan_persistent_state::current_schema_version) {
+    return make_unexpected(fmt::format("unsupported_state_schema_version_{}", schema.value()));
+  }
+  const auto exact_key_error =
+      schema.value() == 1
+          ? validate_exact_object_keys(root,
+                                       "root",
+                                       {"state_schema_version",
+                                        "generation",
+                                        "state_hash",
+                                        "satellite_id",
+                                        "planning_context",
+                                        "onboard_cells",
+                                        "high_water",
+                                        "active",
+                                        "pending",
+                                        "sticky_partition",
+                                        "outstanding_clears",
+                                        "deployment"})
+          : validate_exact_object_keys(root,
+                                       "root",
+                                       {"state_schema_version",
+                                        "generation",
+                                        "state_hash",
+                                        "satellite_id",
+                                        "planning_context",
+                                        "onboard_cells",
+                                        "high_water",
+                                        "active",
+                                        "pending",
+                                        "received_plan",
+                                        "sticky_partition",
+                                        "outstanding_clears",
+                                        "deployment"});
+  if (exact_key_error.has_value()) {
+    return make_unexpected(std::move(*exact_key_error));
+  }
+
+  ntn_onboard_position_plan_persistent_state result;
+  auto generation   = parse_uint64(root.at("generation"), "generation");
+  auto state_hash   = parse_string(root.at("state_hash"), "state_hash");
+  auto satellite_id = parse_string(root.at("satellite_id"), "satellite_id");
   if (!generation.has_value()) {
     return make_unexpected(generation.error());
   }
@@ -523,6 +685,13 @@ expected<ntn_onboard_position_plan_persistent_state, std::string> decode_state(c
       return make_unexpected(pending.error());
     }
     result.pending = std::move(pending.value());
+  }
+  if (result.schema_version >= 2 && !root.at("received_plan").is_null()) {
+    auto received_plan = decode_received_observation(root.at("received_plan"));
+    if (!received_plan.has_value()) {
+      return make_unexpected(received_plan.error());
+    }
+    result.received_plan = std::move(received_plan.value());
   }
   auto sticky_partition = decode_partition(root.at("sticky_partition"), "sticky_partition");
   if (!sticky_partition.has_value()) {
@@ -653,8 +822,12 @@ std::optional<std::string> validate_snapshot(const ntn_onboard_position_plan_sta
 
 std::optional<std::string> validate_state(const ntn_onboard_position_plan_persistent_state& state)
 {
-  if (state.schema_version != ntn_onboard_position_plan_persistent_state::current_schema_version) {
+  if (state.schema_version != 1 &&
+      state.schema_version != ntn_onboard_position_plan_persistent_state::current_schema_version) {
     return fmt::format("unsupported_state_schema_version_{}", state.schema_version);
+  }
+  if (state.schema_version == 1 && state.received_plan.has_value()) {
+    return std::string{"received_plan_requires_state_schema_v2"};
   }
   if (state.generation == 0) {
     return std::string{"invalid_state_generation"};
@@ -682,6 +855,21 @@ std::optional<std::string> validate_state(const ntn_onboard_position_plan_persis
   }
   if (state.outstanding_clears.size() > max_ntn_onboard_position_plan_clear_obligations) {
     return std::string{"too_many_outstanding_clears"};
+  }
+  if (state.received_plan.has_value()) {
+    const auto& received = *state.received_plan;
+    if (received.content_hash.size() > max_ntn_onboard_position_plan_state_file_size) {
+      return std::string{"invalid_received_plan_content_hash"};
+    }
+    if (received.candidate_inventory.size() > max_ntn_onboard_position_plan_observed_positions) {
+      return std::string{"received_plan_candidate_inventory_too_large"};
+    }
+    for (const ntn_l1_position& position : received.candidate_inventory) {
+      if (position.position_id.size() > max_ntn_onboard_position_plan_state_file_size ||
+          !std::isfinite(position.latitude_deg) || !std::isfinite(position.longitude_deg)) {
+        return std::string{"invalid_received_plan_candidate_inventory"};
+      }
+    }
   }
 
   if (state.active.has_value()) {

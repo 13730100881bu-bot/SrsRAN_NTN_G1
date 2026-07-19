@@ -132,6 +132,7 @@ static void record_ntn_calendar_prepare(const f1ap_message&      request,
 static f1ap_message
 make_gnb_du_resource_coordination_response(const f1ap_message&      request,
                                            bool                     ntn_calendar_query_stays_ready,
+                                           bool                     ntn_calendar_query_reports_applied_early,
                                            bool                     ntn_calendar_query_reports_zero_intents,
                                            bool                     ntn_calendar_prepare_rejects,
                                            bool                     ntn_calendar_prepare_reports_ready,
@@ -182,7 +183,9 @@ make_gnb_du_resource_coordination_response(const f1ap_message&      request,
                            : ntn_calendar_prepare_reports_ready ? f1ap_ntn_access_calendar_result_status::ready
                                                                 : f1ap_ntn_access_calendar_result_status::preparing)
                     : calendar_update->operation == f1ap_ntn_access_calendar_operation::query
-                        ? (!ntn_calendar_query_stays_ready && now_unix_ms >= calendar_update->activation_epoch_unix_ms
+                        ? (!ntn_calendar_query_stays_ready &&
+                                   (ntn_calendar_query_reports_applied_early ||
+                                    now_unix_ms >= calendar_update->activation_epoch_unix_ms)
                                ? f1ap_ntn_access_calendar_result_status::applied
                                : f1ap_ntn_access_calendar_result_status::ready)
                         : f1ap_ntn_access_calendar_result_status::cleared;
@@ -519,6 +522,7 @@ bool cu_cp_test_environment::wait_for_f1ap_tx_pdu(unsigned du_idx, f1ap_message&
         dus[du_idx]->push_ul_pdu(
             make_gnb_du_resource_coordination_response(pdu,
                                                        params.ntn_calendar_query_stays_ready,
+                                                       params.ntn_calendar_query_reports_applied_early,
                                                        params.ntn_calendar_query_reports_zero_intents,
                                                        params.ntn_calendar_prepare_rejects,
                                                        params.ntn_calendar_prepare_reports_ready,
@@ -560,6 +564,7 @@ void cu_cp_test_environment::respond_to_f1ap_resource_coordination_request(unsig
                             "Expected GNB-DU Resource Coordination Request");
   dus[du_idx]->push_ul_pdu(make_gnb_du_resource_coordination_response(request,
                                                                       params.ntn_calendar_query_stays_ready,
+                                                                      params.ntn_calendar_query_reports_applied_early,
                                                                       params.ntn_calendar_query_reports_zero_intents,
                                                                       params.ntn_calendar_prepare_rejects,
                                                                       params.ntn_calendar_prepare_reports_ready,
@@ -588,6 +593,7 @@ void cu_cp_test_environment::drain_f1ap_resource_coordination_requests(unsigned 
         du_it->second->push_ul_pdu(
             make_gnb_du_resource_coordination_response(f1ap_pdu,
                                                        params.ntn_calendar_query_stays_ready,
+                                                       params.ntn_calendar_query_reports_applied_early,
                                                        params.ntn_calendar_query_reports_zero_intents,
                                                        params.ntn_calendar_prepare_rejects,
                                                        params.ntn_calendar_prepare_reports_ready,

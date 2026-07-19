@@ -67,6 +67,8 @@ struct dummy_cu_cp_measurement_handler : public cu_cp_measurement_handler {
   }
   void handle_measurement_report(const ue_index_t ue_index, const rrc_meas_results& meas_results) override {}
 
+  void handle_ue_capability_update(ue_index_t ue_index) override {}
+
   void handle_ue_location_report(const ntn_ue_location_report& location_report) override {}
 
   void handle_rrc_ue_location_report_outcome(ue_index_t ue_index, ntn_rrc_ue_location_report_outcome outcome) override {}
@@ -91,6 +93,11 @@ struct dummy_cu_cp_rrc_ue_interface : public cu_cp_rrc_ue_interface {
   }
   void             handle_rrc_reestablishment_failure(const cu_cp_ue_context_release_request& request) override {}
   void             handle_rrc_reestablishment_complete(ue_index_t old_ue_index) override {}
+  void             handle_rrc_resume_request(ue_index_t            ue_index,
+                                             ue_index_t            old_ue_index,
+                                             establishment_cause_t rrc_resume_cause) override
+  {
+  }
   async_task<bool> handle_ue_context_transfer(ue_index_t ue_index, ue_index_t old_ue_index) override
   {
     return launch_no_op_task(true);
@@ -107,6 +114,8 @@ struct dummy_cu_cp_du_event_handler : public cu_cp_du_event_handler {
 public:
   dummy_cu_cp_du_event_handler(ue_manager& ue_mng_) : ue_mng(ue_mng_) {}
 
+  void handle_du_connection_established(du_index_t du_index) override {}
+
   void handle_rrc_ue_creation(ue_index_t ue_index, rrc_ue_interface& rrc_ue) override
   {
     ue_mng.get_rrc_ue_cu_cp_adapter(ue_index).connect_cu_cp(rrc_ue_handler,
@@ -116,6 +125,8 @@ public:
                                                             meas_handler);
   }
   byte_buffer handle_target_cell_sib1_required(du_index_t du_index, nr_cell_global_id_t cgi) override { return {}; }
+
+  void handle_du_disconnection(du_index_t du_index) override {}
   async_task<void> handle_transaction_info_loss(const ue_transaction_info_loss_event& ev) override
   {
     return launch_no_op_task();

@@ -83,6 +83,7 @@ struct cu_cp_test_env_params {
   std::optional<ntn_location_mobility_config> ntn_location_mobility;
   std::optional<ntn_onboard_position_plan_source_config> ntn_onboard_position_plan;
   bool                                                   ntn_calendar_query_stays_ready          = false;
+  bool                                                   ntn_calendar_query_reports_applied_early = false;
   bool                                                   ntn_calendar_drop_query_responses       = false;
   bool                                                   ntn_calendar_query_reports_zero_intents = false;
   bool                                                   ntn_calendar_prepare_rejects            = false;

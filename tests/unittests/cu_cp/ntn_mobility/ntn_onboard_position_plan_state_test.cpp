@@ -130,6 +130,18 @@ ntn_onboard_position_plan_persistent_state make_state()
   state.active  = make_snapshot(make_plan(10, 20, {{"G000001", 10.0, 20.0, 0x7f}, {"G000002", 10.1, 20.1, 0x7f}}));
   state.pending = make_snapshot(
       make_plan(11, 21, {{"G000001", 10.0, 20.0, 0x7f}, {"G000002", 10.1, 20.1, 0x7f}, {"G000003", 10.2, 20.2, 0x7f}}));
+  std::vector<ntn_l1_position> received_positions;
+  received_positions.reserve(257);
+  for (unsigned i = 0; i != 257; ++i) {
+    received_positions.push_back(
+        {fmt::format("G{:06}", i + 1), 10.0 + static_cast<double>(i) * 0.001, 20.0, 0x7f});
+  }
+  const ntn_versioned_position_plan received = make_plan(12, 22, std::move(received_positions));
+  state.received_plan = ntn_onboard_position_plan_received_observation{received.catalog_version,
+                                                                        received.schedule_version,
+                                                                        received.content_hash,
+                                                                        received.activation_epoch,
+                                                                        received.visible_l1_positions};
   state.highest_catalog_version  = 11;
   state.highest_schedule_version = 21;
   state.sticky_partition         = state.active->cell_positions;
@@ -181,6 +193,11 @@ TEST(ntn_onboard_position_plan_state, atomic_store_round_trips_complete_recovery
   EXPECT_EQ(recovered.active->source.schedule_version, 20U);
   EXPECT_EQ(recovered.pending->source.schedule_version, 21U);
   EXPECT_EQ(recovered.pending->source.visible_l1_positions.size(), 3U);
+  ASSERT_TRUE(recovered.received_plan.has_value());
+  EXPECT_EQ(recovered.received_plan->catalog_version, 12U);
+  EXPECT_EQ(recovered.received_plan->schedule_version, 22U);
+  EXPECT_EQ(recovered.received_plan->candidate_inventory.size(), 257U);
+  EXPECT_EQ(recovered.received_plan->candidate_inventory.back().position_id, "G000257");
   EXPECT_EQ(recovered.sticky_partition[0].identity.nci, state.sticky_partition[0].identity.nci);
   EXPECT_EQ(recovered.sticky_partition[0].identity.pci, state.sticky_partition[0].identity.pci);
   EXPECT_EQ(recovered.sticky_partition[0].assigned_l1_ids, state.sticky_partition[0].assigned_l1_ids);
@@ -193,6 +210,55 @@ TEST(ntn_onboard_position_plan_state, atomic_store_round_trips_complete_recovery
   EXPECT_EQ(recovered.recorded_deployment_stage, ntn_position_plan_deployment_stage::applied);
   EXPECT_EQ(recovered.recorded_deployment_schedule_version, 20U);
   EXPECT_TRUE(recovered.du_reconciliation_required);
+}
+
+TEST(ntn_onboard_position_plan_state, schema_v1_without_received_observation_remains_readable)
+{
+  const std::filesystem::path path = make_state_path("schema-v1");
+  temporary_state_guard       guard(path);
+  auto                        state = make_state();
+  state.schema_version              = 1;
+  state.received_plan.reset();
+
+  auto stored = store_ntn_onboard_position_plan_state_atomic(path.string(), state);
+  ASSERT_TRUE(stored.has_value()) << stored.error();
+  auto loaded = load_ntn_onboard_position_plan_state(path.string());
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  ASSERT_TRUE(loaded->has_value());
+  EXPECT_EQ((*loaded)->schema_version, 1U);
+  EXPECT_FALSE((*loaded)->received_plan.has_value());
+  ASSERT_TRUE((*loaded)->active.has_value());
+  EXPECT_EQ((*loaded)->active->source.schedule_version, 20U);
+}
+
+TEST(ntn_onboard_position_plan_state, received_observation_is_exact_keyed_and_integrity_protected)
+{
+  const std::filesystem::path path = make_state_path("received-observation");
+  temporary_state_guard       guard(path);
+  ASSERT_TRUE(store_ntn_onboard_position_plan_state_atomic(path.string(), make_state()).has_value());
+
+  nlohmann::json root                       = nlohmann::json::parse(read_file(path));
+  root["received_plan"]["unexpected"]       = true;
+  write_file(path, root.dump());
+  auto unknown = load_ntn_onboard_position_plan_state(path.string());
+  ASSERT_FALSE(unknown.has_value());
+  EXPECT_NE(unknown.error().find("unknown field 'received_plan.unexpected'"), std::string::npos);
+
+  ASSERT_TRUE(store_ntn_onboard_position_plan_state_atomic(path.string(), make_state()).has_value());
+  root = nlohmann::json::parse(read_file(path));
+  root.erase("received_plan");
+  write_file(path, root.dump());
+  auto missing = load_ntn_onboard_position_plan_state(path.string());
+  ASSERT_FALSE(missing.has_value());
+  EXPECT_NE(missing.error().find("missing field 'root.received_plan'"), std::string::npos);
+
+  ASSERT_TRUE(store_ntn_onboard_position_plan_state_atomic(path.string(), make_state()).has_value());
+  root = nlohmann::json::parse(read_file(path));
+  root["received_plan"]["candidate_inventory"][0]["position_id"] = "G999999";
+  write_file(path, root.dump());
+  auto tampered = load_ntn_onboard_position_plan_state(path.string());
+  ASSERT_FALSE(tampered.has_value());
+  EXPECT_EQ(tampered.error(), "state_hash_mismatch");
 }
 
 TEST(ntn_onboard_position_plan_state, rejects_snapshot_versions_above_the_persisted_high_water)

@@ -59,6 +59,7 @@
 #include "srsran/ran/plmn_identity.h"
 #include <chrono>
 #include <dlfcn.h>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -90,7 +91,8 @@ const char* get_ntn_onboard_du_cell_resolution_detail(ntn_onboard_du_cell_resolu
 
 ntn_onboard_du_cell_resolution
 resolve_ntn_onboard_du_cells(const std::vector<ntn_onboard_du_cell_candidate>&   candidates,
-                             const std::array<ntn_onboard_cell_position_set, 2>& planned_cells);
+                             const std::array<ntn_onboard_cell_position_set, 2>& planned_cells,
+                             const std::set<du_index_t>& disconnected_du_indexes = {});
 
 } // namespace ntn_onboard_detail
 
@@ -309,6 +311,9 @@ public:
 private:
   // Handling of DU events.
   void handle_rrc_ue_creation(ue_index_t ue_index, rrc_ue_interface& rrc_ue) override;
+
+  void handle_du_connection_established(du_index_t du_index) override;
+  void handle_du_disconnection(du_index_t du_index) override;
 
   byte_buffer handle_target_cell_sib1_required(du_index_t du_index, nr_cell_global_id_t cgi) override;
 
@@ -700,7 +705,8 @@ private:
   enum class ntn_state_persist_outcome { durable, not_committed, committed_not_durable };
   void reload_ntn_onboard_position_plan();
   void restore_ntn_onboard_position_plan_state();
-  ntn_state_persist_outcome persist_ntn_onboard_position_plan_state_locked(const char* reason);
+  ntn_state_persist_outcome persist_ntn_onboard_position_plan_state_locked(const char* reason,
+                                                                            bool omit_clear_queue_head = false);
   void try_prepare_ntn_onboard_position_plan();
   void query_ntn_onboard_position_plan_application();
   bool queue_ntn_onboard_position_plan_clear_locked(const ntn_activated_position_plan& plan, std::string reason);
@@ -729,10 +735,17 @@ private:
   std::optional<std::chrono::steady_clock::time_point>  ntn_position_plan_reload_deadline;
   bool                                                   ntn_position_plan_query_in_flight = false;
   bool                                                   ntn_position_plan_clear_in_flight = false;
+  std::optional<du_index_t>                              ntn_position_plan_query_du_index;
+  std::optional<du_index_t>                              ntn_position_plan_clear_du_index;
+  uint64_t                                               ntn_position_plan_query_request_id = 0;
+  uint64_t                                               ntn_position_plan_clear_request_id = 0;
+  std::map<du_index_t, uint64_t>                         ntn_position_plan_du_connection_generations;
+  std::set<du_index_t>                                   ntn_position_plan_disconnected_dus;
   std::optional<std::pair<uint64_t, std::string>>         ntn_position_plan_prepare_dispatched;
   uint64_t                                                 ntn_position_plan_static_preflight_schedule_version = 0;
   std::array<f1ap_ntn_access_calendar_preflight_report, 2> ntn_position_plan_static_preflight_reports{};
   std::vector<std::pair<ntn_activated_position_plan, std::string>> ntn_position_plan_clear_queue;
+  unsigned                                                         ntn_position_plan_state_schema_version = 0;
   uint64_t                                                         ntn_position_plan_state_generation = 0;
   std::string                                                      ntn_position_plan_state_hash;
   std::string                                                      ntn_position_plan_state_store_status = "disabled";

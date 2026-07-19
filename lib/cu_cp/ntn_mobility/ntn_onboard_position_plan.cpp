@@ -1547,6 +1547,33 @@ ntn_onboard_position_plan_controller::restore_persistent_state(const ntn_onboard
   highest_catalog_version  = state.highest_catalog_version;
   highest_schedule_version = state.highest_schedule_version;
   sticky_partition         = std::move(restored_sticky);
+  received_plan_present    = false;
+  last_received_catalog    = 0;
+  last_received_schedule   = 0;
+  last_received_hash.clear();
+  last_received_activation = {};
+  last_candidate_inventory.clear();
+  const ntn_onboard_position_plan_state_snapshot* latest_snapshot =
+      state.pending.has_value() &&
+              (!state.active.has_value() ||
+               state.pending->source.schedule_version > state.active->source.schedule_version)
+          ? &*state.pending
+          : (state.active.has_value() ? &*state.active : nullptr);
+  if (state.received_plan.has_value()) {
+    received_plan_present      = true;
+    last_received_catalog      = state.received_plan->catalog_version;
+    last_received_schedule     = state.received_plan->schedule_version;
+    last_received_hash         = state.received_plan->content_hash;
+    last_received_activation   = state.received_plan->activation_epoch;
+    last_candidate_inventory   = state.received_plan->candidate_inventory;
+  } else if (state.schema_version == 1 && latest_snapshot != nullptr) {
+    received_plan_present      = true;
+    last_received_catalog      = latest_snapshot->source.catalog_version;
+    last_received_schedule     = latest_snapshot->source.schedule_version;
+    last_received_hash         = latest_snapshot->source.content_hash;
+    last_received_activation   = latest_snapshot->source.activation_epoch;
+    last_candidate_inventory = latest_snapshot->source.visible_l1_positions;
+  }
   active.reset();
   pending.reset();
   recovery_candidate.reset();
@@ -1585,8 +1612,7 @@ ntn_onboard_position_plan_controller::restore_persistent_state(const ntn_onboard
     // matching query from the live DU connection completes.
     deployment        = ntn_position_plan_deployment_stage::preparing;
     deployment_reason = "du_reconciliation_in_progress";
-    current_stage                  = ntn_position_plan_stage::pending;
-    last_candidate_inventory       = recovery_candidate->source.visible_l1_positions;
+    current_stage = ntn_position_plan_stage::pending;
   } else {
     last_recovery_schedule_version = 0;
     recovery                       = ntn_position_plan_recovery_stage::reconciled;
@@ -1595,9 +1621,6 @@ ntn_onboard_position_plan_controller::restore_persistent_state(const ntn_onboard
                                                          : ntn_position_plan_deployment_stage::disabled;
     deployment_reason = pending.has_value() ? "restored_pending_requires_new_prepare" : "no_pending_deployment";
     current_stage     = pending.has_value() ? ntn_position_plan_stage::pending : ntn_position_plan_stage::received;
-    if (pending.has_value()) {
-      last_candidate_inventory = pending->source.visible_l1_positions;
-    }
   }
   return {};
 }
@@ -1618,6 +1641,13 @@ ntn_onboard_position_plan_controller::make_persistent_state(uint64_t generation)
   result.highest_catalog_version                    = highest_catalog_version;
   result.highest_schedule_version                   = highest_schedule_version;
   result.sticky_partition                           = sticky_partition;
+  if (received_plan_present) {
+    result.received_plan = ntn_onboard_position_plan_received_observation{last_received_catalog,
+                                                                          last_received_schedule,
+                                                                          last_received_hash,
+                                                                          last_received_activation,
+                                                                          last_candidate_inventory};
+  }
   const auto to_snapshot                            = [](const ntn_activated_position_plan& plan) {
     return ntn_onboard_position_plan_state_snapshot{plan.source, plan.cell_positions, plan.calendar_hash};
   };
@@ -1636,6 +1666,11 @@ ntn_onboard_position_plan_controller::make_persistent_state(uint64_t generation)
   } else {
     if (active.has_value()) {
       result.active = to_snapshot(*active);
+    } else if (recovery_fallback_active.has_value()) {
+      // A future recovered plan can already have matching DU apply evidence while its activation epoch is still in
+      // the future. Keep the hidden historical plan in the durable snapshot until the replacement is activated and
+      // its clear obligation is recorded.
+      result.active = to_snapshot(*recovery_fallback_active);
     }
     if (pending.has_value()) {
       result.pending = to_snapshot(*pending);
@@ -1652,6 +1687,62 @@ ntn_onboard_position_plan_controller::make_persistent_state(uint64_t generation)
   }
   result.du_reconciliation_required = true;
   return result;
+}
+
+bool ntn_onboard_position_plan_controller::require_du_reconciliation_after_connection_loss(std::string detail)
+{
+  if (!cfg.enabled || !cfg.require_external_apply) {
+    return false;
+  }
+
+  const std::string recovery_detail =
+      detail.empty() ? "du_connection_lost_awaiting_matching_query" : std::move(detail);
+  if (recovery_candidate.has_value()) {
+    const bool changed = recovery != ntn_position_plan_recovery_stage::reconciling ||
+                         recovery_reason != recovery_detail ||
+                         deployment != ntn_position_plan_deployment_stage::preparing ||
+                         current_stage != ntn_position_plan_stage::pending || active_external_apply_evidence;
+    active_external_apply_evidence = false;
+    recovery                       = ntn_position_plan_recovery_stage::reconciling;
+    recovery_reason                = recovery_detail;
+    deployment                     = ntn_position_plan_deployment_stage::preparing;
+    deployment_reason              = "du_connection_lost_reconciliation_required";
+    current_stage                  = ntn_position_plan_stage::pending;
+    last_recovery_schedule_version = recovery_candidate->source.schedule_version;
+    return changed;
+  }
+
+  const bool pending_may_have_reached_du = pending.has_value() &&
+                                           (deployment == ntn_position_plan_deployment_stage::preparing ||
+                                            deployment == ntn_position_plan_deployment_stage::ready ||
+                                            deployment == ntn_position_plan_deployment_stage::applied);
+  if (!active.has_value() && !pending_may_have_reached_du) {
+    return false;
+  }
+
+  deferred_pending.reset();
+  if (pending_may_have_reached_du) {
+    recovery_candidate            = std::move(pending);
+    if (active.has_value()) {
+      recovery_fallback_active = std::move(active);
+    }
+    recovery_candidate_was_active = false;
+  } else {
+    recovery_fallback_active.reset();
+    recovery_candidate            = std::move(active);
+    deferred_pending              = std::move(pending);
+    recovery_candidate_was_active = true;
+  }
+  active.reset();
+  pending.reset();
+  active_external_apply_evidence = false;
+  recovery                       = ntn_position_plan_recovery_stage::reconciling;
+  recovery_reason                = recovery_detail;
+  deployment                     = ntn_position_plan_deployment_stage::preparing;
+  deployment_reason              = "du_connection_lost_reconciliation_required";
+  current_stage                  = ntn_position_plan_stage::pending;
+  last_recovery_schedule_version = recovery_candidate->source.schedule_version;
+  return true;
 }
 
 bool ntn_onboard_position_plan_controller::confirm_recovery_applied(uint64_t           schedule_version,
@@ -1673,11 +1764,10 @@ bool ntn_onboard_position_plan_controller::confirm_recovery_applied(uint64_t    
     deployment        = pending.has_value() ? ntn_position_plan_deployment_stage::not_sent
                                             : ntn_position_plan_deployment_stage::applied;
     deployment_reason = pending.has_value() ? "restored_pending_requires_new_prepare" : "du_reconciled_after_restart";
-    current_stage     = pending.has_value() ? ntn_position_plan_stage::pending : ntn_position_plan_stage::active;
+    current_stage = pending.has_value() ? ntn_position_plan_stage::pending : ntn_position_plan_stage::active;
   } else {
     pending = std::move(recovery_candidate);
     recovery_candidate.reset();
-    recovery_fallback_active.reset();
     deployment        = ntn_position_plan_deployment_stage::applied;
     deployment_reason = "du_reconciled_after_restart";
     advance_time(now);
@@ -1712,7 +1802,6 @@ bool ntn_onboard_position_plan_controller::reject_recovery(uint64_t             
     recovery                       = ntn_position_plan_recovery_stage::reconciling;
     recovery_reason                = fmt::format("pending_recovery_failed_querying_active_fallback:{}", failure_detail);
     last_recovery_schedule_version = recovery_candidate->source.schedule_version;
-    last_candidate_inventory       = recovery_candidate->source.visible_l1_positions;
     reject(reason, failed_pending_version);
     current_stage = ntn_position_plan_stage::pending;
     return true;
@@ -1813,6 +1902,21 @@ bool ntn_onboard_position_plan_controller::advance_time(std::chrono::system_cloc
   if (now >= pending->source.valid_until) {
     const uint64_t expired_version = pending->source.schedule_version;
     pending.reset();
+    if (recovery_fallback_active.has_value()) {
+      recovery_candidate = std::move(recovery_fallback_active);
+      recovery_fallback_active.reset();
+      recovery_candidate_was_active = true;
+      deferred_pending.reset();
+      active_external_apply_evidence = false;
+      deployment                     = ntn_position_plan_deployment_stage::preparing;
+      deployment_reason              = "historical_active_fallback_requires_du_reconciliation";
+      recovery                       = ntn_position_plan_recovery_stage::reconciling;
+      recovery_reason                = "expired_pending_querying_historical_active_fallback";
+      last_recovery_schedule_version = recovery_candidate->source.schedule_version;
+      reject(ntn_position_plan_reject_reason::expired, expired_version);
+      current_stage = ntn_position_plan_stage::pending;
+      return false;
+    }
     reject(ntn_position_plan_reject_reason::expired, expired_version);
     return false;
   }
@@ -1824,6 +1928,7 @@ bool ntn_onboard_position_plan_controller::advance_time(std::chrono::system_cloc
 
   active        = std::move(pending);
   pending.reset();
+  recovery_fallback_active.reset();
   sticky_partition               = active->cell_positions;
   active_external_apply_evidence = cfg.require_external_apply;
   current_stage = ntn_position_plan_stage::active;

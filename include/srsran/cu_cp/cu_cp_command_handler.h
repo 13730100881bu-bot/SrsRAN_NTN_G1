@@ -220,10 +220,14 @@ struct cu_cp_ntn_position_plan_status {
   std::string execution_evidence  = "intent_only";
   unsigned    clear_queue_depth   = 0;
   bool        clear_in_flight     = false;
+  uint64_t    clear_queue_head_schedule_version = 0;
+  std::string clear_queue_head_calendar_hash     = "none";
+  std::string clear_queue_head_reason            = "none";
   std::string satellite_id        = "none";
   uint64_t    active_catalog_version   = 0;
   uint64_t    active_schedule_version  = 0;
   std::string active_content_hash      = "none";
+  std::string active_calendar_hash     = "none";
   int64_t     active_activation_epoch_unix_ms = -1;
   uint64_t    pending_catalog_version  = 0;
   uint64_t    pending_schedule_version = 0;

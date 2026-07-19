@@ -809,10 +809,11 @@ public:
                position_plan.candidate_l1_positions,
                position_plan.received_activation_epoch_unix_ms);
     fmt::print("NTN onboard position plan active: catalog_version={} schedule_version={} content_hash={} "
-               "activation_epoch_unix_ms={}\n",
+               "calendar_hash={} activation_epoch_unix_ms={}\n",
                position_plan.active_catalog_version,
                position_plan.active_schedule_version,
                position_plan.active_content_hash,
+               position_plan.active_calendar_hash,
                position_plan.active_activation_epoch_unix_ms);
     fmt::print("NTN onboard position plan pending: catalog_version={} schedule_version={} content_hash={} "
                "calendar_hash={} activation_epoch_unix_ms={}\n",
@@ -823,8 +824,7 @@ public:
                position_plan.pending_activation_epoch_unix_ms);
     fmt::print("NTN access calendar intent: schedule_version={} intents={} ssb={} prach_ro={} prach_ul_beam={} "
                "max_ssb_interval_ms={} max_prach_interval_ms={} "
-               "prach_ro_without_beam={} resource_conflicts={} deployment_detail={} evidence={} "
-               "clear_queue={} clear_in_flight={}\n",
+               "prach_ro_without_beam={} resource_conflicts={} deployment_detail={} evidence={}\n",
                position_plan.audited_schedule_version,
                position_plan.calendar_intents,
                position_plan.ssb_intents,
@@ -835,9 +835,14 @@ public:
                position_plan.prach_ro_without_beam,
                position_plan.resource_conflicts,
                position_plan.deployment_detail,
-               position_plan.execution_evidence,
+               position_plan.execution_evidence);
+    fmt::print("NTN calendar clear queue: depth={} in_flight={} head_schedule_version={} head_calendar_hash={} "
+               "head_reason={}\n",
                position_plan.clear_queue_depth,
-               position_plan.clear_in_flight ? "yes" : "no");
+               position_plan.clear_in_flight ? "yes" : "no",
+               position_plan.clear_queue_head_schedule_version,
+               position_plan.clear_queue_head_calendar_hash,
+               position_plan.clear_queue_head_reason);
     for (unsigned i = 0; i != position_plan.static_opportunities.size(); ++i) {
       const auto& preflight = position_plan.static_opportunities[i];
       const std::string numerology = preflight.performed ? fmt::format("{}", preflight.numerology) : "n/a";

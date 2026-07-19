@@ -250,6 +250,9 @@ class cu_cp_du_event_handler
 public:
   virtual ~cu_cp_du_event_handler() = default;
 
+  /// \brief Handle creation of a DU connection context.
+  virtual void handle_du_connection_established(du_index_t du_index) = 0;
+
   /// \brief Handle a RRC UE creation notification from the DU processor.
   /// \param[in] ue_index The index of the UE.
   /// \param[in] rrc_ue The interface of the created RRC UE.
@@ -260,6 +263,9 @@ public:
   /// \param[in] cgi The cell global id of the cell.
   /// \returns The packed SIB1 for the cell, if available. An empty byte_buffer otherwise.
   virtual byte_buffer handle_target_cell_sib1_required(du_index_t du_index, nr_cell_global_id_t cgi) = 0;
+
+  /// \brief Handle loss of a DU connection before its cell context is removed from the CU-CP repository.
+  virtual void handle_du_disconnection(du_index_t du_index) = 0;
 
   /// \brief Handle transaction information loss in the F1AP.
   virtual async_task<void> handle_transaction_info_loss(const ue_transaction_info_loss_event& ev) = 0;

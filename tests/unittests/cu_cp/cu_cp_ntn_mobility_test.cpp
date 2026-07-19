@@ -192,6 +192,58 @@ struct temporary_plan_file_guard {
   std::filesystem::path path;
 };
 
+struct state_file_write_failure_guard {
+  explicit state_file_write_failure_guard(std::filesystem::path target_) :
+    target(std::move(target_)), backup(target.string() + ".write-failure-backup")
+  {
+  }
+
+  ~state_file_write_failure_guard() { (void)restore(); }
+
+  bool replace_with_directory()
+  {
+    std::error_code error;
+    std::filesystem::rename(target, backup, error);
+    if (error) {
+      return false;
+    }
+    if (!std::filesystem::create_directory(target, error) || error) {
+      std::error_code ignored;
+      std::filesystem::rename(backup, target, ignored);
+      installed = static_cast<bool>(ignored);
+      return false;
+    }
+    installed = true;
+    return true;
+  }
+
+  bool restore()
+  {
+    if (!installed) {
+      return true;
+    }
+    std::error_code error;
+    if (std::filesystem::exists(target, error)) {
+      if (error || !std::filesystem::remove(target, error) || error) {
+        return false;
+      }
+    } else if (error) {
+      return false;
+    }
+    std::filesystem::rename(backup, target, error);
+    if (error) {
+      return false;
+    }
+    installed = false;
+    return true;
+  }
+
+private:
+  std::filesystem::path target;
+  std::filesystem::path backup;
+  bool                  installed = false;
+};
+
 struct persisted_recovery_calendar_test_data {
   ntn_versioned_position_plan                              plan;
   ntn_onboard_position_plan_source_config                  source;
@@ -199,6 +251,118 @@ struct persisted_recovery_calendar_test_data {
   std::array<uint16_t, 2>                                  recovered_intents{};
   std::array<f1ap_ntn_access_calendar_preflight_report, 2> recovered_preflight{};
 };
+
+struct persisted_active_pending_calendar_test_data {
+  ntn_versioned_position_plan                              active_plan;
+  ntn_versioned_position_plan                              pending_plan;
+  ntn_onboard_position_plan_source_config                  source;
+  std::filesystem::path                                    plan_path;
+  std::string                                              active_calendar_hash;
+  std::array<uint16_t, 2>                                  recovered_active_intents{};
+  std::array<f1ap_ntn_access_calendar_preflight_report, 2> recovered_active_preflight{};
+};
+
+persisted_active_pending_calendar_test_data
+make_persisted_active_with_future_not_sent_pending(std::chrono::milliseconds active_valid_for)
+{
+  persisted_active_pending_calendar_test_data data;
+  const nr_cell_identity                      first_nci  = make_default_env_nci(0);
+  const nr_cell_identity                      second_nci = make_default_env_nci(1);
+  constexpr pci_t                             shared_pci = 101;
+  const int64_t                               wall_now_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+          .count();
+  const int64_t controller_now_ms = active_valid_for.count() < 0 ? wall_now_ms - 2000 : wall_now_ms;
+  const int64_t active_activation_ms = (controller_now_ms / 640) * 640;
+  const int64_t pending_activation_ms = ((wall_now_ms + 20000 + 639) / 640) * 640;
+
+  data.active_plan.satellite_id     = "P01-S01";
+  data.active_plan.catalog_version  = 50;
+  data.active_plan.schedule_version = 60;
+  data.active_plan.valid_from =
+      std::chrono::system_clock::time_point{std::chrono::milliseconds{active_activation_ms - 640}};
+  data.active_plan.activation_epoch =
+      std::chrono::system_clock::time_point{std::chrono::milliseconds{active_activation_ms}};
+  data.active_plan.valid_until =
+      std::chrono::system_clock::time_point{std::chrono::milliseconds{wall_now_ms + active_valid_for.count()}};
+  data.active_plan.onboard_cells[0]     = {first_nci, shared_pci};
+  data.active_plan.onboard_cells[1]     = {second_nci, shared_pci};
+  data.active_plan.visible_l1_positions = {{"G000001", 10.0, 20.0}, {"G000002", 10.1, 20.1}};
+  bind_onboard_planning_context(data.active_plan);
+  data.active_plan.content_hash = compute_ntn_position_plan_content_hash(data.active_plan);
+
+  data.pending_plan                  = data.active_plan;
+  data.pending_plan.catalog_version  = 51;
+  data.pending_plan.schedule_version = 61;
+  data.pending_plan.valid_from =
+      std::chrono::system_clock::time_point{std::chrono::milliseconds{controller_now_ms - 640}};
+  data.pending_plan.activation_epoch =
+      std::chrono::system_clock::time_point{std::chrono::milliseconds{pending_activation_ms}};
+  data.pending_plan.valid_until =
+      std::chrono::system_clock::time_point{std::chrono::milliseconds{pending_activation_ms + 30000}};
+  data.pending_plan.visible_l1_positions.push_back({"G000003", 10.2, 20.2, 0x7f});
+  data.pending_plan.content_hash = compute_ntn_position_plan_content_hash(data.pending_plan);
+  data.plan_path                 = write_onboard_position_plan_for_runtime_test(data.pending_plan);
+
+  data.source.enabled              = true;
+  data.source.du_execution_enabled = true;
+  data.source.du_prepare_guard     = std::chrono::milliseconds{100};
+  data.source.satellite_id         = data.pending_plan.satellite_id;
+  data.source.plan_json_file       = data.plan_path.string();
+  data.source.cell_ncis            = {first_nci, second_nci};
+  data.source.cell_pcis            = {shared_pci, shared_pci};
+  bind_onboard_planning_context(data.source);
+
+  ntn_onboard_position_plan_config controller_cfg;
+  controller_cfg.enabled                            = true;
+  controller_cfg.require_external_apply             = true;
+  controller_cfg.satellite_id                       = data.source.satellite_id;
+  controller_cfg.expected_catalog_id                = data.source.expected_catalog_id;
+  controller_cfg.expected_catalog_hash              = data.source.expected_catalog_hash;
+  controller_cfg.expected_identity_registry_version = data.source.expected_identity_registry_version;
+  controller_cfg.expected_identity_registry_hash    = data.source.expected_identity_registry_hash;
+  controller_cfg.expected_access_profile_id         = data.source.expected_access_profile_id;
+  controller_cfg.expected_access_profile_hash       = data.source.expected_access_profile_hash;
+  controller_cfg.onboard_cells                      = {{{first_nci, shared_pci}, {second_nci, shared_pci}}};
+  ntn_onboard_position_plan_controller controller(controller_cfg);
+  const auto controller_now =
+      std::chrono::system_clock::time_point{std::chrono::milliseconds{controller_now_ms}};
+  srsran_assert(controller.submit(data.active_plan, controller_now).accepted,
+                "Failed to submit active NTN calendar test plan");
+  data.active_calendar_hash = controller.pending_plan()->calendar_hash;
+  srsran_assert(controller.mark_deployment_preparing(data.active_plan.schedule_version, data.active_calendar_hash),
+                "Failed to mark active NTN calendar test plan preparing");
+  srsran_assert(controller.mark_deployment_applied(data.active_plan.schedule_version, data.active_calendar_hash),
+                "Failed to mark active NTN calendar test plan applied");
+  srsran_assert(controller.advance_time(controller_now), "Failed to activate NTN calendar test plan");
+  srsran_assert(controller.submit(data.pending_plan, controller_now).accepted,
+                "Failed to submit future NTN calendar test plan");
+  srsran_assert(controller.deployment_stage() == ntn_position_plan_deployment_stage::not_sent,
+                "Future NTN calendar test plan must remain not_sent");
+
+  for (const ntn_access_calendar_intent& intent : controller.active_plan()->access_calendar) {
+    const unsigned cell_index = intent.nci == first_nci ? 0U : 1U;
+    ++data.recovered_active_intents[cell_index];
+    auto& report      = data.recovered_active_preflight[cell_index];
+    report.performed  = true;
+    report.passed     = true;
+    report.numerology = 1;
+    if (intent.purpose == ntn_access_calendar_purpose::ssb_sib_paging ||
+        intent.purpose == ntn_access_calendar_purpose::ssb_sib_paging_rar) {
+      ++report.expected_ssb;
+      ++report.matched_ssb;
+      report.max_ssb_gap_slots = 160;
+    } else if (intent.purpose == ntn_access_calendar_purpose::prach_ro) {
+      ++report.expected_prach;
+      ++report.matched_prach;
+      report.max_prach_gap_slots = 1280;
+    }
+  }
+  const auto stored =
+      store_ntn_onboard_position_plan_state_atomic(data.source.state_file, controller.make_persistent_state(9));
+  srsran_assert(stored.has_value(), "Failed to store active/pending NTN calendar test state");
+  return data;
+}
 
 persisted_recovery_calendar_test_data make_persisted_recovery_calendar_test_data(uint64_t catalog_version,
                                                                                  uint64_t schedule_version)
@@ -217,7 +381,7 @@ persisted_recovery_calendar_test_data make_persisted_recovery_calendar_test_data
   data.plan.schedule_version = schedule_version;
   data.plan.valid_from       = std::chrono::system_clock::time_point{std::chrono::milliseconds{activation_ms - 640}};
   data.plan.activation_epoch = std::chrono::system_clock::time_point{std::chrono::milliseconds{activation_ms}};
-  data.plan.valid_until      = std::chrono::system_clock::time_point{std::chrono::milliseconds{now_ms + 6000}};
+  data.plan.valid_until      = std::chrono::system_clock::time_point{std::chrono::milliseconds{now_ms + 30000}};
   data.plan.onboard_cells[0] = {first_nci, shared_pci};
   data.plan.onboard_cells[1] = {second_nci, shared_pci};
   data.plan.visible_l1_positions = {{"G000001", 10.0, 20.0}, {"G000002", 10.1, 20.1}};
@@ -1519,6 +1683,16 @@ TEST(cu_cp_ntn_mobility_test, onboard_cell_du_resolution_requires_each_nci_pci_e
       std::vector<candidate>{{first_du, first_nci, shared_pci, nullptr}, {first_du, first_nci, shared_pci, nullptr}},
       planned_cells);
   EXPECT_EQ(duplicate.status, status::duplicate);
+
+  const auto reconnect_overlap = ntn_onboard_detail::resolve_ntn_onboard_du_cells(
+      std::vector<candidate>{{first_du, first_nci, shared_pci, nullptr},
+                             {first_du, second_nci, shared_pci, nullptr},
+                             {second_du, first_nci, shared_pci, nullptr},
+                             {second_du, second_nci, shared_pci, nullptr}},
+      planned_cells,
+      std::set<du_index_t>{first_du});
+  EXPECT_EQ(reconnect_overlap.status, status::resolved);
+  EXPECT_EQ(reconnect_overlap.du_index, second_du);
   EXPECT_STREQ(ntn_onboard_detail::get_ntn_onboard_du_cell_resolution_detail(duplicate.status),
                "duplicate_nci_pci_du_cell_mapping");
 
@@ -1598,6 +1772,91 @@ TEST(cu_cp_ntn_mobility_test, versioned_two_cell_calendar_is_prepared_and_activa
   }
 }
 
+TEST(cu_cp_ntn_mobility_test, restart_preserves_rejected_257_position_inventory_as_observation_only)
+{
+  const nr_cell_identity first_nci  = make_default_env_nci(0);
+  const nr_cell_identity second_nci = make_default_env_nci(1);
+  constexpr pci_t        shared_pci = 101;
+  const int64_t          now_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+          .count();
+  const int64_t activation_ms = ((now_ms + 639) / 640) * 640;
+
+  ntn_versioned_position_plan plan;
+  plan.satellite_id         = "P01-S01";
+  plan.catalog_version      = 29;
+  plan.schedule_version     = 39;
+  plan.valid_from           = std::chrono::system_clock::time_point{std::chrono::milliseconds{now_ms - 640}};
+  plan.activation_epoch     = std::chrono::system_clock::time_point{std::chrono::milliseconds{activation_ms}};
+  plan.valid_until          = std::chrono::system_clock::time_point{std::chrono::milliseconds{now_ms + 30000}};
+  plan.onboard_cells[0]     = {first_nci, shared_pci};
+  plan.onboard_cells[1]     = {second_nci, shared_pci};
+  plan.visible_l1_positions.reserve(257);
+  for (unsigned i = 0; i != 257; ++i) {
+    plan.visible_l1_positions.push_back(
+        {fmt::format("G{:06}", i + 1), 10.0 + static_cast<double>(i / 32) * 0.01, 20.0});
+  }
+  bind_onboard_planning_context(plan);
+  plan.content_hash                     = compute_ntn_position_plan_content_hash(plan);
+  const std::filesystem::path plan_path = write_onboard_position_plan_for_runtime_test(plan);
+  temporary_plan_file_guard   plan_file_guard(plan_path);
+
+  ntn_onboard_position_plan_source_config source;
+  source.enabled              = true;
+  source.du_execution_enabled = true;
+  source.satellite_id         = plan.satellite_id;
+  source.plan_json_file       = plan_path.string();
+  source.cell_ncis            = {first_nci, second_nci};
+  source.cell_pcis            = {shared_pci, shared_pci};
+  bind_onboard_planning_context(source);
+
+  const auto verify_inventory = [&plan](cu_cp_test_environment& env) {
+    ASSERT_TRUE(wait_for_test_condition([&env]() {
+      const auto status = env.get_cu_cp()
+                              .get_command_handler()
+                              .get_ntn_command_handler()
+                              .get_current_ntn_runtime_status()
+                              .onboard_position_plan;
+      return status.candidate_l1_positions == 257U && status.state_generation > 0;
+    }));
+    const auto status = env.get_cu_cp()
+                            .get_command_handler()
+                            .get_ntn_command_handler()
+                            .get_current_ntn_runtime_status()
+                            .onboard_position_plan;
+    EXPECT_EQ(status.last_rejection, "schedule_overflow");
+    EXPECT_EQ(status.received_schedule_version, plan.schedule_version);
+    EXPECT_EQ(status.candidate_l1_positions, 257U);
+    EXPECT_EQ(status.active_schedule_version, 0U);
+    EXPECT_EQ(status.pending_schedule_version, 0U);
+    EXPECT_EQ(status.state_schema_version, 2U);
+    EXPECT_EQ(status.state_store_status, "stored");
+    EXPECT_FALSE(status.state_write_blocked);
+  };
+
+  {
+    cu_cp_test_env_params params;
+    params.ntn_onboard_position_plan = source;
+    cu_cp_test_environment env(std::move(params));
+    env.run_ng_setup();
+    verify_inventory(env);
+
+    auto stored = load_ntn_onboard_position_plan_state(source.state_file);
+    ASSERT_TRUE(stored.has_value()) << stored.error();
+    ASSERT_TRUE(stored->has_value());
+    ASSERT_TRUE((*stored)->received_plan.has_value());
+    EXPECT_EQ((*stored)->received_plan->candidate_inventory.size(), 257U);
+    EXPECT_FALSE((*stored)->active.has_value());
+    EXPECT_FALSE((*stored)->pending.has_value());
+  }
+
+  cu_cp_test_env_params restarted_params;
+  restarted_params.ntn_onboard_position_plan = source;
+  cu_cp_test_environment restarted(std::move(restarted_params));
+  restarted.run_ng_setup();
+  verify_inventory(restarted);
+}
+
 TEST(cu_cp_ntn_mobility_test, restart_queries_du_before_reexposing_persisted_active_calendar)
 {
   const nr_cell_identity first_nci  = make_default_env_nci(0);
@@ -1653,9 +1912,10 @@ TEST(cu_cp_ntn_mobility_test, restart_queries_du_before_reexposing_persisted_act
   ASSERT_TRUE(persisted_controller.mark_deployment_applied(plan.schedule_version, calendar_hash));
   ASSERT_TRUE(
       persisted_controller.advance_time(std::chrono::system_clock::time_point{std::chrono::milliseconds{now_ms}}));
-  ASSERT_TRUE(
-      store_ntn_onboard_position_plan_state_atomic(source.state_file, persisted_controller.make_persistent_state(9))
-          .has_value());
+  ntn_onboard_position_plan_persistent_state legacy_state = persisted_controller.make_persistent_state(9);
+  legacy_state.schema_version                            = 1;
+  legacy_state.received_plan.reset();
+  ASSERT_TRUE(store_ntn_onboard_position_plan_state_atomic(source.state_file, legacy_state).has_value());
 
   cu_cp_test_env_params env_params;
   env_params.ntn_onboard_position_plan    = source;
@@ -1686,6 +1946,14 @@ TEST(cu_cp_ntn_mobility_test, restart_queries_du_before_reexposing_persisted_act
 
   cu_cp_test_environment env(std::move(env_params));
   env.run_ng_setup();
+  const auto loaded_status = env.get_cu_cp()
+                                 .get_command_handler()
+                                 .get_ntn_command_handler()
+                                 .get_current_ntn_runtime_status()
+                                 .onboard_position_plan;
+  EXPECT_EQ(loaded_status.state_schema_version, 1U);
+  EXPECT_EQ(loaded_status.state_generation, 9U);
+  EXPECT_EQ(loaded_status.state_store_status, "loaded_reconciliation_required");
   const auto du_idx = env.connect_new_du();
   ASSERT_TRUE(du_idx.has_value());
   std::vector<test_helpers::served_cell_item_info> served_cells(2);
@@ -1705,11 +1973,12 @@ TEST(cu_cp_ntn_mobility_test, restart_queries_du_before_reexposing_persisted_act
   EXPECT_EQ(status.recovery_stage, "reconciled");
   EXPECT_EQ(status.stage, "active");
   EXPECT_EQ(status.active_schedule_version, plan.schedule_version);
+  EXPECT_EQ(status.active_calendar_hash, calendar_hash);
   EXPECT_EQ(status.deployment_stage, "applied");
   EXPECT_EQ(status.execution_evidence, "ssb_prach_software_gate_applied_no_position_or_rf_evidence");
   EXPECT_TRUE(status.state_file_configured);
   EXPECT_TRUE(status.state_file_required);
-  EXPECT_EQ(status.state_schema_version, 1U);
+  EXPECT_EQ(status.state_schema_version, 2U);
   EXPECT_GT(status.state_generation, 9U);
   EXPECT_EQ(status.state_hash.rfind("sha256:", 0), 0U);
   EXPECT_EQ(status.state_store_status, "stored");
@@ -1719,6 +1988,341 @@ TEST(cu_cp_ntn_mobility_test, restart_queries_du_before_reexposing_persisted_act
   EXPECT_EQ(status.recovery_schedule_version, plan.schedule_version);
   EXPECT_EQ(status.catalog_version_high_water, plan.catalog_version);
   EXPECT_EQ(status.schedule_version_high_water, plan.schedule_version);
+}
+
+TEST(cu_cp_ntn_mobility_test, du_disconnect_hides_applied_calendar_until_the_reconnected_du_confirms_it)
+{
+  persisted_recovery_calendar_test_data data = make_persisted_recovery_calendar_test_data(34, 44);
+  temporary_plan_file_guard             plan_file_guard(data.plan_path);
+
+  cu_cp_test_env_params env_params;
+  env_params.ntn_onboard_position_plan                = data.source;
+  env_params.ntn_recovered_calendar_intents_per_cell  = data.recovered_intents;
+  env_params.ntn_recovered_calendar_preflight_reports = data.recovered_preflight;
+  cu_cp_test_environment env(std::move(env_params));
+  env.run_ng_setup();
+
+  std::vector<test_helpers::served_cell_item_info> served_cells(2);
+  served_cells[0].nci = data.plan.onboard_cells[0].nci;
+  served_cells[0].pci = data.plan.onboard_cells[0].pci;
+  served_cells[1].nci = data.plan.onboard_cells[1].nci;
+  served_cells[1].pci = data.plan.onboard_cells[1].pci;
+
+  const auto first_du = env.connect_new_du();
+  ASSERT_TRUE(first_du.has_value());
+  ASSERT_TRUE(env.run_f1_setup(first_du.value(), int_to_gnb_du_id(0x21), served_cells));
+  f1ap_message ignored;
+  (void)env.wait_for_f1ap_tx_pdu(first_du.value(), ignored, std::chrono::milliseconds{1600});
+  ASSERT_TRUE(wait_for_test_condition([&env, &data]() {
+    return env.get_cu_cp()
+               .get_command_handler()
+               .get_ntn_command_handler()
+               .get_current_ntn_runtime_status()
+               .onboard_position_plan.active_schedule_version == data.plan.schedule_version;
+  }));
+
+  ASSERT_TRUE(env.drop_du_connection(first_du.value()));
+  const auto disconnected = env.get_cu_cp()
+                                .get_command_handler()
+                                .get_ntn_command_handler()
+                                .get_current_ntn_runtime_status()
+                                .onboard_position_plan;
+  EXPECT_EQ(disconnected.stage, "pending");
+  EXPECT_EQ(disconnected.recovery_stage, "reconciling");
+  EXPECT_EQ(disconnected.recovery_schedule_version, data.plan.schedule_version);
+  EXPECT_EQ(disconnected.active_schedule_version, 0U);
+  EXPECT_EQ(disconnected.active_calendar_hash, "none");
+  EXPECT_EQ(disconnected.execution_evidence, "intent_or_control_plane_only");
+
+  const auto reconnected_du = env.connect_new_du();
+  ASSERT_TRUE(reconnected_du.has_value());
+  ASSERT_TRUE(env.run_f1_setup(reconnected_du.value(), int_to_gnb_du_id(0x21), served_cells));
+  f1ap_message query_request;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      reconnected_du.value(), query_request, std::chrono::milliseconds{1500}));
+  const auto query_update = decode_f1ap_ntn_access_calendar_update(
+      query_request.pdu.init_msg().value.gnb_du_res_coordination_request()->eutra_nr_cell_res_coordination_req_container);
+  ASSERT_TRUE(query_update.has_value());
+  EXPECT_EQ(query_update->operation, f1ap_ntn_access_calendar_operation::query);
+  EXPECT_EQ(query_update->schedule_version, data.plan.schedule_version);
+  EXPECT_EQ(env.get_cu_cp()
+                .get_command_handler()
+                .get_ntn_command_handler()
+                .get_current_ntn_runtime_status()
+                .onboard_position_plan.active_schedule_version,
+            0U);
+
+  env.respond_to_f1ap_resource_coordination_request(reconnected_du.value(), query_request);
+  ASSERT_TRUE(wait_for_test_condition([&env, &data]() {
+    const auto status = env.get_cu_cp()
+                            .get_command_handler()
+                            .get_ntn_command_handler()
+                            .get_current_ntn_runtime_status()
+                            .onboard_position_plan;
+    return status.active_schedule_version == data.plan.schedule_version && status.recovery_stage == "reconciled";
+  }));
+  const auto reconnected = env.get_cu_cp()
+                               .get_command_handler()
+                               .get_ntn_command_handler()
+                               .get_current_ntn_runtime_status()
+                               .onboard_position_plan;
+  EXPECT_EQ(reconnected.active_calendar_hash, query_update->calendar_hash);
+  EXPECT_EQ(reconnected.execution_evidence, "ssb_prach_software_gate_applied_no_position_or_rf_evidence");
+}
+
+TEST(cu_cp_ntn_mobility_test, disconnect_during_recovery_query_keeps_plan_hidden_and_retries_on_new_connection)
+{
+  persisted_recovery_calendar_test_data data = make_persisted_recovery_calendar_test_data(35, 45);
+  temporary_plan_file_guard             plan_file_guard(data.plan_path);
+
+  cu_cp_test_env_params env_params;
+  env_params.ntn_onboard_position_plan                = data.source;
+  env_params.ntn_recovered_calendar_intents_per_cell  = data.recovered_intents;
+  env_params.ntn_recovered_calendar_preflight_reports = data.recovered_preflight;
+  cu_cp_test_environment env(std::move(env_params));
+  env.run_ng_setup();
+
+  std::vector<test_helpers::served_cell_item_info> served_cells(2);
+  served_cells[0].nci = data.plan.onboard_cells[0].nci;
+  served_cells[0].pci = data.plan.onboard_cells[0].pci;
+  served_cells[1].nci = data.plan.onboard_cells[1].nci;
+  served_cells[1].pci = data.plan.onboard_cells[1].pci;
+
+  const auto first_du = env.connect_new_du();
+  ASSERT_TRUE(first_du.has_value());
+  ASSERT_TRUE(env.run_f1_setup(first_du.value(), int_to_gnb_du_id(0x22), served_cells));
+  f1ap_message first_query;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      first_du.value(), first_query, std::chrono::milliseconds{1500}));
+  ASSERT_TRUE(env.drop_du_connection(first_du.value()));
+  EXPECT_EQ(env.get_cu_cp()
+                .get_command_handler()
+                .get_ntn_command_handler()
+                .get_current_ntn_runtime_status()
+                .onboard_position_plan.active_schedule_version,
+            0U);
+
+  const auto reconnected_du = env.connect_new_du();
+  ASSERT_TRUE(reconnected_du.has_value());
+  ASSERT_TRUE(env.run_f1_setup(reconnected_du.value(), int_to_gnb_du_id(0x22), served_cells));
+  f1ap_message second_query;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      reconnected_du.value(), second_query, std::chrono::milliseconds{1500}));
+  const auto second_update = decode_f1ap_ntn_access_calendar_update(
+      second_query.pdu.init_msg().value.gnb_du_res_coordination_request()->eutra_nr_cell_res_coordination_req_container);
+  ASSERT_TRUE(second_update.has_value());
+  EXPECT_EQ(second_update->operation, f1ap_ntn_access_calendar_operation::query);
+  EXPECT_EQ(second_update->schedule_version, data.plan.schedule_version);
+  EXPECT_EQ(env.get_cu_cp()
+                .get_command_handler()
+                .get_ntn_command_handler()
+                .get_current_ntn_runtime_status()
+                .onboard_position_plan.execution_evidence,
+            "intent_or_control_plane_only");
+
+  env.respond_to_f1ap_resource_coordination_request(reconnected_du.value(), second_query);
+  ASSERT_TRUE(wait_for_test_condition([&env, &data]() {
+    return env.get_cu_cp()
+               .get_command_handler()
+               .get_ntn_command_handler()
+               .get_current_ntn_runtime_status()
+               .onboard_position_plan.active_schedule_version == data.plan.schedule_version;
+  }));
+}
+
+TEST(cu_cp_ntn_mobility_test, future_recovered_update_does_not_clear_active_calendar_before_activation_epoch)
+{
+  const nr_cell_identity first_nci  = make_default_env_nci(0);
+  const nr_cell_identity second_nci = make_default_env_nci(1);
+  constexpr pci_t        shared_pci = 101;
+  const int64_t          now_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+          .count();
+  const int64_t active_epoch_ms  = (now_ms / 640) * 640;
+  const int64_t pending_epoch_ms = active_epoch_ms + 3200;
+
+  ntn_versioned_position_plan active_plan;
+  active_plan.satellite_id     = "P01-S01";
+  active_plan.catalog_version  = 36;
+  active_plan.schedule_version = 46;
+  active_plan.valid_from = std::chrono::system_clock::time_point{std::chrono::milliseconds{active_epoch_ms - 640}};
+  active_plan.activation_epoch =
+      std::chrono::system_clock::time_point{std::chrono::milliseconds{active_epoch_ms}};
+  active_plan.valid_until = std::chrono::system_clock::time_point{std::chrono::milliseconds{now_ms + 30000}};
+  active_plan.onboard_cells[0] = {first_nci, shared_pci};
+  active_plan.onboard_cells[1] = {second_nci, shared_pci};
+  active_plan.visible_l1_positions = {{"G000001", 10.0, 20.0}, {"G000002", 10.1, 20.1}};
+  bind_onboard_planning_context(active_plan);
+  active_plan.content_hash = compute_ntn_position_plan_content_hash(active_plan);
+
+  ntn_versioned_position_plan pending_plan = active_plan;
+  pending_plan.catalog_version              = 37;
+  pending_plan.schedule_version             = 47;
+  pending_plan.activation_epoch =
+      std::chrono::system_clock::time_point{std::chrono::milliseconds{pending_epoch_ms}};
+  pending_plan.content_hash = compute_ntn_position_plan_content_hash(pending_plan);
+  const std::filesystem::path plan_path = write_onboard_position_plan_for_runtime_test(pending_plan);
+  temporary_plan_file_guard   plan_file_guard(plan_path);
+
+  ntn_onboard_position_plan_source_config source;
+  source.enabled              = true;
+  source.du_execution_enabled = true;
+  source.du_prepare_guard     = std::chrono::milliseconds{100};
+  source.satellite_id         = pending_plan.satellite_id;
+  source.plan_json_file       = plan_path.string();
+  source.cell_ncis            = {first_nci, second_nci};
+  source.cell_pcis            = {shared_pci, shared_pci};
+  bind_onboard_planning_context(source);
+
+  ntn_onboard_position_plan_config controller_cfg;
+  controller_cfg.enabled                            = true;
+  controller_cfg.require_external_apply             = true;
+  controller_cfg.satellite_id                       = source.satellite_id;
+  controller_cfg.expected_catalog_id                = source.expected_catalog_id;
+  controller_cfg.expected_catalog_hash              = source.expected_catalog_hash;
+  controller_cfg.expected_identity_registry_version = source.expected_identity_registry_version;
+  controller_cfg.expected_identity_registry_hash    = source.expected_identity_registry_hash;
+  controller_cfg.expected_access_profile_id         = source.expected_access_profile_id;
+  controller_cfg.expected_access_profile_hash       = source.expected_access_profile_hash;
+  controller_cfg.onboard_cells                      = {{{first_nci, shared_pci}, {second_nci, shared_pci}}};
+  ntn_onboard_position_plan_controller persisted_controller(controller_cfg);
+  const auto now = std::chrono::system_clock::time_point{std::chrono::milliseconds{now_ms}};
+  ASSERT_TRUE(persisted_controller.submit(active_plan, now).accepted);
+  const std::string active_calendar_hash = persisted_controller.pending_plan()->calendar_hash;
+  ASSERT_TRUE(persisted_controller.mark_deployment_preparing(active_plan.schedule_version, active_calendar_hash));
+  ASSERT_TRUE(persisted_controller.mark_deployment_applied(active_plan.schedule_version, active_calendar_hash));
+  ASSERT_TRUE(persisted_controller.advance_time(now));
+  ASSERT_TRUE(persisted_controller.submit(pending_plan, now).accepted);
+  const std::string pending_calendar_hash = persisted_controller.pending_plan()->calendar_hash;
+  ASSERT_TRUE(persisted_controller.mark_deployment_preparing(pending_plan.schedule_version, pending_calendar_hash));
+  ASSERT_TRUE(persisted_controller.mark_deployment_applied(pending_plan.schedule_version, pending_calendar_hash));
+  ASSERT_TRUE(
+      store_ntn_onboard_position_plan_state_atomic(source.state_file, persisted_controller.make_persistent_state(9))
+          .has_value());
+
+  std::array<uint16_t, 2>                                  recovered_intents{};
+  std::array<f1ap_ntn_access_calendar_preflight_report, 2> recovered_preflight{};
+  for (const ntn_access_calendar_intent& intent : persisted_controller.pending_plan()->access_calendar) {
+    const unsigned cell_index = intent.nci == first_nci ? 0U : 1U;
+    ++recovered_intents[cell_index];
+    auto& report      = recovered_preflight[cell_index];
+    report.performed  = true;
+    report.passed     = true;
+    report.numerology = 1;
+    if (intent.purpose == ntn_access_calendar_purpose::ssb_sib_paging ||
+        intent.purpose == ntn_access_calendar_purpose::ssb_sib_paging_rar) {
+      ++report.expected_ssb;
+      ++report.matched_ssb;
+      report.max_ssb_gap_slots = 160;
+    } else if (intent.purpose == ntn_access_calendar_purpose::prach_ro) {
+      ++report.expected_prach;
+      ++report.matched_prach;
+      report.max_prach_gap_slots = 1280;
+    }
+  }
+
+  cu_cp_test_env_params env_params;
+  env_params.ntn_onboard_position_plan                = source;
+  env_params.ntn_calendar_query_reports_applied_early = true;
+  env_params.ntn_recovered_calendar_intents_per_cell  = recovered_intents;
+  env_params.ntn_recovered_calendar_preflight_reports = recovered_preflight;
+  cu_cp_test_environment env(std::move(env_params));
+  env.run_ng_setup();
+
+  const auto du_idx = env.connect_new_du();
+  ASSERT_TRUE(du_idx.has_value());
+  std::vector<test_helpers::served_cell_item_info> served_cells(2);
+  served_cells[0].nci = first_nci;
+  served_cells[0].pci = shared_pci;
+  served_cells[1].nci = second_nci;
+  served_cells[1].pci = shared_pci;
+  ASSERT_TRUE(env.run_f1_setup(du_idx.value(), int_to_gnb_du_id(0x23), served_cells));
+
+  f1ap_message pending_query;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      du_idx.value(), pending_query, std::chrono::milliseconds{1500}));
+  const auto pending_update = decode_f1ap_ntn_access_calendar_update(
+      pending_query.pdu.init_msg().value.gnb_du_res_coordination_request()->eutra_nr_cell_res_coordination_req_container);
+  ASSERT_TRUE(pending_update.has_value());
+  EXPECT_EQ(pending_update->operation, f1ap_ntn_access_calendar_operation::query);
+  EXPECT_EQ(pending_update->schedule_version, pending_plan.schedule_version);
+  EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch())
+                .count(),
+            pending_epoch_ms);
+  env.respond_to_f1ap_resource_coordination_request(du_idx.value(), pending_query);
+
+  ASSERT_TRUE(wait_for_test_condition([&env, &pending_plan]() {
+    const auto before_epoch = env.get_cu_cp()
+                                  .get_command_handler()
+                                  .get_ntn_command_handler()
+                                  .get_current_ntn_runtime_status()
+                                  .onboard_position_plan;
+    return before_epoch.recovery_stage == "reconciled" &&
+           before_epoch.pending_schedule_version == pending_plan.schedule_version;
+  }));
+  const auto before_epoch = env.get_cu_cp()
+                                .get_command_handler()
+                                .get_ntn_command_handler()
+                                .get_current_ntn_runtime_status()
+                                .onboard_position_plan;
+  EXPECT_EQ(before_epoch.active_schedule_version, 0U);
+  EXPECT_EQ(before_epoch.pending_schedule_version, pending_plan.schedule_version);
+  EXPECT_EQ(before_epoch.recovery_schedule_version, pending_plan.schedule_version);
+  EXPECT_EQ(before_epoch.clear_queue_depth, 0U);
+  EXPECT_EQ(env.nof_ntn_calendar_clear_requests(), 0U);
+
+  f1ap_message clear_request;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      du_idx.value(), clear_request, std::chrono::milliseconds{5000}));
+  EXPECT_GE(std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch())
+                .count(),
+            pending_epoch_ms);
+  const auto clear_update = decode_f1ap_ntn_access_calendar_update(
+      clear_request.pdu.init_msg().value.gnb_du_res_coordination_request()->eutra_nr_cell_res_coordination_req_container);
+  ASSERT_TRUE(clear_update.has_value());
+  EXPECT_EQ(clear_update->operation, f1ap_ntn_access_calendar_operation::clear);
+  EXPECT_EQ(clear_update->schedule_version, active_plan.schedule_version);
+  EXPECT_EQ(clear_update->calendar_hash, active_calendar_hash);
+  auto status = env.get_cu_cp()
+                    .get_command_handler()
+                    .get_ntn_command_handler()
+                    .get_current_ntn_runtime_status()
+                    .onboard_position_plan;
+  EXPECT_EQ(status.active_schedule_version, pending_plan.schedule_version);
+  EXPECT_EQ(status.active_calendar_hash, pending_calendar_hash);
+  EXPECT_EQ(status.clear_queue_depth, 1U);
+
+  // Make the next state replacement fail after the DU has confirmed the clear. The obligation must remain visible in
+  // memory because the durable file still cannot prove that cleanup was recorded.
+  std::error_code state_path_error;
+  ASSERT_TRUE(std::filesystem::remove(source.state_file, state_path_error)) << state_path_error.message();
+  state_path_error.clear();
+  ASSERT_TRUE(std::filesystem::create_directory(source.state_file, state_path_error)) << state_path_error.message();
+  env.respond_to_f1ap_resource_coordination_request(du_idx.value(), clear_request);
+
+  ASSERT_TRUE(wait_for_test_condition([&env, &pending_plan]() {
+    const auto current = env.get_cu_cp()
+                             .get_command_handler()
+                             .get_ntn_command_handler()
+                             .get_current_ntn_runtime_status()
+                             .onboard_position_plan;
+    return current.active_schedule_version == pending_plan.schedule_version && current.state_write_blocked;
+  }));
+  status = env.get_cu_cp()
+               .get_command_handler()
+               .get_ntn_command_handler()
+               .get_current_ntn_runtime_status()
+               .onboard_position_plan;
+  EXPECT_EQ(status.pending_schedule_version, 0U);
+  EXPECT_EQ(status.state_store_status, "write_failed");
+  EXPECT_EQ(status.clear_queue_depth, 1U);
+  EXPECT_FALSE(status.clear_in_flight);
+  EXPECT_EQ(status.clear_queue_head_schedule_version, active_plan.schedule_version);
+  EXPECT_EQ(status.clear_queue_head_calendar_hash, active_calendar_hash);
+  EXPECT_EQ(status.clear_queue_head_reason, "recovered_pending_replaced_historical_active");
+  EXPECT_EQ(env.nof_ntn_calendar_clear_requests(), 1U);
 }
 
 TEST(cu_cp_ntn_mobility_test, restart_recovery_rejects_incomplete_du_query_feedback_without_exposing_active_plan)
@@ -1795,7 +2399,251 @@ TEST(cu_cp_ntn_mobility_test, restart_recovery_rejects_incomplete_du_query_feedb
   EXPECT_EQ(status.last_rejected_schedule_version, data.plan.schedule_version);
   EXPECT_EQ(status.active_schedule_version, 0U);
   EXPECT_EQ(status.active_content_hash, "none");
+  EXPECT_EQ(status.active_calendar_hash, "none");
   EXPECT_EQ(status.execution_evidence, "intent_or_control_plane_only");
+}
+
+TEST(cu_cp_ntn_mobility_test, restart_clears_expired_active_even_when_future_pending_was_not_sent)
+{
+  persisted_active_pending_calendar_test_data data =
+      make_persisted_active_with_future_not_sent_pending(std::chrono::milliseconds{-1000});
+  temporary_plan_file_guard plan_file_guard(data.plan_path);
+
+  cu_cp_test_env_params env_params;
+  env_params.ntn_onboard_position_plan = data.source;
+  cu_cp_test_environment env(std::move(env_params));
+  env.run_ng_setup();
+
+  auto status = env.get_cu_cp()
+                    .get_command_handler()
+                    .get_ntn_command_handler()
+                    .get_current_ntn_runtime_status()
+                    .onboard_position_plan;
+  EXPECT_EQ(status.active_schedule_version, 0U);
+  EXPECT_EQ(status.pending_schedule_version, data.pending_plan.schedule_version);
+  EXPECT_EQ(status.deployment_stage, "not_sent");
+  EXPECT_EQ(status.clear_queue_depth, 1U);
+  EXPECT_EQ(status.clear_queue_head_schedule_version, data.active_plan.schedule_version);
+  EXPECT_EQ(status.clear_queue_head_calendar_hash, data.active_calendar_hash);
+  EXPECT_EQ(status.clear_queue_head_reason, "expired_deployment_recovered_after_restart");
+  EXPECT_GT(status.state_generation, 9U);
+
+  const auto du_idx = env.connect_new_du();
+  ASSERT_TRUE(du_idx.has_value());
+  std::vector<test_helpers::served_cell_item_info> served_cells(2);
+  served_cells[0].nci = data.active_plan.onboard_cells[0].nci;
+  served_cells[0].pci = data.active_plan.onboard_cells[0].pci;
+  served_cells[1].nci = data.active_plan.onboard_cells[1].nci;
+  served_cells[1].pci = data.active_plan.onboard_cells[1].pci;
+  ASSERT_TRUE(env.run_f1_setup(du_idx.value(), int_to_gnb_du_id(0x17), served_cells));
+
+  f1ap_message clear_request;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      du_idx.value(), clear_request, std::chrono::milliseconds{1500}));
+  const auto clear_update = decode_f1ap_ntn_access_calendar_update(
+      clear_request.pdu.init_msg().value.gnb_du_res_coordination_request()->eutra_nr_cell_res_coordination_req_container);
+  ASSERT_TRUE(clear_update.has_value());
+  EXPECT_EQ(clear_update->operation, f1ap_ntn_access_calendar_operation::clear);
+  EXPECT_EQ(clear_update->schedule_version, data.active_plan.schedule_version);
+  EXPECT_EQ(clear_update->calendar_hash, data.active_calendar_hash);
+
+  env.respond_to_f1ap_resource_coordination_request(du_idx.value(), clear_request);
+  ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{1000}, [&]() {
+    return env.get_cu_cp()
+               .get_command_handler()
+               .get_ntn_command_handler()
+               .get_current_ntn_runtime_status()
+               .onboard_position_plan.clear_queue_depth == 0U;
+  }));
+  status = env.get_cu_cp()
+               .get_command_handler()
+               .get_ntn_command_handler()
+               .get_current_ntn_runtime_status()
+               .onboard_position_plan;
+  EXPECT_EQ(status.active_schedule_version, 0U);
+  EXPECT_EQ(status.pending_schedule_version, data.pending_plan.schedule_version);
+  EXPECT_EQ(status.deployment_stage, "not_sent");
+  EXPECT_EQ(env.nof_ntn_calendar_clear_requests(), 1U);
+
+  auto stored_state = load_ntn_onboard_position_plan_state(data.source.state_file);
+  ASSERT_TRUE(stored_state.has_value()) << stored_state.error();
+  ASSERT_TRUE(stored_state->has_value());
+  EXPECT_FALSE(stored_state->value().active.has_value());
+  ASSERT_TRUE(stored_state->value().pending.has_value());
+  EXPECT_EQ(stored_state->value().pending->source.schedule_version, data.pending_plan.schedule_version);
+  EXPECT_TRUE(stored_state->value().outstanding_clears.empty());
+}
+
+TEST(cu_cp_ntn_mobility_test, live_active_expiry_queues_clear_while_future_pending_remains_not_sent)
+{
+  persisted_active_pending_calendar_test_data data =
+      make_persisted_active_with_future_not_sent_pending(std::chrono::milliseconds{6000});
+  temporary_plan_file_guard plan_file_guard(data.plan_path);
+
+  cu_cp_test_env_params env_params;
+  env_params.ntn_onboard_position_plan                = data.source;
+  env_params.ntn_recovered_calendar_intents_per_cell  = data.recovered_active_intents;
+  env_params.ntn_recovered_calendar_preflight_reports = data.recovered_active_preflight;
+  cu_cp_test_environment env(std::move(env_params));
+  env.run_ng_setup();
+
+  const auto du_idx = env.connect_new_du();
+  ASSERT_TRUE(du_idx.has_value());
+  std::vector<test_helpers::served_cell_item_info> served_cells(2);
+  served_cells[0].nci = data.active_plan.onboard_cells[0].nci;
+  served_cells[0].pci = data.active_plan.onboard_cells[0].pci;
+  served_cells[1].nci = data.active_plan.onboard_cells[1].nci;
+  served_cells[1].pci = data.active_plan.onboard_cells[1].pci;
+  ASSERT_TRUE(env.run_f1_setup(du_idx.value(), int_to_gnb_du_id(0x18), served_cells));
+
+  f1ap_message query_request;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      du_idx.value(), query_request, std::chrono::milliseconds{1500}));
+  const auto query_update = decode_f1ap_ntn_access_calendar_update(
+      query_request.pdu.init_msg().value.gnb_du_res_coordination_request()->eutra_nr_cell_res_coordination_req_container);
+  ASSERT_TRUE(query_update.has_value());
+  EXPECT_EQ(query_update->operation, f1ap_ntn_access_calendar_operation::query);
+  EXPECT_EQ(query_update->schedule_version, data.active_plan.schedule_version);
+  env.respond_to_f1ap_resource_coordination_request(du_idx.value(), query_request);
+
+  ASSERT_TRUE(wait_for_test_condition([&]() {
+    const auto current = env.get_cu_cp()
+                             .get_command_handler()
+                             .get_ntn_command_handler()
+                             .get_current_ntn_runtime_status()
+                             .onboard_position_plan;
+    return current.active_schedule_version == data.active_plan.schedule_version &&
+           current.pending_schedule_version == data.pending_plan.schedule_version &&
+           current.deployment_stage == "not_sent";
+  }));
+
+  f1ap_message clear_request;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      du_idx.value(), clear_request, std::chrono::milliseconds{8000}));
+  const auto clear_update = decode_f1ap_ntn_access_calendar_update(
+      clear_request.pdu.init_msg().value.gnb_du_res_coordination_request()->eutra_nr_cell_res_coordination_req_container);
+  ASSERT_TRUE(clear_update.has_value());
+  EXPECT_EQ(clear_update->operation, f1ap_ntn_access_calendar_operation::clear);
+  EXPECT_EQ(clear_update->schedule_version, data.active_plan.schedule_version);
+  EXPECT_EQ(clear_update->calendar_hash, data.active_calendar_hash);
+
+  auto status = env.get_cu_cp()
+                    .get_command_handler()
+                    .get_ntn_command_handler()
+                    .get_current_ntn_runtime_status()
+                    .onboard_position_plan;
+  EXPECT_EQ(status.active_schedule_version, 0U);
+  EXPECT_EQ(status.pending_schedule_version, data.pending_plan.schedule_version);
+  EXPECT_EQ(status.deployment_stage, "not_sent");
+  EXPECT_EQ(status.clear_queue_depth, 1U);
+  EXPECT_EQ(status.clear_queue_head_schedule_version, data.active_plan.schedule_version);
+  EXPECT_EQ(status.clear_queue_head_calendar_hash, data.active_calendar_hash);
+  EXPECT_EQ(status.clear_queue_head_reason, "active_plan_expired");
+
+  env.respond_to_f1ap_resource_coordination_request(du_idx.value(), clear_request);
+  ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{1000}, [&]() {
+    return env.get_cu_cp()
+               .get_command_handler()
+               .get_ntn_command_handler()
+               .get_current_ntn_runtime_status()
+               .onboard_position_plan.clear_queue_depth == 0U;
+  }));
+  EXPECT_EQ(env.nof_ntn_calendar_clear_requests(), 1U);
+}
+
+TEST(cu_cp_ntn_mobility_test, restart_drops_expired_not_sent_plan_without_sending_clear)
+{
+  const nr_cell_identity first_nci  = make_default_env_nci(0);
+  const nr_cell_identity second_nci = make_default_env_nci(1);
+  constexpr pci_t        shared_pci = 101;
+  const int64_t          wall_now_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+          .count();
+  const int64_t historical_now_ms = wall_now_ms - 2000;
+  const int64_t activation_ms     = (historical_now_ms / 640) * 640;
+
+  ntn_versioned_position_plan plan;
+  plan.satellite_id         = "P01-S01";
+  plan.catalog_version      = 33;
+  plan.schedule_version     = 43;
+  plan.valid_from           = std::chrono::system_clock::time_point{std::chrono::milliseconds{activation_ms - 640}};
+  plan.activation_epoch     = std::chrono::system_clock::time_point{std::chrono::milliseconds{activation_ms}};
+  plan.valid_until          = std::chrono::system_clock::time_point{std::chrono::milliseconds{wall_now_ms - 1000}};
+  plan.onboard_cells[0]     = {first_nci, shared_pci};
+  plan.onboard_cells[1]     = {second_nci, shared_pci};
+  plan.visible_l1_positions = {{"G000001", 10.0, 20.0}, {"G000002", 10.1, 20.1}};
+  bind_onboard_planning_context(plan);
+  plan.content_hash                     = compute_ntn_position_plan_content_hash(plan);
+  const std::filesystem::path plan_path = write_onboard_position_plan_for_runtime_test(plan);
+  temporary_plan_file_guard   plan_file_guard(plan_path);
+
+  ntn_onboard_position_plan_source_config source;
+  source.enabled              = true;
+  source.du_execution_enabled = true;
+  source.du_prepare_guard     = std::chrono::milliseconds{100};
+  source.satellite_id         = plan.satellite_id;
+  source.plan_json_file       = plan_path.string();
+  source.cell_ncis            = {first_nci, second_nci};
+  source.cell_pcis            = {shared_pci, shared_pci};
+  bind_onboard_planning_context(source);
+
+  ntn_onboard_position_plan_config controller_cfg;
+  controller_cfg.enabled                            = true;
+  controller_cfg.require_external_apply             = true;
+  controller_cfg.satellite_id                       = source.satellite_id;
+  controller_cfg.expected_catalog_id                = source.expected_catalog_id;
+  controller_cfg.expected_catalog_hash              = source.expected_catalog_hash;
+  controller_cfg.expected_identity_registry_version = source.expected_identity_registry_version;
+  controller_cfg.expected_identity_registry_hash    = source.expected_identity_registry_hash;
+  controller_cfg.expected_access_profile_id         = source.expected_access_profile_id;
+  controller_cfg.expected_access_profile_hash       = source.expected_access_profile_hash;
+  controller_cfg.onboard_cells                      = {{{first_nci, shared_pci}, {second_nci, shared_pci}}};
+  ntn_onboard_position_plan_controller persisted_controller(controller_cfg);
+  const auto historical_now =
+      std::chrono::system_clock::time_point{std::chrono::milliseconds{historical_now_ms}};
+  ASSERT_TRUE(persisted_controller.submit(plan, historical_now).accepted);
+  ASSERT_TRUE(persisted_controller.pending_plan().has_value());
+  ASSERT_EQ(persisted_controller.deployment_stage(), ntn_position_plan_deployment_stage::not_sent);
+  ASSERT_TRUE(
+      store_ntn_onboard_position_plan_state_atomic(source.state_file, persisted_controller.make_persistent_state(9))
+          .has_value());
+
+  cu_cp_test_env_params env_params;
+  env_params.ntn_onboard_position_plan = source;
+  cu_cp_test_environment env(std::move(env_params));
+  env.run_ng_setup();
+  auto status = env.get_cu_cp()
+                    .get_command_handler()
+                    .get_ntn_command_handler()
+                    .get_current_ntn_runtime_status()
+                    .onboard_position_plan;
+  EXPECT_EQ(status.active_schedule_version, 0U);
+  EXPECT_EQ(status.pending_schedule_version, 0U);
+  EXPECT_EQ(status.clear_queue_depth, 0U);
+  EXPECT_EQ(status.schedule_version_high_water, plan.schedule_version);
+
+  const auto du_idx = env.connect_new_du();
+  ASSERT_TRUE(du_idx.has_value());
+  std::vector<test_helpers::served_cell_item_info> served_cells(2);
+  served_cells[0].nci = first_nci;
+  served_cells[0].pci = shared_pci;
+  served_cells[1].nci = second_nci;
+  served_cells[1].pci = shared_pci;
+  ASSERT_TRUE(env.run_f1_setup(du_idx.value(), int_to_gnb_du_id(0x15), served_cells));
+  f1ap_message unexpected_request;
+  EXPECT_FALSE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      du_idx.value(), unexpected_request, std::chrono::milliseconds{700}));
+  EXPECT_EQ(env.nof_ntn_calendar_clear_requests(), 0U);
+  status = env.get_cu_cp()
+               .get_command_handler()
+               .get_ntn_command_handler()
+               .get_current_ntn_runtime_status()
+               .onboard_position_plan;
+  EXPECT_EQ(status.clear_queue_depth, 0U);
+  EXPECT_EQ(status.clear_queue_head_schedule_version, 0U);
+  EXPECT_EQ(status.clear_queue_head_calendar_hash, "none");
+  EXPECT_EQ(status.clear_queue_head_reason, "none");
+  EXPECT_EQ(status.schedule_version_high_water, plan.schedule_version);
 }
 
 TEST(cu_cp_ntn_mobility_test, restart_clears_an_expired_deployed_calendar_before_accepting_new_work)
@@ -1853,69 +2701,179 @@ TEST(cu_cp_ntn_mobility_test, restart_clears_an_expired_deployed_calendar_before
   ASSERT_TRUE(persisted_controller.mark_deployment_preparing(plan.schedule_version, calendar_hash));
   ASSERT_TRUE(persisted_controller.mark_deployment_applied(plan.schedule_version, calendar_hash));
   ASSERT_TRUE(persisted_controller.advance_time(historical_now));
+
+  // Keep the complete latest management-center input as observation even though it exceeds the executable
+  // two-cell capacity. It must survive cleanup of the older, expired software calendar without becoming active.
+  ntn_versioned_position_plan overflow_plan = plan;
+  overflow_plan.catalog_version              = plan.catalog_version + 1;
+  overflow_plan.schedule_version             = plan.schedule_version + 1;
+  overflow_plan.visible_l1_positions.clear();
+  overflow_plan.visible_l1_positions.reserve(257);
+  for (unsigned i = 0; i != 257; ++i) {
+    overflow_plan.visible_l1_positions.push_back(
+        {fmt::format("G{:06}", i + 1), 10.0 + static_cast<double>(i / 32) * 0.01, 20.0, 0x7f});
+  }
+  overflow_plan.content_hash = compute_ntn_position_plan_content_hash(overflow_plan);
+  const auto overflow_result = persisted_controller.submit(overflow_plan, historical_now);
+  EXPECT_FALSE(overflow_result.accepted);
+  EXPECT_EQ(overflow_result.reason, ntn_position_plan_reject_reason::schedule_overflow);
+  EXPECT_EQ(persisted_controller.active_plan()->source.schedule_version, plan.schedule_version);
+  const std::filesystem::path overflow_plan_path = write_onboard_position_plan_for_runtime_test(overflow_plan);
+  temporary_plan_file_guard   overflow_plan_file_guard(overflow_plan_path);
+  // The state file remains tied to the original source path, while the management-center input visible after restart
+  // is the newer rejected plan whose complete 257-position inventory must remain observable.
+  source.plan_json_file = overflow_plan_path.string();
   ASSERT_TRUE(
       store_ntn_onboard_position_plan_state_atomic(source.state_file, persisted_controller.make_persistent_state(9))
           .has_value());
 
-  cu_cp_test_env_params env_params;
-  env_params.ntn_onboard_position_plan = source;
-  cu_cp_test_environment env(std::move(env_params));
-  env.run_ng_setup();
+  // If the DU confirms the clear but the state file cannot be updated, retain the exact obligation in memory and
+  // block further writes. Restoring the original file below models a safe operator repair before the next restart.
+  {
+    cu_cp_test_env_params failed_persist_params;
+    failed_persist_params.ntn_onboard_position_plan = source;
+    cu_cp_test_environment failed_persist_env(std::move(failed_persist_params));
+    failed_persist_env.run_ng_setup();
 
-  auto status = env.get_cu_cp()
-                    .get_command_handler()
-                    .get_ntn_command_handler()
-                    .get_current_ntn_runtime_status()
-                    .onboard_position_plan;
-  EXPECT_EQ(status.recovery_stage, "reconciled");
-  EXPECT_EQ(status.active_schedule_version, 0U);
-  EXPECT_EQ(status.clear_queue_depth, 1U);
-  EXPECT_GT(status.state_generation, 9U);
-  EXPECT_EQ(status.execution_evidence, "intent_or_control_plane_only");
+    const auto failed_persist_du = failed_persist_env.connect_new_du();
+    ASSERT_TRUE(failed_persist_du.has_value());
+    std::vector<test_helpers::served_cell_item_info> failed_persist_cells(2);
+    failed_persist_cells[0].nci = first_nci;
+    failed_persist_cells[0].pci = shared_pci;
+    failed_persist_cells[1].nci = second_nci;
+    failed_persist_cells[1].pci = shared_pci;
+    ASSERT_TRUE(
+        failed_persist_env.run_f1_setup(failed_persist_du.value(), int_to_gnb_du_id(0x16), failed_persist_cells));
+    f1ap_message failed_persist_clear_request;
+    ASSERT_TRUE(failed_persist_env.wait_for_f1ap_tx_pdu_without_auto_response(
+        failed_persist_du.value(), failed_persist_clear_request, std::chrono::milliseconds{1500}));
 
-  const auto du_idx = env.connect_new_du();
-  ASSERT_TRUE(du_idx.has_value());
-  std::vector<test_helpers::served_cell_item_info> served_cells(2);
-  served_cells[0].nci = first_nci;
-  served_cells[0].pci = shared_pci;
-  served_cells[1].nci = second_nci;
-  served_cells[1].pci = shared_pci;
-  ASSERT_TRUE(env.run_f1_setup(du_idx.value(), int_to_gnb_du_id(0x16), served_cells));
-  f1ap_message clear_request;
-  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
-      du_idx.value(), clear_request, std::chrono::milliseconds{1500}));
-  const auto& clear_asn1 = clear_request.pdu.init_msg().value.gnb_du_res_coordination_request();
-  const auto  clear_update =
-      decode_f1ap_ntn_access_calendar_update(clear_asn1->eutra_nr_cell_res_coordination_req_container);
-  ASSERT_TRUE(clear_update.has_value());
-  EXPECT_EQ(clear_update->operation, f1ap_ntn_access_calendar_operation::clear);
-  EXPECT_EQ(clear_update->schedule_version, plan.schedule_version);
-  env.respond_to_f1ap_resource_coordination_request(du_idx.value(), clear_request);
-  ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{1000}, [&]() {
-    return env.get_cu_cp()
-               .get_command_handler()
-               .get_ntn_command_handler()
-               .get_current_ntn_runtime_status()
-               .onboard_position_plan.clear_queue_depth == 0U;
-  }));
-  EXPECT_EQ(env.nof_ntn_calendar_clear_requests(), 1U);
+    state_file_write_failure_guard write_failure(source.state_file);
+    ASSERT_TRUE(write_failure.replace_with_directory());
+    failed_persist_env.respond_to_f1ap_resource_coordination_request(failed_persist_du.value(),
+                                                                     failed_persist_clear_request);
+    ASSERT_TRUE(wait_for_test_condition([&failed_persist_env]() {
+      return failed_persist_env.get_cu_cp()
+                 .get_command_handler()
+                 .get_ntn_command_handler()
+                 .get_current_ntn_runtime_status()
+                 .onboard_position_plan.state_write_blocked;
+    }));
+    const auto failed_persist_status = failed_persist_env.get_cu_cp()
+                                           .get_command_handler()
+                                           .get_ntn_command_handler()
+                                           .get_current_ntn_runtime_status()
+                                           .onboard_position_plan;
+    EXPECT_EQ(failed_persist_status.state_store_status, "write_failed");
+    EXPECT_EQ(failed_persist_status.clear_queue_depth, 1U);
+    EXPECT_EQ(failed_persist_status.clear_queue_head_schedule_version, plan.schedule_version);
+    EXPECT_EQ(failed_persist_status.clear_queue_head_calendar_hash, calendar_hash);
+    EXPECT_EQ(failed_persist_status.clear_queue_head_reason, "expired_deployment_recovered_after_restart");
+    EXPECT_EQ(failed_persist_env.nof_ntn_calendar_clear_requests(), 1U);
+    ASSERT_TRUE(write_failure.restore());
+  }
 
-  status = env.get_cu_cp()
-               .get_command_handler()
-               .get_ntn_command_handler()
-               .get_current_ntn_runtime_status()
-               .onboard_position_plan;
-  EXPECT_EQ(status.active_schedule_version, 0U);
-  EXPECT_EQ(status.clear_queue_depth, 0U);
-  EXPECT_EQ(status.execution_evidence, "intent_or_control_plane_only");
+  {
+    cu_cp_test_env_params env_params;
+    env_params.ntn_onboard_position_plan = source;
+    cu_cp_test_environment env(std::move(env_params));
+    env.run_ng_setup();
 
-  auto stored_state = load_ntn_onboard_position_plan_state(source.state_file);
-  ASSERT_TRUE(stored_state.has_value()) << stored_state.error();
-  ASSERT_TRUE(stored_state->has_value());
-  EXPECT_FALSE(stored_state->value().active.has_value());
-  EXPECT_FALSE(stored_state->value().pending.has_value());
-  EXPECT_TRUE(stored_state->value().outstanding_clears.empty());
-  EXPECT_GT(stored_state->value().generation, 10U);
+    auto status = env.get_cu_cp()
+                      .get_command_handler()
+                      .get_ntn_command_handler()
+                      .get_current_ntn_runtime_status()
+                      .onboard_position_plan;
+    EXPECT_EQ(status.recovery_stage, "reconciled");
+    EXPECT_EQ(status.active_schedule_version, 0U);
+    EXPECT_EQ(status.clear_queue_depth, 1U);
+    EXPECT_EQ(status.clear_queue_head_schedule_version, plan.schedule_version);
+    EXPECT_EQ(status.clear_queue_head_calendar_hash, calendar_hash);
+    EXPECT_EQ(status.clear_queue_head_reason, "expired_deployment_recovered_after_restart");
+    EXPECT_GT(status.state_generation, 9U);
+    EXPECT_EQ(status.execution_evidence, "intent_or_control_plane_only");
+    EXPECT_EQ(status.received_schedule_version, overflow_plan.schedule_version);
+    EXPECT_EQ(status.candidate_l1_positions, 257U);
+
+    const auto du_idx = env.connect_new_du();
+    ASSERT_TRUE(du_idx.has_value());
+    std::vector<test_helpers::served_cell_item_info> served_cells(2);
+    served_cells[0].nci = first_nci;
+    served_cells[0].pci = shared_pci;
+    served_cells[1].nci = second_nci;
+    served_cells[1].pci = shared_pci;
+    ASSERT_TRUE(env.run_f1_setup(du_idx.value(), int_to_gnb_du_id(0x16), served_cells));
+    f1ap_message clear_request;
+    ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+        du_idx.value(), clear_request, std::chrono::milliseconds{1500}));
+    const auto& clear_asn1 = clear_request.pdu.init_msg().value.gnb_du_res_coordination_request();
+    const auto  clear_update =
+        decode_f1ap_ntn_access_calendar_update(clear_asn1->eutra_nr_cell_res_coordination_req_container);
+    ASSERT_TRUE(clear_update.has_value());
+    EXPECT_EQ(clear_update->operation, f1ap_ntn_access_calendar_operation::clear);
+    EXPECT_EQ(clear_update->schedule_version, plan.schedule_version);
+    env.respond_to_f1ap_resource_coordination_request(du_idx.value(), clear_request);
+    ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{1000}, [&]() {
+      return env.get_cu_cp()
+                 .get_command_handler()
+                 .get_ntn_command_handler()
+                 .get_current_ntn_runtime_status()
+                 .onboard_position_plan.clear_queue_depth == 0U;
+    }));
+    EXPECT_EQ(env.nof_ntn_calendar_clear_requests(), 1U);
+
+    status = env.get_cu_cp()
+                 .get_command_handler()
+                 .get_ntn_command_handler()
+                 .get_current_ntn_runtime_status()
+                 .onboard_position_plan;
+    EXPECT_EQ(status.active_schedule_version, 0U);
+    EXPECT_EQ(status.clear_queue_depth, 0U);
+    EXPECT_EQ(status.clear_queue_head_schedule_version, 0U);
+    EXPECT_EQ(status.clear_queue_head_calendar_hash, "none");
+    EXPECT_EQ(status.clear_queue_head_reason, "none");
+    EXPECT_EQ(status.execution_evidence, "intent_or_control_plane_only");
+
+    auto stored_state = load_ntn_onboard_position_plan_state(source.state_file);
+    ASSERT_TRUE(stored_state.has_value()) << stored_state.error();
+    ASSERT_TRUE(stored_state->has_value());
+    EXPECT_FALSE(stored_state->value().active.has_value());
+    EXPECT_FALSE(stored_state->value().pending.has_value());
+    EXPECT_TRUE(stored_state->value().outstanding_clears.empty());
+    EXPECT_GT(stored_state->value().generation, 10U);
+    ASSERT_TRUE(stored_state->value().received_plan.has_value());
+    EXPECT_EQ(stored_state->value().received_plan->schedule_version, overflow_plan.schedule_version);
+    EXPECT_EQ(stored_state->value().received_plan->candidate_inventory.size(), 257U);
+  }
+
+  // A confirmed clear is removed from durable state and must not be sent again after another restart.
+  cu_cp_test_env_params restarted_params;
+  restarted_params.ntn_onboard_position_plan = source;
+  cu_cp_test_environment restarted_env(std::move(restarted_params));
+  restarted_env.run_ng_setup();
+  const auto restarted_du = restarted_env.connect_new_du();
+  ASSERT_TRUE(restarted_du.has_value());
+  std::vector<test_helpers::served_cell_item_info> restarted_cells(2);
+  restarted_cells[0].nci = first_nci;
+  restarted_cells[0].pci = shared_pci;
+  restarted_cells[1].nci = second_nci;
+  restarted_cells[1].pci = shared_pci;
+  ASSERT_TRUE(restarted_env.run_f1_setup(restarted_du.value(), int_to_gnb_du_id(0x16), restarted_cells));
+  f1ap_message unexpected_request;
+  EXPECT_FALSE(restarted_env.wait_for_f1ap_tx_pdu_without_auto_response(
+      restarted_du.value(), unexpected_request, std::chrono::milliseconds{700}));
+  EXPECT_EQ(restarted_env.nof_ntn_calendar_clear_requests(), 0U);
+  const auto restarted_status = restarted_env.get_cu_cp()
+                                    .get_command_handler()
+                                    .get_ntn_command_handler()
+                                    .get_current_ntn_runtime_status()
+                                    .onboard_position_plan;
+  EXPECT_EQ(restarted_status.clear_queue_depth, 0U);
+  EXPECT_EQ(restarted_status.clear_queue_head_schedule_version, 0U);
+  EXPECT_EQ(restarted_status.clear_queue_head_calendar_hash, "none");
+  EXPECT_EQ(restarted_status.clear_queue_head_reason, "none");
+  EXPECT_EQ(restarted_status.received_schedule_version, overflow_plan.schedule_version);
+  EXPECT_EQ(restarted_status.candidate_l1_positions, 257U);
 }
 
 TEST(cu_cp_ntn_mobility_test, restart_clears_only_the_expired_update_before_restoring_the_valid_active_plan)
@@ -2028,6 +2986,9 @@ TEST(cu_cp_ntn_mobility_test, restart_clears_only_the_expired_update_before_rest
   EXPECT_EQ(status.recovery_schedule_version, active_plan.schedule_version);
   EXPECT_EQ(status.active_schedule_version, 0U);
   EXPECT_EQ(status.clear_queue_depth, 1U);
+  EXPECT_EQ(status.clear_queue_head_schedule_version, expired_update.schedule_version);
+  EXPECT_EQ(status.clear_queue_head_calendar_hash, expired_calendar_hash);
+  EXPECT_EQ(status.clear_queue_head_reason, "expired_deployment_recovered_after_restart");
 
   auto normalized_state = load_ntn_onboard_position_plan_state(source.state_file);
   ASSERT_TRUE(normalized_state.has_value()) << normalized_state.error();
@@ -2080,6 +3041,9 @@ TEST(cu_cp_ntn_mobility_test, restart_clears_only_the_expired_update_before_rest
                .onboard_position_plan;
   EXPECT_EQ(status.active_schedule_version, 0U);
   EXPECT_EQ(status.clear_queue_depth, 0U);
+  EXPECT_EQ(status.clear_queue_head_schedule_version, 0U);
+  EXPECT_EQ(status.clear_queue_head_calendar_hash, "none");
+  EXPECT_EQ(status.clear_queue_head_reason, "none");
   EXPECT_EQ(status.recovery_stage, "reconciling");
 
   env.respond_to_f1ap_resource_coordination_request(du_idx.value(), query_request);
@@ -2097,8 +3061,12 @@ TEST(cu_cp_ntn_mobility_test, restart_clears_only_the_expired_update_before_rest
                .onboard_position_plan;
   EXPECT_EQ(status.recovery_stage, "reconciled");
   EXPECT_EQ(status.active_schedule_version, active_plan.schedule_version);
+  EXPECT_EQ(status.active_calendar_hash, active_calendar_hash);
   EXPECT_EQ(status.deployment_stage, "applied");
   EXPECT_EQ(status.clear_queue_depth, 0U);
+  EXPECT_EQ(status.clear_queue_head_schedule_version, 0U);
+  EXPECT_EQ(status.clear_queue_head_calendar_hash, "none");
+  EXPECT_EQ(status.clear_queue_head_reason, "none");
 }
 
 TEST(cu_cp_ntn_mobility_test, restart_recovery_fails_closed_when_an_onboard_nci_pci_cell_mapping_is_missing)

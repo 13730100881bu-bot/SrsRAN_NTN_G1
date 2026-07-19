@@ -69,6 +69,7 @@ du_index_t du_processor_repository::add_du(std::unique_ptr<f1ap_message_notifier
 
   srsran_assert(du != nullptr, "Failed to create DU processor");
   du_ctxt.processor = std::move(du);
+  cfg.cu_cp_du_handler.handle_du_connection_established(du_index);
 
   return du_index;
 }
@@ -86,6 +87,9 @@ async_task<void> du_processor_repository::remove_du(du_index_t du_index)
       logger.warning("Remove DU called for inexistent du_index={}", du_index);
       return;
     }
+
+    // Invalidate connection-scoped evidence while the served-cell context is still available.
+    cfg.cu_cp_du_handler.handle_du_disconnection(du_index);
 
     // Stop DU activity, eliminating pending transactions for the DU and respective UEs.
     CORO_AWAIT(du_db.find(du_index)->second.processor->get_f1ap_handler().stop());

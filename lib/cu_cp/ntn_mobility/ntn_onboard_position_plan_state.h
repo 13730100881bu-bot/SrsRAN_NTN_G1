@@ -34,6 +34,7 @@ namespace srs_cu_cp {
 /// On-disk state is deliberately bounded before JSON parsing.
 inline constexpr size_t max_ntn_onboard_position_plan_state_file_size   = 4U * 1024U * 1024U;
 inline constexpr size_t max_ntn_onboard_position_plan_clear_obligations = 64U;
+inline constexpr size_t max_ntn_onboard_position_plan_observed_positions = 65536U;
 
 /// Management-center artifacts that bind the persisted state to one planning context.
 struct ntn_onboard_position_plan_state_context {
@@ -61,12 +62,24 @@ struct ntn_onboard_position_plan_clear_obligation {
   std::string                              reason;
 };
 
+/// Latest management-center input retained for restart-safe read-only observation.
+///
+/// This record is not a checked deployment snapshot and is never used as identity or DU application authority. It is
+/// stored separately so rejected or expired inputs keep their complete candidate inventory after cleanup and restart.
+struct ntn_onboard_position_plan_received_observation {
+  uint64_t                              catalog_version  = 0;
+  uint64_t                              schedule_version = 0;
+  std::string                           content_hash;
+  std::chrono::system_clock::time_point activation_epoch{};
+  std::vector<ntn_l1_position>          candidate_inventory;
+};
+
 /// Private recovery record for the onboard position-plan controller.
 ///
 /// recorded_deployment_stage is historical information only. In particular, a persisted value of applied is not live
 /// DU evidence after restart. Consumers must reconcile with the DU before exposing active/applied state.
 struct ntn_onboard_position_plan_persistent_state {
-  static constexpr unsigned current_schema_version = 1;
+  static constexpr unsigned current_schema_version = 2;
 
   unsigned    schema_version = current_schema_version;
   uint64_t    generation     = 0;
@@ -79,6 +92,7 @@ struct ntn_onboard_position_plan_persistent_state {
   uint64_t                                                highest_schedule_version = 0;
   std::optional<ntn_onboard_position_plan_state_snapshot> active;
   std::optional<ntn_onboard_position_plan_state_snapshot> pending;
+  std::optional<ntn_onboard_position_plan_received_observation> received_plan;
   std::array<ntn_onboard_cell_position_set, 2>            sticky_partition{};
   std::vector<ntn_onboard_position_plan_clear_obligation> outstanding_clears;
 
