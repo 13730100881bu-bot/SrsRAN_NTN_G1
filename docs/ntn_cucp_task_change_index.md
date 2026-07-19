@@ -114,6 +114,7 @@ them casually.
 | CUCP-038 | Fail-safe DU resource-audit completeness and RNTI lifecycle reconciliation. Private codec v2 independently qualifies RNTI and UE-slot snapshots; v1 is incomplete by default. MAC retains pending/consumed/expired leases with enforced expiry; exact-generation/full-set ACK validation, `ack_unknown` same-generation recovery, unresolved-pool generation gating, recoverable audit conflicts and indexed snapshot lookup close the CU/DU software-state loop. Same-DU C-RNTI values remain unique, SR/SRS repair records the DU-applied request, and SIB19 feedback is generation/state guarded. UE-slot mapping and durable terminal GC/reuse remain incomplete. This is not endurance or RF evidence. | Implementation commits `465e8c6` and `2ad0b1b`. Representative areas: `include/srsran/f1ap/ntn_rnti_lease_pool.h`, `include/srsran/mac/mac_manager.h`, `lib/mac/rnti_manager.h`, `lib/du/du_high/du_manager/du_manager_impl.cpp`, `lib/cu_cp/ntn_mobility/ntn_beam_service_resource_manager.*`, `lib/cu_cp/cu_cp_impl.*`, focused F1AP/DU/MAC/CU-CP tests and these NTN documents. |
 | CUCP-039 | Durable onboard-plan restart recovery. Execution mode requires a private `state_file` that is atomically replaced with version high-water marks, active/pending plans, stable two-cell partition, hashes, activation state, lower-layer software deployment state and exact cleanup obligations. Restart revalidates the saved plan and queries DU before exposing `active/applied`; partial or mismatched feedback fails closed. Expired deployments retain cleanup work without clearing a different valid fallback. Read-only OAM reports storage and recovery health. Default-off terrestrial behavior is unchanged, and `applied` remains software-gate evidence rather than RF evidence. A trusted monotonic anchor for whole-file rollback/deletion and DU connection-generation binding remain follow-up work. | `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan_state.*`, `ntn_onboard_position_plan.*`, `lib/cu_cp/cu_cp_impl.*`, private CU-CP configuration and `ntn_state`, focused state/controller/CU-CP/config tests, runtime-contract and memory documentation. |
 | CUCP-040 | DU reconnect-safe onboard-plan recovery. CU-CP binds prepare completions to the DU connection generation and exact plan, while query/clear also carry a request-instance guard. It hides application evidence immediately on disconnect, persists the recovery state, and accepts it again only after a matching response from the live connection. A future prepared plan cannot clear the current plan before `activation_epoch`; early confirmation keeps the new plan hidden as pending, and the normal path switches and cleans up only after the epoch. If that pending plan expires before a delayed timer runs, the historical fallback returns to live-DU reconciliation. Read-only `ntn_state` exposes the active calendar hash, cleanup queue head and state-storage health. Expired `not_sent` plans do not generate clears. A confirmed clear is removed from the live queue only after a successful durable state write; write failure leaves the obligation unchanged in fail-closed memory, and a durably removed clear is not repeated after restart. State schema v2 independently retains the complete latest parsed candidate inventory, including a rejected 257-position input, across cleanup and repeated restart without promoting it or changing accepted version high-water; schema v1 remains readable. Default-off terrestrial behavior is unchanged; this is CU/DU software-state evidence, not RF evidence. | `lib/cu_cp/du_processor/du_processor_repository.cpp`, `lib/cu_cp/cu_cp_impl*`, `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.*`, `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan_state.*`, `include/srsran/cu_cp/cu_cp_command_handler.h`, O-CU-CP `ntn_state`, focused controller/state/CU-CP/config tests. |
+| CUCP-041 | Historical-plan fallback lifecycle convergence. When a future plan was confirmed early, then superseded by a newer checked plan, failure of that newer deployment now returns the historical plan to live-DU verification instead of leaving it hidden until process restart. The recovery target, accepted-version high-water and the complete most recently received candidate inventory survive a state save/load round trip. A rejected lower-version replay may update the read-only “last received input” observation, but it cannot change the accepted high-water or active plan. No public protocol, F1 payload, DU/MAC/PHY/RU/RF, Web/GIS or generated ASN.1 change is involved. | `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.cpp`, `tests/unittests/cu_cp/ntn_mobility/ntn_onboard_position_plan_test.cpp`, this index and agent memory. |
 
 ## Current Useful Validation Notes
 
@@ -315,3 +316,30 @@ deletion still requires a separate trusted monotonic anchor. F1AP common
 transaction cancellation during DU teardown remains a follow-up lifecycle
 hardening item; CU-CP generation/request guards prevent those stale completions
 from restoring NTN application evidence.
+
+CUCP-041 closeout evidence (2026-07-19):
+
+```bash
+cmake --build build/ai-clean --target ntn_mobility_test -j1
+build/ai-clean/tests/unittests/cu_cp/ntn_mobility/ntn_mobility_test \
+  --gtest_filter='ntn_onboard_position_plan.*:ntn_onboard_position_plan_state.*'
+cmake --build build/ai-clean --target srsran_cu_cp -j1
+cmake --build build/ai-clean --target cu_cp_test -j1
+build/ai-clean/tests/unittests/cu_cp/cu_cp_test \
+  --gtest_filter='cu_cp_ntn_mobility_test.future_recovered_update_*:cu_cp_ntn_mobility_test.disconnect_during_recovery_query_*:cu_cp_ntn_mobility_test.du_disconnect_*:cu_cp_ntn_mobility_test.restart_*:cu_cp_ntn_mobility_test.live_active_expiry_*:cu_cp_ntn_mobility_test.default_cu_cp_rejects_ntn_satellite_state_updates'
+```
+
+`ntn_mobility_test` rebuilt successfully and the complete position-plan/state
+group passed 54/54, including the new nested-replacement failure and state
+round-trip case. `srsran_cu_cp` and `cu_cp_test` both rebuilt successfully; the
+focused disconnect, restart, future activation, active expiry and default-off
+group passed 14/14. `git diff --check` passed, and no build/test processes were
+left running.
+
+No broad `ctest` or split demo was repeated: this slice changes only the private
+CU-CP controller fallback decision and its focused test. It does not change the
+existing F1 payload, DU/MAC scheduler gate, PHY, RU/RF, Web/GIS or generated
+ASN.1. The evidence remains software-control evidence, not proof that a radio
+beam was transmitted. Whole-state rollback/deletion, authenticated management
+input, F1 common transaction cancellation and RF/device execution remain later
+work.

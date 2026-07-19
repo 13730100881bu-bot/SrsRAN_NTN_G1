@@ -224,6 +224,17 @@ Use a staged validation ladder:
   high-water mark or making that input deployable. Schema v1 remains readable;
   only v1 may reconstruct this observation from its latest active/pending
   snapshot, while an explicit v2 `received_plan:null` remains empty.
+- CUCP-041 closes the nested replacement corner of that recovery model. If a
+  future plan has already been confirmed by DU, a newer checked plan may replace
+  it while the historical plan remains hidden. When the newer deployment then
+  fails, CU-CP now returns the historical plan to live-DU verification in the
+  same process; it no longer depends on a restart to rediscover that fallback.
+  State save/load preserves the fallback target, accepted version high-water and
+  the complete most recently received candidate inventory. That inventory is a
+  read-only audit of the latest parsed management input, not the accepted or
+  active plan: a rejected replay can replace this observation, but cannot lower
+  accepted versions or change the running plan. Sender authentication and a
+  protected monotonic observation history remain separate future work.
 - Remaining recovery protections are narrower. Because version high-water marks
   and snapshots are kept in the same file, replacing or deleting the whole file
   cannot be detected without a separate trusted monotonic anchor. F1AP DU stop
@@ -439,8 +450,12 @@ For a more detailed task-to-change lookup, use
   execution requires `state_file`; historical `applied` data is hidden until a
   complete matching DU query succeeds, while expired deployments retain exact
   cleanup work across restart. Read-only recovery status is exposed without
-  changing the default terrestrial path. Whole-file rollback/deletion and DU
-  connection-generation binding remain open protections.
+  changing the default terrestrial path. Whole-file rollback/deletion remains
+  open; DU connection-generation binding was added by CUCP-040.
+- CUCP-040/041: disconnect invalidates old DU evidence, future activation does
+  not clear the historical plan early, cleanup survives failed durable writes,
+  and a failed nested replacement returns to live verification of the hidden
+  fallback. These are software-control guarantees, not RF execution evidence.
 
 ## Protocol References
 
