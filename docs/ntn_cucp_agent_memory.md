@@ -203,10 +203,10 @@ Use a staged validation ladder:
   matching two-cell NCI/PCI mapping is available on a live connection. A future
   pending plan remains behind its `activation_epoch`: `ready` is polled without
   clearing the current plan. Even an early `applied` response keeps the new plan
-  hidden as pending and does not clear the historical fallback; promotion still
-  waits for the epoch. If that pending plan expires before a delayed timer can
-  activate it, the historical fallback returns to live-DU reconciliation and
-  the expired plan is cleaned separately. Cleanup queue head
+  hidden as pending and does not by itself clear a still-valid historical
+  fallback; promotion still waits for the epoch. If that pending plan expires
+  before a delayed timer can activate it, the historical fallback returns to
+  live-DU reconciliation and the expired plan is cleaned separately. Cleanup queue head
   version/hash/reason and the active calendar hash are visible in `ntn_state`.
   Expired `not_sent` plans create no cleanup. An applied active plan queues its
   exact version/hash for cleanup at expiry even when a future plan is still
@@ -235,6 +235,18 @@ Use a staged validation ladder:
   active plan: a rejected replay can replace this observation, but cannot lower
   accepted versions or change the running plan. Sender authentication and a
   protected monotonic observation history remain separate future work.
+- CUCP-042 closes exact-deadline expiry for a hidden historical fallback. Its
+  own `valid_until` is now a timer deadline: at that instant the old plan
+  permanently loses fallback eligibility, and one exact
+  `schedule_version`/`calendar_hash` cleanup task is queued with reason
+  `historical_fallback_expired` before any same-instant pending activation. The
+  pending plan, accepted-version high-water, latest received input and partition
+  remain intact. State schema v2 preserves the pending plan and outstanding
+  cleanup together, so DU loss postpones only transmission and restart continues
+  cleanup without restoring the expired plan. A later update failure cannot
+  resurrect it; queue or state-write failure remains fail closed. No public OAM
+  field, protocol container or lower-layer interface is added, and this remains
+  software-calendar rather than RF evidence.
 - Remaining recovery protections are narrower. Because version high-water marks
   and snapshots are kept in the same file, replacing or deleting the whole file
   cannot be detected without a separate trusted monotonic anchor. F1AP DU stop
@@ -244,10 +256,6 @@ Use a staged validation ladder:
   `state_store_error` is also a detailed diagnostic string and can include the
   configured state path; a future OAM hardening pass should expose a stable
   machine code while leaving path details only in logs.
-- A future early-applied plan can hide the historical fallback until its own
-  activation/failure decision. If that fallback expires first, its validity
-  gate prevents further use, but the explicit clear is currently delayed until
-  that decision; exact-deadline cleanup is a remaining lifecycle hardening item.
 - In the legacy beam-table prototype, analog access beams are access groups over
   digital beams:
   - RRC setup/reestablishment gate
@@ -452,10 +460,12 @@ For a more detailed task-to-change lookup, use
   cleanup work across restart. Read-only recovery status is exposed without
   changing the default terrestrial path. Whole-file rollback/deletion remains
   open; DU connection-generation binding was added by CUCP-040.
-- CUCP-040/041: disconnect invalidates old DU evidence, future activation does
+- CUCP-040/041/042: disconnect invalidates old DU evidence, future activation does
   not clear the historical plan early, cleanup survives failed durable writes,
   and a failed nested replacement returns to live verification of the hidden
-  fallback. These are software-control guarantees, not RF execution evidence.
+  fallback. A hidden fallback is removed and queued for exact cleanup at its own
+  validity deadline, including while DU is disconnected. These are
+  software-control guarantees, not RF execution evidence.
 
 ## Protocol References
 

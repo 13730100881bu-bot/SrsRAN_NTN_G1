@@ -236,16 +236,19 @@ from the current live connection for the same two cells and version/hash can
 restore evidence. Responses from an older connection are ignored.
 
 An early `applied` result for a future plan does not cross its
-`activation_epoch` and does not clear the historical active fallback. The
-fallback survives repeated disconnects before that epoch. If the update expires
-or fails, the fallback itself must be reconciled with the live DU before it is
-shown as active again.
+`activation_epoch` and does not by itself clear a still-valid historical active
+fallback.
 
 If that hidden fallback reaches its own `valid_until` before the future plan is
-decided, its calendar validity already prevents further authorization, but the
-explicit clear can be delayed until the future plan activates or fails. Queuing
-that clear exactly at the fallback deadline is a remaining lifecycle hardening
-item; this limitation must not be described as RF or device cleanup evidence.
+decided, CU-CP permanently removes it from fallback eligibility at that deadline
+and queues one exact (`schedule_version`, `calendar_hash`) cleanup task with
+reason `historical_fallback_expired`. This deadline is processed before a
+same-instant pending-plan activation. A DU disconnection delays transmission,
+not creation of the cleanup obligation; state schema v2 preserves the pending
+plan and outstanding cleanup across restart. A later update failure cannot
+restore the expired fallback. Queue or state-write failure remains fail closed
+and must not expose the old plan as usable. This is software-calendar cleanup,
+not RF or device cleanup evidence.
 
 The read-only `ntn_state` view exposes whether a state file is configured and
 required, its schema/generation/hash, the last save result and error, whether
