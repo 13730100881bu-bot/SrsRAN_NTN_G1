@@ -373,6 +373,11 @@ public:
                        ntn_position_plan_reject_reason reason,
                        std::string                     detail);
 
+  /// Removes a hidden historical fallback once its own validity has ended. The returned plan is no longer eligible
+  /// for recovery and can be queued for exact lower-layer software-calendar cleanup by the CU-CP owner.
+  std::optional<ntn_activated_position_plan>
+  take_expired_recovery_fallback(std::chrono::system_clock::time_point now);
+
   std::vector<ntn_access_calendar_intent>
   build_access_calendar(uint64_t                                            schedule_version,
                         const std::array<ntn_onboard_cell_position_set, 2>& assignments) const;

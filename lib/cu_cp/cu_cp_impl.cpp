@@ -12611,6 +12611,11 @@ void cu_cp_impl::schedule_ntn_onboard_position_plan_activation()
            ntn_onboard_position_plan_ctrl->active_plan()->source.valid_until < next_deadline.value())) {
         next_deadline = ntn_onboard_position_plan_ctrl->active_plan()->source.valid_until;
       }
+      if (ntn_onboard_position_plan_ctrl->recovery_fallback_plan().has_value() &&
+          (!next_deadline.has_value() ||
+           ntn_onboard_position_plan_ctrl->recovery_fallback_plan()->source.valid_until < next_deadline.value())) {
+        next_deadline = ntn_onboard_position_plan_ctrl->recovery_fallback_plan()->source.valid_until;
+      }
       if (!ntn_position_plan_state_write_blocked && !ntn_position_plan_clear_queue.empty() &&
           !ntn_position_plan_clear_in_flight) {
         const auto clear_retry = now + std::chrono::milliseconds{500};
@@ -12656,6 +12661,7 @@ void cu_cp_impl::on_ntn_onboard_position_plan_activation_timer_expired()
   std::optional<uint64_t>                    activated_version;
   std::optional<ntn_activated_position_plan> plan_to_clear;
   std::optional<ntn_activated_position_plan> expired_active_to_clear;
+  std::optional<ntn_activated_position_plan> expired_fallback_to_clear;
   std::string                                plan_clear_reason;
   {
     std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
@@ -12669,6 +12675,8 @@ void cu_cp_impl::on_ntn_onboard_position_plan_activation_timer_expired()
         activated_version = ntn_onboard_position_plan_ctrl->active_plan()->source.schedule_version;
       }
     } else {
+      expired_fallback_to_clear = ntn_onboard_position_plan_ctrl->take_expired_recovery_fallback(now);
+      controller_state_changed  = expired_fallback_to_clear.has_value();
       if (ntn_onboard_position_plan_ctrl->recovery_plan().has_value()) {
         const auto recovering = *ntn_onboard_position_plan_ctrl->recovery_plan();
         if (now >= recovering.source.valid_until) {
@@ -12758,6 +12766,9 @@ void cu_cp_impl::on_ntn_onboard_position_plan_activation_timer_expired()
     if (expired_active_to_clear.has_value()) {
       queue_ntn_onboard_position_plan_clear_locked(*expired_active_to_clear, "active_plan_expired");
     }
+    if (expired_fallback_to_clear.has_value()) {
+      queue_ntn_onboard_position_plan_clear_locked(*expired_fallback_to_clear, "historical_fallback_expired");
+    }
     if (plan_to_clear.has_value()) {
       queue_ntn_onboard_position_plan_clear_locked(
           *plan_to_clear,
@@ -12765,9 +12776,11 @@ void cu_cp_impl::on_ntn_onboard_position_plan_activation_timer_expired()
     }
     if (cfg.mobility.onboard_position_plan.du_execution_enabled &&
         (controller_state_changed || activated_version.has_value() || expired_active_to_clear.has_value() ||
-         plan_to_clear.has_value())) {
+         expired_fallback_to_clear.has_value() || plan_to_clear.has_value())) {
       persist_ntn_onboard_position_plan_state_locked(activated_version.has_value() ? "plan_activated"
                                                      : expired_active_to_clear.has_value() ? "active_plan_expired"
+                                                     : expired_fallback_to_clear.has_value()
+                                                         ? "historical_fallback_expired"
                                                      : plan_to_clear.has_value() ? "pending_plan_rejected"
                                                                                  : "plan_state_advanced");
     }

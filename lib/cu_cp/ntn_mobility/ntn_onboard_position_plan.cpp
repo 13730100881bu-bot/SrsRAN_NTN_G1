@@ -1825,6 +1825,19 @@ bool ntn_onboard_position_plan_controller::reject_recovery(uint64_t             
   return true;
 }
 
+std::optional<ntn_activated_position_plan>
+ntn_onboard_position_plan_controller::take_expired_recovery_fallback(
+    std::chrono::system_clock::time_point now)
+{
+  if (!recovery_fallback_active.has_value() || now < recovery_fallback_active->source.valid_until) {
+    return std::nullopt;
+  }
+
+  std::optional<ntn_activated_position_plan> expired = std::move(recovery_fallback_active);
+  recovery_fallback_active.reset();
+  return expired;
+}
+
 ntn_position_plan_submit_result ntn_onboard_position_plan_controller::submit(
     const ntn_versioned_position_plan& plan, std::chrono::system_clock::time_point now)
 {
