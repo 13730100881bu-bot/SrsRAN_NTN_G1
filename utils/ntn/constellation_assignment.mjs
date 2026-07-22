@@ -94,33 +94,66 @@ function previousCellBank(previousAssignments, positionId) {
   return typeof previous === 'object' && previous !== null ? previous.cellBank : undefined;
 }
 
-/**
- * Deterministic maximum-cardinality bipartite b-matching.
- *
- * Every position has capacity one and every satellite has satelliteCapacity.
- * Valid previous owners are seeded first, but residual augmenting paths may move
- * them when that is necessary to avoid leaving another position unmatched.
- */
-export function matchCandidatesToCapacity(
-  candidateSets,
-  {satelliteCapacity = DEFAULT_SATELLITE_CAPACITY, previousAssignments = new Map()} = {}
-) {
-  assertPositiveInteger(satelliteCapacity, 'satelliteCapacity');
-  assertMap(previousAssignments, 'previousAssignments');
-  const sets = normalizeCandidateSets(candidateSets, 'candidateSets');
-  if (sets.length === 0) {
-    return new Map();
-  }
+function compareHeapEntry(left, right) {
+  return left.distance - right.distance || left.node - right.node;
+}
 
-  const satelliteIds = [...new Set(sets.flatMap((set) => set.candidates.map((candidate) => candidate.satelliteId)))].sort();
+function pushHeap(heap, entry) {
+  heap.push(entry);
+  let index = heap.length - 1;
+  while (index > 0) {
+    const parent = Math.floor((index - 1) / 2);
+    if (compareHeapEntry(heap[parent], entry) <= 0) break;
+    heap[index] = heap[parent];
+    index = parent;
+  }
+  heap[index] = entry;
+}
+
+function popHeap(heap) {
+  const first = heap[0];
+  const last = heap.pop();
+  if (heap.length === 0) return first;
+  let index = 0;
+  while (true) {
+    const left = index * 2 + 1;
+    if (left >= heap.length) break;
+    const right = left + 1;
+    const child = right < heap.length && compareHeapEntry(heap[right], heap[left]) < 0 ? right : left;
+    if (compareHeapEntry(last, heap[child]) <= 0) break;
+    heap[index] = heap[child];
+    index = child;
+  }
+  heap[index] = last;
+  return first;
+}
+
+/**
+ * Deterministic minimum-cost bipartite b-matching with an explicit unmatched edge.
+ *
+ * Every position sends exactly one unit: to a candidate satellite, or directly
+ * to the sink as unmatched. An unmatched unit costs N+1, a changed/new owner
+ * costs one and a retained incumbent costs zero. Since at most N owner-change
+ * units can exist, this single optimization first maximizes cardinality and then
+ * maximizes incumbent retention at that cardinality.
+ *
+ * The primal-dual solver sends a blocking flow across every shortest-cost layer,
+ * rather than recomputing a complete maximum flow once per incumbent.
+ */
+function optimalStickyMatching(sets, satelliteCapacity, previousAssignments) {
+  if (sets.length === 0) return new Map();
+
+  const satelliteIds = [...new Set(
+    sets.flatMap((set) => set.candidates.map((candidate) => candidate.satelliteId))
+  )].sort(compareText);
   const source = 0;
   const firstPositionNode = 1;
   const firstSatelliteNode = firstPositionNode + sets.length;
   const sink = firstSatelliteNode + satelliteIds.length;
   const graph = Array.from({length: sink + 1}, () => []);
-  const addEdge = (from, to, capacity, satelliteId = undefined) => {
-    const forward = {to, reverse: graph[to].length, capacity, satelliteId};
-    const reverse = {to: from, reverse: graph[from].length, capacity: 0, satelliteId: undefined};
+  const addEdge = (from, to, capacity, cost, satelliteId = undefined) => {
+    const forward = {to, reverse: graph[to].length, capacity, cost, satelliteId};
+    const reverse = {to: from, reverse: graph[from].length, capacity: 0, cost: -cost};
     graph[from].push(forward);
     graph[to].push(reverse);
     return forward;
@@ -129,57 +162,66 @@ export function matchCandidatesToCapacity(
   const satelliteNodeById = new Map(
     satelliteIds.map((satelliteId, index) => [satelliteId, firstSatelliteNode + index])
   );
-  const sourceEdgeByPositionId = new Map();
-  const candidateEdgeByKey = new Map();
-  const sinkEdgeBySatelliteId = new Map();
-
+  const candidateEdgesByPosition = [];
+  const unmatchedCost = sets.length + 1;
   sets.forEach((candidateSet, setIndex) => {
     const positionNode = firstPositionNode + setIndex;
-    sourceEdgeByPositionId.set(candidateSet.positionId, addEdge(source, positionNode, 1));
+    addEdge(source, positionNode, 1, 0);
     const incumbent = previousSatelliteId(previousAssignments, candidateSet.positionId);
     const orderedCandidates = [...candidateSet.candidates].sort((left, right) => {
       const incumbentOrder = Number(right.satelliteId === incumbent) - Number(left.satelliteId === incumbent);
       return incumbentOrder || candidateQuality(right) - candidateQuality(left) ||
         compareText(left.satelliteId, right.satelliteId);
     });
-    for (const candidate of orderedCandidates) {
-      candidateEdgeByKey.set(
-        `${candidateSet.positionId}\0${candidate.satelliteId}`,
-        addEdge(positionNode, satelliteNodeById.get(candidate.satelliteId), 1, candidate.satelliteId)
-      );
-    }
+    candidateEdgesByPosition[setIndex] = orderedCandidates.map((candidate) => addEdge(
+      positionNode,
+      satelliteNodeById.get(candidate.satelliteId),
+      1,
+      candidate.satelliteId === incumbent ? 0 : 1,
+      candidate.satelliteId
+    ));
+    addEdge(positionNode, sink, 1, unmatchedCost);
   });
   for (const satelliteId of satelliteIds) {
-    sinkEdgeBySatelliteId.set(
-      satelliteId,
-      addEdge(satelliteNodeById.get(satelliteId), sink, satelliteCapacity)
-    );
+    addEdge(satelliteNodeById.get(satelliteId), sink, satelliteCapacity, 0);
   }
 
-  const consume = (edge) => {
-    edge.capacity -= 1;
-    graph[edge.to][edge.reverse].capacity += 1;
-  };
-  const seededLoad = new Map();
-  for (const candidateSet of sets) {
-    const incumbent = previousSatelliteId(previousAssignments, candidateSet.positionId);
-    if (!incumbent || (seededLoad.get(incumbent) ?? 0) >= satelliteCapacity) {
-      continue;
-    }
-    const sourceEdge = sourceEdgeByPositionId.get(candidateSet.positionId);
-    const candidateEdge = candidateEdgeByKey.get(`${candidateSet.positionId}\0${incumbent}`);
-    const sinkEdge = sinkEdgeBySatelliteId.get(incumbent);
-    if (!sourceEdge || !candidateEdge || !sinkEdge || sinkEdge.capacity <= 0) {
-      continue;
-    }
-    consume(sourceEdge);
-    consume(candidateEdge);
-    consume(sinkEdge);
-    seededLoad.set(incumbent, (seededLoad.get(incumbent) ?? 0) + 1);
-  }
-
+  const potential = Array(graph.length).fill(0);
+  const distance = Array(graph.length).fill(Number.POSITIVE_INFINITY);
   const levels = Array(graph.length).fill(-1);
   const cursors = Array(graph.length).fill(0);
+  let flow = 0;
+
+  const buildShortestCosts = () => {
+    distance.fill(Number.POSITIVE_INFINITY);
+    distance[source] = 0;
+    const heap = [];
+    pushHeap(heap, {node: source, distance: 0});
+    while (heap.length > 0) {
+      const current = popHeap(heap);
+      if (current.distance !== distance[current.node]) continue;
+      for (const edge of graph[current.node]) {
+        if (edge.capacity <= 0) continue;
+        const reducedCost = edge.cost + potential[current.node] - potential[edge.to];
+        if (reducedCost < 0) fail('internal matching error: negative reduced cost');
+        const nextDistance = current.distance + reducedCost;
+        if (nextDistance < distance[edge.to]) {
+          distance[edge.to] = nextDistance;
+          pushHeap(heap, {node: edge.to, distance: nextDistance});
+        }
+      }
+    }
+    if (!Number.isFinite(distance[sink])) {
+      fail('internal matching error: unmatched fallback is unreachable');
+    }
+    for (let node = 0; node < graph.length; node += 1) {
+      if (Number.isFinite(distance[node])) potential[node] += distance[node];
+    }
+  };
+
+  const isZeroReducedCost = (from, edge) => {
+    return edge.capacity > 0 && edge.cost + potential[from] - potential[edge.to] === 0;
+  };
   const buildLevels = () => {
     levels.fill(-1);
     levels[source] = 0;
@@ -187,7 +229,7 @@ export function matchCandidatesToCapacity(
     for (let index = 0; index < queue.length; index += 1) {
       const node = queue[index];
       for (const edge of graph[node]) {
-        if (edge.capacity > 0 && levels[edge.to] < 0) {
+        if (isZeroReducedCost(node, edge) && levels[edge.to] < 0) {
           levels[edge.to] = levels[node] + 1;
           queue.push(edge.to);
         }
@@ -195,40 +237,51 @@ export function matchCandidatesToCapacity(
     }
     return levels[sink] >= 0;
   };
-  const send = (node, flow) => {
-    if (node === sink) {
-      return flow;
-    }
+  const send = (node, available) => {
+    if (node === sink) return available;
     for (; cursors[node] < graph[node].length; cursors[node] += 1) {
       const edge = graph[node][cursors[node]];
-      if (edge.capacity <= 0 || levels[edge.to] !== levels[node] + 1) {
-        continue;
-      }
-      const pushed = send(edge.to, Math.min(flow, edge.capacity));
-      if (pushed > 0) {
-        edge.capacity -= pushed;
-        graph[edge.to][edge.reverse].capacity += pushed;
-        return pushed;
+      if (!isZeroReducedCost(node, edge) || levels[edge.to] !== levels[node] + 1) continue;
+      const sent = send(edge.to, Math.min(available, edge.capacity));
+      if (sent > 0) {
+        edge.capacity -= sent;
+        graph[edge.to][edge.reverse].capacity += sent;
+        return sent;
       }
     }
     return 0;
   };
-  while (buildLevels()) {
-    cursors.fill(0);
-    while (send(source, Number.MAX_SAFE_INTEGER) > 0) {
-      // Continue augmenting the current level graph.
+
+  while (flow < sets.length) {
+    buildShortestCosts();
+    while (flow < sets.length && buildLevels()) {
+      cursors.fill(0);
+      let sent;
+      while (flow < sets.length &&
+             (sent = send(source, sets.length - flow)) > 0) {
+        flow += sent;
+      }
     }
   }
 
   const satelliteByPositionId = new Map();
   sets.forEach((candidateSet, setIndex) => {
-    const positionNode = firstPositionNode + setIndex;
-    const matched = graph[positionNode].find((edge) => edge.satelliteId !== undefined && edge.capacity === 0);
-    if (matched?.satelliteId !== undefined) {
+    const matched = candidateEdgesByPosition[setIndex].find((edge) => edge.capacity === 0);
+    if (matched !== undefined) {
       satelliteByPositionId.set(candidateSet.positionId, matched.satelliteId);
     }
   });
   return satelliteByPositionId;
+}
+
+export function matchCandidatesToCapacity(
+  candidateSets,
+  {satelliteCapacity = DEFAULT_SATELLITE_CAPACITY, previousAssignments = new Map()} = {}
+) {
+  assertPositiveInteger(satelliteCapacity, 'satelliteCapacity');
+  assertMap(previousAssignments, 'previousAssignments');
+  const sets = normalizeCandidateSets(candidateSets, 'candidateSets');
+  return optimalStickyMatching(sets, satelliteCapacity, previousAssignments);
 }
 
 function validateNci(nci, context) {

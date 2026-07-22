@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "audit_kind": "ntn_constellation_planning_evidence",
+  "run_id": "global-f1-seven-day-nominal-v2",
+  "engine": {
+    "name": "ntn-headless-planner",
+    "version": "1.0.0",
+    "source_revision": "6a50517+ntn-plan-001",
+    "source_sha256": "sha256:c50ec4416320c49ac020a6f6201aebb86896b5750854ca992dbdea1c9567d130"
+  },
+  "scenario": {
+    "scenario_id": "walker-delta-60-3528-42-f1-nominal",
+    "altitude_km": 500,
+    "inclination_deg": 60,
+    "planes": 42,
+    "satellites_per_plane": 84,
+    "phase_factor": 1,
+    "raan_offset_deg": 0,
+    "phase_offset_deg": 0,
+    "orbit_epoch_unix_ms": 1767225600000,
+    "start_unix_ms": 1767225600000,
+    "duration_ms": 604800000,
+    "pre_roll_ms": 6000000,
+    "entry_elevation_deg": 45,
+    "exit_elevation_deg": 42,
+    "root_tolerance_ms": 1,
+    "scan_step_ms": 60000,
+    "slab_duration_ms": 120000,
+    "slab_boundary_padding_ms": 120000,
+    "slab_scan_step_ms": 30000,
+    "earth_radius_km": 6378.137,
+    "earth_mu_km3_s2": 398600.4418,
+    "earth_rotation_rad_per_second": 0.000072921159,
+    "margin_tolerance": 1e-12,
+    "max_evaluations": 1000000,
+    "satellite_shard_count": 14,
+    "positions_per_chunk": 8,
+    "satellite_capacity": 256,
+    "cell_capacity": 128
+  },
+  "inputs": {
+    "catalog": {
+      "id": "global-land-l1-v1",
+      "sha256": "sha256:b39fe9c3ee9a9355b3546036b7f16e0fb858c953f8558cc4295122f2169fbe7a",
+      "file_sha256": "sha256:e2d0b561d427e4c4840fa8088f002dbc639e8a4ecd54d59015596ab3f19f4adf"
+    },
+    "identity_registry": {
+      "version": "mc-ntn-onboard-cell-registry-v1",
+      "sha256": "sha256:7475821350e104b57a70d979d630f4b29a6cecb89ca0eca7b16dddf2ffee6a4a"
+    },
+    "access_profile": {
+      "id": "ntn-access-16a-64d-v1",
+      "sha256": "sha256:195786f4161e3b0fad6faa0605144948a7401c067a014bde684c1b29a8087d63"
+    }
+  }
+}

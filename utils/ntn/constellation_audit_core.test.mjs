@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildHysteresisIntervals,
   centralAngleForElevation,
+  createSatellitePropagator,
   createWalkerDelta,
   findThresholdCrossings,
   groundUnit,
@@ -61,6 +62,10 @@ test('circular orbit helpers match the existing spherical-Earth geometry', () =>
     altitudeKm: 500, inclinationDeg: 0, raanOffsetDeg: 0, phaseOffsetDeg: 0
   })[0];
   assert.deepEqual(satelliteUnitEcef(satellite, 0, model), [1, 0, 0]);
+  const propagate = createSatellitePropagator(satellite, model);
+  for (const timeUs of [0, 1_234_567, 9_876_543]) {
+    assert.deepEqual(propagate(timeUs), satelliteUnitEcef(satellite, timeUs, model));
+  }
   const observer = groundUnit({id: 'G000001', lat: 0, lon: 0});
   assert.deepEqual(observer, [1, 0, 0]);
   const enterAngle = centralAngleForElevation(45, model);
@@ -79,7 +84,7 @@ test('dot-margin root search finds conservative upward and downward crossings wi
   assert.equal(upward.crossings.length, 1);
   assert.equal(upward.crossings[0].direction, 'up');
   assert.ok(upward.crossings[0].bracketEndUs - upward.crossings[0].bracketStartUs <= 1_000);
-  assert.equal(upward.crossings[0].timeUs, 2_000_000);
+  assert.ok(Math.abs(upward.crossings[0].timeUs - 2_000_000) <= 1_000);
 
   const downward = search((timeUs) => (2_000_000 - timeUs) / 10_000_000, {
     angularRateBoundRadPerSecond: 0.1
@@ -87,7 +92,7 @@ test('dot-margin root search finds conservative upward and downward crossings wi
   assert.deepEqual(downward.ambiguous, []);
   assert.equal(downward.crossings.length, 1);
   assert.equal(downward.crossings[0].direction, 'down');
-  assert.equal(downward.crossings[0].timeUs, 2_000_000);
+  assert.ok(Math.abs(downward.crossings[0].timeUs - 2_000_000) <= 1_000);
 });
 
 test('a threshold touch and a root at the search boundary remain ambiguous', () => {
@@ -100,6 +105,67 @@ test('a threshold touch and a root at the search boundary remain ambiguous', () 
   });
   assert.deepEqual(boundary.crossings, []);
   assert.ok(boundary.ambiguous.some(({reason}) => reason === 'range_boundary'));
+});
+
+test('spherical angular bounds preserve roots while reducing threshold evaluations', () => {
+  const model = resolveOrbitModel({altitudeKm: 500});
+  const satellite = createWalkerDelta({
+    planes: 1, satellitesPerPlane: 1, phaseFactor: 0,
+    altitudeKm: 500, inclinationDeg: 0, raanOffsetDeg: 0, phaseOffsetDeg: 0
+  })[0];
+  const observer = groundUnit({id: 'G000001', lat: 0, lon: 0});
+  const propagate = createSatellitePropagator(satellite, model);
+  const centralAngleRad = centralAngleForElevation(45, model);
+  const thresholdCosine = Math.cos(centralAngleRad);
+  const marginAtTimeUs = (timeUs) => {
+    const unit = propagate(timeUs);
+    return unit[0] * observer[0] + unit[1] * observer[1] + unit[2] * observer[2] - thresholdCosine;
+  };
+  const options = {
+    marginAtTimeUs,
+    startTimeUs: -300_000_000,
+    endTimeUs: 300_000_000,
+    angularRateBoundRadPerSecond: model.conservativeAngularRateRadPerSecond,
+    toleranceUs: 1_000,
+    scanStepUs: 60_000_000,
+    marginTolerance: 1e-12
+  };
+  const generic = findThresholdCrossings(options);
+  const spherical = findThresholdCrossings({...options, centralAngleRad});
+
+  assert.deepEqual(spherical.ambiguous, []);
+  assert.equal(spherical.crossings.length, generic.crossings.length);
+  for (let index = 0; index < generic.crossings.length; index += 1) {
+    assert.equal(spherical.crossings[index].direction, generic.crossings[index].direction);
+    assert.ok(Math.abs(spherical.crossings[index].timeUs - generic.crossings[index].timeUs) <= 1_000);
+  }
+  assert.ok(spherical.evaluations * 3 < generic.evaluations);
+});
+
+test('spherical bounds cover the longer half of an odd integer interval', () => {
+  const centralAngleRad = 0.1;
+  const angularRateBoundRadPerSecond = 0.0012;
+  const crossingTimeUs = 36_784_971.75;
+  const thresholdCosine = Math.cos(centralAngleRad);
+  const found = findThresholdCrossings({
+    marginAtTimeUs: (timeUs) => {
+      const angle = centralAngleRad + angularRateBoundRadPerSecond * ((timeUs - crossingTimeUs) / 1_000_000);
+      return Math.cos(angle) - thresholdCosine;
+    },
+    startTimeUs: 0,
+    endTimeUs: 60_000_000,
+    angularRateBoundRadPerSecond,
+    centralAngleRad,
+    scanStepUs: 60_000_000,
+    toleranceUs: 1_000,
+    marginTolerance: 1e-12
+  });
+
+  assert.deepEqual(found.ambiguous, []);
+  assert.equal(found.crossings.length, 1);
+  assert.equal(found.crossings[0].direction, 'down');
+  assert.ok(found.crossings[0].bracketStartUs <= crossingTimeUs);
+  assert.ok(found.crossings[0].bracketEndUs >= crossingTimeUs);
 });
 
 test('45-up entry and 42-down release produce half-open intervals at exact boundaries', () => {

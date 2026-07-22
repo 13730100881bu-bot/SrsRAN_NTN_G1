@@ -118,6 +118,94 @@ test('feasible previous satellite owners and cell banks remain sticky', () => {
   assert.equal(result.assignmentByPositionId.get('G000003').cellBank, 0);
 });
 
+test('maximum coverage also keeps the largest feasible set of incumbent owners', () => {
+  const candidate = (satelliteId) => ({satelliteId});
+  const matched = matchCandidatesToCapacity([
+    {positionId: 'P0', candidates: [candidate('C')]},
+    {positionId: 'P1', candidates: [candidate('A'), candidate('B'), candidate('C')]},
+    {positionId: 'P3', candidates: [candidate('A')]},
+    {positionId: 'P4', candidates: [candidate('A'), candidate('B'), candidate('C')]}
+  ], {
+    satelliteCapacity: 1,
+    previousAssignments: new Map([['P4', {satelliteId: 'C', cellBank: 0}]])
+  });
+
+  assert.equal(matched.size, 3);
+  assert.equal(matched.get('P4'), 'C');
+  assert.equal([...matched].filter(([positionId, satelliteId]) => positionId === 'P4' && satelliteId === 'C').length, 1);
+});
+
+test('retention optimization avoids the A/B/C/D/E cap-one local optimum', () => {
+  const candidates = (...satelliteIds) => satelliteIds.map((satelliteId) => ({satelliteId}));
+  const previousAssignments = new Map([
+    ['A', {satelliteId: 'E', cellBank: 0}],
+    ['C', {satelliteId: 'D', cellBank: 0}],
+    ['D', {satelliteId: 'D', cellBank: 0}],
+    ['E', {satelliteId: 'D', cellBank: 0}]
+  ]);
+  const matched = matchCandidatesToCapacity([
+    {positionId: 'A', candidates: candidates('A', 'C', 'E')},
+    {positionId: 'B', candidates: candidates('A', 'B', 'E')},
+    {positionId: 'C', candidates: candidates('C', 'D')},
+    {positionId: 'D', candidates: candidates('A', 'C', 'D')},
+    {positionId: 'E', candidates: candidates('D', 'E')}
+  ], {satelliteCapacity: 1, previousAssignments});
+
+  const retained = [...matched].filter(([positionId, satelliteId]) => {
+    return previousAssignments.get(positionId)?.satelliteId === satelliteId;
+  });
+  assert.equal(matched.size, 5);
+  assert.equal(retained.length, 2);
+});
+
+test('small exhaustive graphs confirm maximum coverage then maximum incumbent retention', () => {
+  let seed = 0x51f15e;
+  const random = () => {
+    seed = (1664525 * seed + 1013904223) >>> 0;
+    return seed / 2 ** 32;
+  };
+  const satellites = ['A', 'B', 'C'];
+  for (let sample = 0; sample < 80; sample += 1) {
+    const sets = Array.from({length: 5}, (_, index) => ({
+      positionId: `P${index}`,
+      candidates: satellites.filter(() => random() > 0.35).map((satelliteId) => ({satelliteId}))
+    }));
+    const previousAssignments = new Map(sets.flatMap((entry) => {
+      if (entry.candidates.length === 0 || random() < 0.25) return [];
+      const candidate = entry.candidates[Math.floor(random() * entry.candidates.length)];
+      return [[entry.positionId, {satelliteId: candidate.satelliteId, cellBank: 0}]];
+    }));
+    let optimum = {matched: -1, retained: -1};
+    const loads = new Map(satellites.map((satelliteId) => [satelliteId, 0]));
+    const visit = (index, matched, retained) => {
+      if (index === sets.length) {
+        if (matched > optimum.matched || (matched === optimum.matched && retained > optimum.retained)) {
+          optimum = {matched, retained};
+        }
+        return;
+      }
+      visit(index + 1, matched, retained);
+      const entry = sets[index];
+      for (const candidate of entry.candidates) {
+        if (loads.get(candidate.satelliteId) >= 1) continue;
+        loads.set(candidate.satelliteId, 1);
+        visit(
+          index + 1,
+          matched + 1,
+          retained + Number(previousAssignments.get(entry.positionId)?.satelliteId === candidate.satelliteId)
+        );
+        loads.set(candidate.satelliteId, 0);
+      }
+    };
+    visit(0, 0, 0);
+    const actual = matchCandidatesToCapacity(sets, {satelliteCapacity: 1, previousAssignments});
+    const retained = [...actual].filter(([positionId, satelliteId]) => {
+      return previousAssignments.get(positionId)?.satelliteId === satelliteId;
+    }).length;
+    assert.deepEqual({matched: actual.size, retained}, optimum);
+  }
+});
+
 test('sticky cell partition never derives identity outside the supplied registry', () => {
   const previousAssignments = new Map([['G000001', {satelliteId: 'SAT-A', cellBank: 1}]]);
   const allocation = partitionAssignmentsToTwoCells({

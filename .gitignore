@@ -23,6 +23,11 @@
 /run_artifacts/srsran_runtime_capture/split/log_exports/
 /run_artifacts/srsran_runtime_capture/cucp_ue_flow_summary_latest.md
 /run_artifacts/srsran_runtime_capture/build_srsue_tmp.sh
+/run_artifacts/ntn_planning/**/*.ndjson.gz
+/run_artifacts/ntn_planning/**/checkpoints/
+/run_artifacts/ntn_planning/**/plans/
+/run_artifacts/ntn_planning/**/slab-journal/
+/run_artifacts/ntn_planning/**/streaming-assignment-journal/
 
 # Test UE credentials stay local even when they use synthetic values.
 /run_artifacts/srsran_runtime_capture/ue_20_official.conf

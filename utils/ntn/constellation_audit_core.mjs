@@ -7,6 +7,7 @@ export const DEFAULT_EARTH_ROTATION_RAD_PER_SECOND = 7.2921159e-5;
 const DEFAULT_ALTITUDE_KM = 500;
 const DEFAULT_ROOT_TOLERANCE_US = 1_000;
 const MAX_ROOT_TOLERANCE_US = 10_000;
+const MIN_CLASSIFICATION_TOLERANCE_US = 1;
 const DEFAULT_SCAN_STEP_US = 60_000_000;
 const DEFAULT_MARGIN_TOLERANCE = 1e-12;
 const DEFAULT_MAX_EVALUATIONS = 1_000_000;
@@ -230,6 +231,42 @@ export function satelliteUnitEcef(definition, timeUs, orbitModel = undefined) {
   ]);
 }
 
+/** Compiles one validated satellite definition for high-volume audit sampling. */
+export function createSatellitePropagator(definition, orbitModel = undefined) {
+  assertSatelliteDefinition(definition);
+  const model = orbitModel === undefined
+    ? resolveOrbitModel({altitudeKm: definition.altitudeKm})
+    : assertResolvedOrbitModel(orbitModel);
+  if (Math.abs(model.altitudeKm - definition.altitudeKm) > 1e-9) {
+    fail('satellite altitude does not match resolvedOrbitModel.altitudeKm');
+  }
+  const inclination = toRadians(definition.inclinationDeg);
+  const raan = toRadians(definition.raanDeg);
+  const phase = toRadians(definition.phaseDeg);
+  const cosRaan = Math.cos(raan);
+  const sinRaan = Math.sin(raan);
+  const cosInclination = Math.cos(inclination);
+  const sinInclination = Math.sin(inclination);
+  return (timeUs) => {
+    safeInteger(timeUs, 'timeUs');
+    const seconds = timeUs / 1_000_000;
+    const argument = phase + seconds * model.meanMotionRadPerSecond;
+    const cosArgument = Math.cos(argument);
+    const sinArgument = Math.sin(argument);
+    const xEci = cosRaan * cosArgument - sinRaan * sinArgument * cosInclination;
+    const yEci = sinRaan * cosArgument + cosRaan * sinArgument * cosInclination;
+    const z = sinArgument * sinInclination;
+    const earthAngle = model.earthRotationRadPerSecond * seconds;
+    const cosEarth = Math.cos(earthAngle);
+    const sinEarth = Math.sin(earthAngle);
+    return [
+      cosEarth * xEci + sinEarth * yEci,
+      -sinEarth * xEci + cosEarth * yEci,
+      z
+    ];
+  };
+}
+
 /** Returns the spherical-Earth ground unit vector for a catalog position. */
 export function groundUnit(point) {
   assertExactKeys(point, 'groundPoint', ['lat', 'lon'], ['id', 'name']);
@@ -289,7 +326,8 @@ export function findThresholdCrossings(options) {
     'toleranceUs',
     'scanStepUs',
     'marginTolerance',
-    'maxEvaluations'
+    'maxEvaluations',
+    'centralAngleRad'
   ]);
   if (typeof options.marginAtTimeUs !== 'function') fail('crossingSearch.marginAtTimeUs must be a function');
   const startTimeUs = safeInteger(options.startTimeUs, 'crossingSearch.startTimeUs');
@@ -316,6 +354,10 @@ export function findThresholdCrossings(options) {
     options.maxEvaluations ?? DEFAULT_MAX_EVALUATIONS,
     'crossingSearch.maxEvaluations'
   );
+  const centralAngleRad = options.centralAngleRad === undefined
+    ? undefined
+    : finiteNumber(options.centralAngleRad, 'crossingSearch.centralAngleRad', 0, Math.PI);
+  const thresholdCosine = centralAngleRad === undefined ? undefined : Math.cos(centralAngleRad);
 
   let evaluations = 0;
   const sampleCache = new Map();
@@ -345,12 +387,24 @@ export function findThresholdCrossings(options) {
     const leftMargin = evaluate(leftTimeUs);
     const rightMargin = evaluate(rightTimeUs);
     const midpointMargin = evaluate(midpointUs);
-    const radius = angularRateBound * ((rightTimeUs - leftTimeUs) / 2_000_000);
-    if (midpointMargin - radius > marginTolerance) {
+    const maximumMidpointDistanceUs = Math.max(
+      midpointUs - leftTimeUs,
+      rightTimeUs - midpointUs
+    );
+    const radius = angularRateBound * (maximumMidpointDistanceUs / 1_000_000) + 64 * Number.EPSILON;
+    let lowerMargin = midpointMargin - radius;
+    let upperMargin = midpointMargin + radius;
+    if (centralAngleRad !== undefined) {
+      const midpointDot = Math.max(-1, Math.min(1, midpointMargin + thresholdCosine));
+      const midpointAngle = Math.acos(midpointDot);
+      lowerMargin = Math.cos(Math.min(Math.PI, midpointAngle + radius)) - thresholdCosine;
+      upperMargin = Math.cos(Math.max(0, midpointAngle - radius)) - thresholdCosine;
+    }
+    if (lowerMargin > marginTolerance) {
       emitPartition('above', leftTimeUs, rightTimeUs);
       return;
     }
-    if (midpointMargin + radius < -marginTolerance) {
+    if (upperMargin < -marginTolerance) {
       emitPartition('below', leftTimeUs, rightTimeUs);
       return;
     }
@@ -360,7 +414,13 @@ export function findThresholdCrossings(options) {
       emitPartition('uncertain', leftTimeUs, rightTimeUs);
       return;
     }
-    if (rightTimeUs - leftTimeUs <= toleranceUs || midpointUs === leftTimeUs || midpointUs === rightTimeUs) {
+    const sampledStates = [leftMargin, midpointMargin, rightMargin].map((margin) =>
+      margin > marginTolerance ? 'above' : margin < -marginTolerance ? 'below' : 'uncertain');
+    const sampledOppositeSigns = sampledStates.includes('above') && sampledStates.includes('below');
+    const intervalWidthUs = rightTimeUs - leftTimeUs;
+    if ((intervalWidthUs <= toleranceUs && sampledOppositeSigns) ||
+        intervalWidthUs <= MIN_CLASSIFICATION_TOLERANCE_US ||
+        midpointUs === leftTimeUs || midpointUs === rightTimeUs) {
       emitPartition('uncertain', leftTimeUs, rightTimeUs);
       return;
     }
