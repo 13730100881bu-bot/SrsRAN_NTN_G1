@@ -116,6 +116,7 @@ them casually.
 | CUCP-040 | DU reconnect-safe onboard-plan recovery. CU-CP binds prepare completions to the DU connection generation and exact plan, while query/clear also carry a request-instance guard. It hides application evidence immediately on disconnect, persists the recovery state, and accepts it again only after a matching response from the live connection. A future prepared plan cannot clear the still-valid current plan before `activation_epoch`; early confirmation keeps the new plan hidden as pending, and the normal path switches and cleans up only after the epoch. If that pending plan expires before a delayed timer runs, the historical fallback returns to live-DU reconciliation. Read-only `ntn_state` exposes the active calendar hash, cleanup queue head and state-storage health. Expired `not_sent` plans do not generate clears. A confirmed clear is removed from the live queue only after a successful durable state write; write failure leaves the obligation unchanged in fail-closed memory, and a durably removed clear is not repeated after restart. State schema v2 independently retains the complete latest parsed candidate inventory, including a rejected 257-position input, across cleanup and repeated restart without promoting it or changing accepted version high-water; schema v1 remains readable. Default-off terrestrial behavior is unchanged; this is CU/DU software-state evidence, not RF evidence. | `lib/cu_cp/du_processor/du_processor_repository.cpp`, `lib/cu_cp/cu_cp_impl*`, `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.*`, `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan_state.*`, `include/srsran/cu_cp/cu_cp_command_handler.h`, O-CU-CP `ntn_state`, focused controller/state/CU-CP/config tests. |
 | CUCP-041 | Historical-plan fallback lifecycle convergence. When a future plan was confirmed early, then superseded by a newer checked plan, failure of that newer deployment now returns the historical plan to live-DU verification instead of leaving it hidden until process restart. The recovery target, accepted-version high-water and the complete most recently received candidate inventory survive a state save/load round trip. A rejected lower-version replay may update the read-only “last received input” observation, but it cannot change the accepted high-water or active plan. No public protocol, F1 payload, DU/MAC/PHY/RU/RF, Web/GIS or generated ASN.1 change is involved. | `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.cpp`, `tests/unittests/cu_cp/ntn_mobility/ntn_onboard_position_plan_test.cpp`, this index and agent memory. |
 | CUCP-042 | Exact hidden-fallback expiry. A historical fallback hidden behind an early-confirmed future plan loses fallback eligibility at its own `valid_until`; CU-CP queues one exact `schedule_version`/`calendar_hash` cleanup with reason `historical_fallback_expired` before any same-instant activation. Pending state, version high-water, latest input and partition remain unchanged. The outstanding cleanup survives DU disconnection and restart, while later deployment failure cannot restore the expired plan. State/queue failure remains fail closed. State schema v2 and existing read-only OAM fields are reused; no F1AP, DU, MAC, PHY, RU/RF, Web/GIS or generated ASN.1 change is involved. | `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.*`, `lib/cu_cp/cu_cp_impl.cpp`, `tests/unittests/cu_cp/ntn_mobility/ntn_onboard_position_plan_test.cpp`, `tests/unittests/cu_cp/cu_cp_ntn_mobility_test.cpp`, runtime contract and agent memory. |
+| CUCP-043 | Fail-closed activation and bounded cleanup responsibility. DU prepare/query feedback records evidence but no longer publishes a pending plan as active inside the response path; the activation timer performs the one-time switch and exposes it only after the matching state update is durable. A blocked state store continues processing `valid_until` while suppressing new deployment, recovery confirmation and clear transmission. Uncommitted writes restore the last saved snapshot and apply expiry only; a replacement whose directory durability is uncertain keeps memory aligned with the replaced file, hides live evidence and requires restart reconciliation. State validation bounds historical clears plus active/pending together at 66 identities, preserving the exact cleanup that is created when a valid 64-clear + two-live state expires. Default-off terrestrial behavior is unchanged; no F1AP payload, DU/MAC, PHY, RU/RF, Web/GIS or generated ASN.1 change is involved. | `lib/cu_cp/cu_cp_impl.*`, `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.*`, `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan_state.*`, controller/state/CU-CP restart tests, runtime contract and agent memory. |
 
 ## Current Useful Validation Notes
 
@@ -371,3 +372,36 @@ handling and reuses the existing calendar transport. The evidence proves
 software-calendar state and ordering, not beam steering, antenna, PHY, RU/RF or
 over-the-air execution. Trusted whole-state rollback protection, authenticated
 plan delivery and real device control remain separate work.
+
+CUCP-043 closeout evidence (2026-07-22):
+
+```bash
+cmake --build build/ai-clean --target ntn_mobility_test -j1
+build/ai-clean/tests/unittests/cu_cp/ntn_mobility/ntn_mobility_test \
+  --gtest_filter='ntn_access_calendar_audit.*:ntn_onboard_position_plan.*:ntn_onboard_position_plan_state.*'
+cmake --build build/ai-clean --target srsran_cu_cp -j1
+cmake --build build/ai-clean --target cu_cp_test -j1
+build/ai-clean/tests/unittests/cu_cp/cu_cp_test \
+  --gtest_filter='cu_cp_ntn_mobility_test.*persist_failure*:cu_cp_ntn_mobility_test.committed_but_not_durable_*:cu_cp_ntn_mobility_test.restart_retains_expired_active_cleanup_when_sixty_four_tasks_are_already_queued:cu_cp_ntn_mobility_test.restart_clears_expired_active_even_when_future_pending_was_not_sent:cu_cp_ntn_mobility_test.future_recovered_update_*:cu_cp_ntn_mobility_test.live_active_expiry_*:cu_cp_ntn_mobility_test.default_cu_cp_rejects_ntn_satellite_state_updates'
+git diff --check
+```
+
+`ntn_mobility_test` rebuilt successfully and the calendar-audit,
+position-plan and state-file group passed 81/81. This includes a rename-after-
+commit exception test, both cleanup-capacity boundaries, blocked-write expiry
+and deferred timer activation. `srsran_cu_cp` and `cu_cp_test` rebuilt
+successfully; the final activation, recovery, restart, 64-task capacity,
+committed-but-not-durable and default-disabled group passed 9/9. An initial
+focused run exposed that one new integration test still polled wall time without
+advancing the test timer after activation was deliberately moved out of the DU
+response path. The test was corrected to advance that timer; the final source
+then passed. `git diff --check` passed, and no build/test processes were left
+running.
+
+No broad `ctest`, split demo or configuration/F1AP/DU/MAC suite was repeated.
+This slice changes private CU-CP state and controller code but does not change
+configuration shape, F1 payloads or lower-layer execution. The result proves
+software-calendar ordering, storage and restart behavior only; it is not proof
+of RF output, antenna steering or over-the-air access. Whole-file rollback or
+deletion still needs a trusted monotonic anchor, and authenticated plan delivery
+remains separate work.

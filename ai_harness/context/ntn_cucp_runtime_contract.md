@@ -221,12 +221,29 @@ pending and `not_sent`. An expired plan that was never sent creates no DU clear.
 
 A confirmed clear uses a two-step durable commit: CU-CP first writes the next
 state without the live queue head, and removes that head from memory only after
-the write is durable. A write failure leaves the obligation unchanged and
-blocks further state changes. `committed_not_durable` also remains fail closed
-because a crash may expose either the old or new directory entry.
+the write is durable. A write that did not replace the state file restores the
+last saved controller snapshot and keeps any exact cleanup task. If replacement
+completed but directory durability cannot be confirmed, CU-CP does not roll
+memory back to bytes that no longer match the file; it hides live application
+evidence and requires restart reconciliation instead. Both cases block new
+deployment work.
 This is at-least-once cleanup: after an uncommitted failure the same exact
 version/hash may be retried, so DU clear must be idempotent. The guarantee is no
 silent loss, not exactly-once delivery.
+
+A blocked state store does not freeze plan validity. CU-CP continues processing
+`valid_until`, so expired active, pending, recovery and hidden-fallback plans
+are removed from usable state and retain exact cleanup identities. New
+preparation, activation, recovery confirmation and cleanup transmission stay
+suppressed until a safe restart. A newly applied pending plan is published as
+active only after the matching transition is durably saved.
+
+Recovery storage bounds the combined cleanup responsibility, not only the
+historical queue. At most 66 calendar identities may require later cleanup:
+64 historical tasks plus the two persisted live snapshots (`active` and
+`pending`). When either live snapshot expires, it becomes a queue entry without
+increasing that total. Recovery state above the bound is rejected with
+`too_many_cleanup_claims`; an exact task is never silently discarded.
 
 DU application evidence is connection-scoped. Disconnect immediately hides
 the old `active/applied` evidence and moves the affected plan to reconciliation.

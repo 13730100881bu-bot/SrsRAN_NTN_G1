@@ -247,6 +247,22 @@ Use a staged validation ladder:
   resurrect it; queue or state-write failure remains fail closed. No public OAM
   field, protocol container or lower-layer interface is added, and this remains
   software-calendar rather than RF evidence.
+- CUCP-043 makes plan activation and state-file replacement one visible
+  decision. A pending plan is no longer published as active from a prepare or
+  query response; the activation timer performs the switch and keeps it hidden
+  if the matching state transition cannot be saved. A blocked state file still
+  advances every `valid_until`, preserving exact cleanup work while suppressing
+  new preparation, activation, recovery confirmation and clear transmission.
+  If file replacement did not commit, CU-CP restores the last saved snapshot
+  and applies expiry only. If replacement committed but directory durability is
+  uncertain, it keeps memory aligned with the replaced file, hides live DU
+  evidence and requires restart reconciliation instead of rolling back to old
+  bytes. Cleanup capacity is now a bound of 66 total identities: 64 historical
+  tasks plus the persisted active and pending snapshots. Expiry converts a live
+  snapshot into a queue task without increasing that total, so a full valid
+  state cannot silently lose the next exact cleanup. This remains private
+  CU-CP software-state handling; no protocol, DU/MAC, PHY, RU/RF, Web/GIS or
+  generated ASN.1 change is involved.
 - Remaining recovery protections are narrower. Because version high-water marks
   and snapshots are kept in the same file, replacing or deleting the whole file
   cannot be detected without a separate trusted monotonic anchor. F1AP DU stop
@@ -460,11 +476,13 @@ For a more detailed task-to-change lookup, use
   cleanup work across restart. Read-only recovery status is exposed without
   changing the default terrestrial path. Whole-file rollback/deletion remains
   open; DU connection-generation binding was added by CUCP-040.
-- CUCP-040/041/042: disconnect invalidates old DU evidence, future activation does
+- CUCP-040/041/042/043: disconnect invalidates old DU evidence, future activation does
   not clear the historical plan early, cleanup survives failed durable writes,
   and a failed nested replacement returns to live verification of the hidden
   fallback. A hidden fallback is removed and queued for exact cleanup at its own
-  validity deadline, including while DU is disconnected. These are
+  validity deadline, including while DU is disconnected. State-write failure
+  cannot expose a new active plan or freeze expiry, and the bounded recovery
+  state reserves room for exact cleanup of both saved live plans. These are
   software-control guarantees, not RF execution evidence.
 
 ## Protocol References
