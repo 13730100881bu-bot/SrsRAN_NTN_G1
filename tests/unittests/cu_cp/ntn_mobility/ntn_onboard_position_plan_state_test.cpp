@@ -368,6 +368,28 @@ TEST(ntn_onboard_position_plan_state, post_rename_failure_reports_committed_byte
   EXPECT_EQ((*loaded)->state_hash, committed->state_hash);
 }
 
+TEST(ntn_onboard_position_plan_state, post_rename_exception_is_still_reported_as_a_committed_replacement)
+{
+  const std::filesystem::path path = make_state_path("committed-exception");
+  temporary_state_guard       guard(path);
+  auto                        state = make_state();
+  ASSERT_TRUE(store_ntn_onboard_position_plan_state_atomic(path.string(), state).has_value());
+
+  state.generation = 8;
+  auto committed   = store_ntn_onboard_position_plan_state_atomic(
+      path.string(), state, ntn_onboard_position_plan_state_store_failpoint::after_rename_exception);
+
+  ASSERT_TRUE(committed.has_value()) << committed.error();
+  EXPECT_FALSE(committed->durable);
+  EXPECT_EQ(committed->durability_error,
+            "state file replaced but completion failed: injected exception after committed state-file rename");
+  auto loaded = load_ntn_onboard_position_plan_state(path.string());
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  ASSERT_TRUE(loaded->has_value());
+  EXPECT_EQ((*loaded)->generation, 8U);
+  EXPECT_EQ((*loaded)->state_hash, committed->state_hash);
+}
+
 TEST(ntn_onboard_position_plan_state, persisted_applied_stage_cannot_disable_du_reconciliation)
 {
   const std::filesystem::path path = make_state_path("reconcile");
@@ -393,4 +415,48 @@ TEST(ntn_onboard_position_plan_state, outstanding_clear_cannot_target_a_live_sna
 
   ASSERT_FALSE(stored.has_value());
   EXPECT_EQ(stored.error(), "outstanding_clear_targets_live_snapshot");
+}
+
+TEST(ntn_onboard_position_plan_state, cleanup_capacity_retains_sixty_four_historical_tasks_and_two_live_snapshots)
+{
+  const std::filesystem::path path = make_state_path("cleanup-capacity");
+  temporary_state_guard       guard(path);
+  auto                        state = make_state();
+  state.highest_catalog_version  = 200;
+  state.highest_schedule_version = 200;
+  state.outstanding_clears.clear();
+  for (unsigned i = 0; i != 64; ++i) {
+    state.outstanding_clears.push_back(
+        {make_snapshot(make_plan(100 + i,
+                                 100 + i,
+                                 {{fmt::format("G{:06}", 100 + i), 10.0, 20.0, 0x7f}})),
+         "historical_cleanup"});
+  }
+
+  auto stored = store_ntn_onboard_position_plan_state_atomic(path.string(), state);
+
+  ASSERT_TRUE(stored.has_value()) << stored.error();
+  EXPECT_TRUE(stored->durable) << stored->durability_error;
+}
+
+TEST(ntn_onboard_position_plan_state, cleanup_capacity_rejects_more_than_sixty_six_total_claims)
+{
+  const std::filesystem::path path = make_state_path("cleanup-capacity-overflow");
+  temporary_state_guard       guard(path);
+  auto                        state = make_state();
+  state.highest_catalog_version  = 200;
+  state.highest_schedule_version = 200;
+  state.outstanding_clears.clear();
+  for (unsigned i = 0; i != 65; ++i) {
+    state.outstanding_clears.push_back(
+        {make_snapshot(make_plan(100 + i,
+                                 100 + i,
+                                 {{fmt::format("G{:06}", 100 + i), 10.0, 20.0, 0x7f}})),
+         "historical_cleanup"});
+  }
+
+  auto stored = store_ntn_onboard_position_plan_state_atomic(path.string(), state);
+
+  ASSERT_FALSE(stored.has_value());
+  EXPECT_EQ(stored.error(), "too_many_cleanup_claims");
 }

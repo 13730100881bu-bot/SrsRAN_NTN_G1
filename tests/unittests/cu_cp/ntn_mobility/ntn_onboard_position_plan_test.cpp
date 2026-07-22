@@ -775,6 +775,33 @@ TEST(ntn_onboard_position_plan, external_execution_requires_matching_applied_fee
   EXPECT_EQ(controller.deployment_stage(), ntn_position_plan_deployment_stage::applied);
 }
 
+TEST(ntn_onboard_position_plan, blocked_state_write_prevents_activation_but_still_expires_pending_plan)
+{
+  ntn_onboard_position_plan_config config = make_config();
+  config.require_external_apply           = true;
+  ntn_onboard_position_plan_controller controller(config);
+
+  ntn_versioned_position_plan plan = make_plan(4, 1, 1280);
+  plan.valid_until                 = at_ms(2000);
+  plan.content_hash                = compute_ntn_position_plan_content_hash(plan);
+  ASSERT_TRUE(controller.submit(plan, at_ms(640)).accepted);
+  const std::string calendar_hash = controller.pending_plan()->calendar_hash;
+  ASSERT_TRUE(controller.mark_deployment_preparing(1, calendar_hash));
+  ASSERT_TRUE(controller.mark_deployment_applied(1, calendar_hash));
+
+  EXPECT_FALSE(controller.advance_time(at_ms(1280), false));
+  EXPECT_FALSE(controller.active_plan().has_value());
+  ASSERT_TRUE(controller.pending_plan().has_value());
+  EXPECT_EQ(controller.pending_plan()->source.schedule_version, 1U);
+  EXPECT_EQ(controller.deployment_stage(), ntn_position_plan_deployment_stage::applied);
+
+  EXPECT_FALSE(controller.advance_time(at_ms(2000), false));
+  EXPECT_FALSE(controller.active_plan().has_value());
+  EXPECT_FALSE(controller.pending_plan().has_value());
+  EXPECT_EQ(controller.last_rejection_reason(), ntn_position_plan_reject_reason::expired);
+  EXPECT_EQ(controller.last_rejected_schedule_version(), 1U);
+}
+
 TEST(ntn_onboard_position_plan, lost_du_connection_hides_active_evidence_until_matching_query_reconfirms_it)
 {
   ntn_onboard_position_plan_config config = make_config();
@@ -820,6 +847,27 @@ TEST(ntn_onboard_position_plan, lost_du_connection_hides_active_evidence_until_m
   EXPECT_EQ(controller.pending_plan()->source.schedule_version, 2U);
   EXPECT_EQ(controller.deployment_stage(), ntn_position_plan_deployment_stage::not_sent);
   EXPECT_EQ(controller.candidate_inventory().size(), 6U);
+}
+
+TEST(ntn_onboard_position_plan, blocked_state_write_does_not_accept_recovered_application_evidence)
+{
+  ntn_onboard_position_plan_config config = make_config();
+  config.require_external_apply           = true;
+  ntn_onboard_position_plan_controller controller(config);
+
+  ASSERT_TRUE(controller.submit(make_plan(4, 1, 1280), at_ms(640)).accepted);
+  const std::string active_hash = controller.pending_plan()->calendar_hash;
+  ASSERT_TRUE(controller.mark_deployment_preparing(1, active_hash));
+  ASSERT_TRUE(controller.mark_deployment_applied(1, active_hash));
+  ASSERT_TRUE(controller.advance_time(at_ms(1280)));
+  ASSERT_TRUE(controller.require_du_reconciliation_after_connection_loss("state_write_failed"));
+
+  EXPECT_FALSE(controller.confirm_recovery_applied(1, active_hash, at_ms(1600), false));
+  EXPECT_FALSE(controller.active_plan().has_value());
+  EXPECT_FALSE(controller.active_has_external_apply_evidence());
+  ASSERT_TRUE(controller.recovery_plan().has_value());
+  EXPECT_EQ(controller.recovery_plan()->source.schedule_version, 1U);
+  EXPECT_EQ(controller.recovery_stage(), ntn_position_plan_recovery_stage::reconciling);
 }
 
 TEST(ntn_onboard_position_plan, lost_du_connection_reconciles_inflight_update_before_active_fallback)
@@ -914,6 +962,37 @@ TEST(ntn_onboard_position_plan, future_applied_update_remains_pending_until_acti
   EXPECT_TRUE(controller.active_has_external_apply_evidence());
   EXPECT_EQ(controller.deployment_stage(), ntn_position_plan_deployment_stage::applied);
   EXPECT_EQ(controller.candidate_inventory().size(), 6U);
+}
+
+TEST(ntn_onboard_position_plan, recovered_pending_activation_can_be_deferred_to_the_timer)
+{
+  ntn_onboard_position_plan_config config = make_config();
+  config.require_external_apply           = true;
+  ntn_onboard_position_plan_controller controller(config);
+
+  ASSERT_TRUE(controller.submit(make_plan(4, 1, 1280), at_ms(640)).accepted);
+  const std::string active_hash = controller.pending_plan()->calendar_hash;
+  ASSERT_TRUE(controller.mark_deployment_preparing(1, active_hash));
+  ASSERT_TRUE(controller.mark_deployment_applied(1, active_hash));
+  ASSERT_TRUE(controller.advance_time(at_ms(1280)));
+
+  ASSERT_TRUE(controller.submit(make_plan(6, 2, 1920, 2), at_ms(1500)).accepted);
+  const std::string pending_hash = controller.pending_plan()->calendar_hash;
+  ASSERT_TRUE(controller.mark_deployment_preparing(2, pending_hash));
+  ASSERT_TRUE(controller.mark_deployment_applied(2, pending_hash));
+  ASSERT_TRUE(controller.require_du_reconciliation_after_connection_loss({}));
+
+  ASSERT_TRUE(controller.confirm_recovery_applied(2, pending_hash, at_ms(2000), true, true));
+  EXPECT_FALSE(controller.active_plan().has_value());
+  ASSERT_TRUE(controller.pending_plan().has_value());
+  EXPECT_EQ(controller.pending_plan()->source.schedule_version, 2U);
+  ASSERT_TRUE(controller.recovery_fallback_plan().has_value());
+  EXPECT_EQ(controller.recovery_fallback_plan()->source.schedule_version, 1U);
+
+  ASSERT_TRUE(controller.advance_time(at_ms(2000)));
+  ASSERT_TRUE(controller.active_plan().has_value());
+  EXPECT_EQ(controller.active_plan()->source.schedule_version, 2U);
+  EXPECT_FALSE(controller.pending_plan().has_value());
 }
 
 TEST(ntn_onboard_position_plan,

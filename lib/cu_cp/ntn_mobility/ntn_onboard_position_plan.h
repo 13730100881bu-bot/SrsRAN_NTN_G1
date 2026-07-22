@@ -323,8 +323,9 @@ public:
   ntn_position_plan_submit_result submit(const ntn_versioned_position_plan&          plan,
                                          std::chrono::system_clock::time_point now);
 
-  /// Atomically promotes the complete pending plan when its activation epoch is due.
-  bool advance_time(std::chrono::system_clock::time_point now);
+  /// Advances expiry state and, when allowed, atomically promotes the complete pending plan. Passing false keeps expiry
+  /// handling fail safe while durable state writes are blocked, without exposing a new active plan.
+  bool advance_time(std::chrono::system_clock::time_point now, bool allow_activation = true);
 
   /// Records that the matching pending calendar has been sent to the DU for preparation.
   bool mark_deployment_preparing(uint64_t schedule_version, const std::string& calendar_hash);
@@ -361,10 +362,13 @@ public:
   bool require_du_reconciliation_after_connection_loss(std::string detail);
 
   /// Confirms a recovery candidate only after a matching, complete DU applied query response. A future pending plan
-  /// remains pending until activation_epoch and cannot trigger early cleanup of its historical fallback.
+  /// remains pending until activation_epoch and cannot trigger early cleanup of its historical fallback. CU-CP may
+  /// defer a due pending-plan promotion to its activation timer so expiry and persistence are processed in one place.
   bool confirm_recovery_applied(uint64_t                              schedule_version,
                                 const std::string&                    calendar_hash,
-                                std::chrono::system_clock::time_point now);
+                                std::chrono::system_clock::time_point now,
+                                bool                                  allow_confirmation = true,
+                                bool                                  defer_pending_activation = false);
 
   /// Fails closed for the recovery candidate while retaining version high-water. If an in-flight pending plan was
   /// selected ahead of the persisted active plan, failure continues reconciliation with that active fallback.

@@ -34,6 +34,7 @@
 #include <filesystem>
 #include <mbedtls/md.h>
 #include <set>
+#include <stdexcept>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -43,6 +44,9 @@ using namespace srs_cu_cp;
 namespace {
 
 using json = nlohmann::json;
+
+std::atomic<unsigned> next_default_store_failpoint{
+    static_cast<unsigned>(ntn_onboard_position_plan_state_store_failpoint::none)};
 
 std::optional<std::string>
 validate_exact_object_keys(const json& value, const char* context, std::initializer_list<const char*> required)
@@ -853,8 +857,10 @@ std::optional<std::string> validate_state(const ntn_onboard_position_plan_persis
       error.has_value()) {
     return error;
   }
-  if (state.outstanding_clears.size() > max_ntn_onboard_position_plan_clear_obligations) {
-    return std::string{"too_many_outstanding_clears"};
+  const size_t live_cleanup_claims = static_cast<size_t>(state.active.has_value()) +
+                                     static_cast<size_t>(state.pending.has_value());
+  if (state.outstanding_clears.size() > max_ntn_onboard_position_plan_cleanup_claims - live_cleanup_claims) {
+    return std::string{"too_many_cleanup_claims"};
   }
   if (state.received_plan.has_value()) {
     const auto& received = *state.received_plan;
@@ -1072,6 +1078,12 @@ create_same_directory_temporary_file(const std::filesystem::path& target)
 
 } // namespace
 
+void srsran::srs_cu_cp::set_ntn_onboard_position_plan_state_store_failpoint_once_for_test(
+    ntn_onboard_position_plan_state_store_failpoint failpoint)
+{
+  next_default_store_failpoint.store(static_cast<unsigned>(failpoint), std::memory_order_release);
+}
+
 expected<std::optional<ntn_onboard_position_plan_persistent_state>, std::string>
 srsran::srs_cu_cp::load_ntn_onboard_position_plan_state(const std::string& path)
 {
@@ -1127,6 +1139,10 @@ srsran::srs_cu_cp::store_ntn_onboard_position_plan_state_atomic(
     const ntn_onboard_position_plan_persistent_state& state,
     ntn_onboard_position_plan_state_store_failpoint   failpoint)
 {
+  if (failpoint == ntn_onboard_position_plan_state_store_failpoint::none) {
+    failpoint = static_cast<ntn_onboard_position_plan_state_store_failpoint>(next_default_store_failpoint.exchange(
+        static_cast<unsigned>(ntn_onboard_position_plan_state_store_failpoint::none), std::memory_order_acq_rel));
+  }
   if (path.empty() || path.find('\0') != std::string::npos) {
     return make_unexpected(std::string{"state file path is empty or contains NUL"});
   }
@@ -1134,9 +1150,11 @@ srsran::srs_cu_cp::store_ntn_onboard_position_plan_state_atomic(
     return make_unexpected(std::move(*error));
   }
 
+  bool        rename_committed = false;
+  std::string state_hash;
   try {
-    json              payload    = encode_state_payload(state);
-    const std::string state_hash = sha256_with_prefix(payload.dump());
+    json payload = encode_state_payload(state);
+    state_hash   = sha256_with_prefix(payload.dump());
     if (state_hash.empty()) {
       return make_unexpected(std::string{"cannot compute state hash"});
     }
@@ -1190,11 +1208,15 @@ srsran::srs_cu_cp::store_ntn_onboard_position_plan_state_atomic(
       return make_unexpected(
           fmt::format("cannot atomically replace state file '{}': {}", target.string(), std::strerror(errno)));
     }
+    rename_committed = true;
     cleanup.release();
 
     if (failpoint == ntn_onboard_position_plan_state_store_failpoint::after_rename) {
       return ntn_onboard_position_plan_state_store_result{
           state_hash, false, "injected failure after committed state-file rename"};
+    }
+    if (failpoint == ntn_onboard_position_plan_state_store_failpoint::after_rename_exception) {
+      throw std::runtime_error("injected exception after committed state-file rename");
     }
     if (::fsync(directory_fd.value()) != 0) {
       return ntn_onboard_position_plan_state_store_result{
@@ -1214,6 +1236,10 @@ srsran::srs_cu_cp::store_ntn_onboard_position_plan_state_atomic(
     }
     return ntn_onboard_position_plan_state_store_result{state_hash, true, {}};
   } catch (const std::exception& error) {
+    if (rename_committed) {
+      return ntn_onboard_position_plan_state_store_result{
+          state_hash, false, fmt::format("state file replaced but completion failed: {}", error.what())};
+    }
     return make_unexpected(fmt::format("cannot encode NTN position-plan state: {}", error.what()));
   }
 }

@@ -32,8 +32,11 @@ namespace srsran {
 namespace srs_cu_cp {
 
 /// On-disk state is deliberately bounded before JSON parsing.
-inline constexpr size_t max_ntn_onboard_position_plan_state_file_size   = 4U * 1024U * 1024U;
-inline constexpr size_t max_ntn_onboard_position_plan_clear_obligations = 64U;
+inline constexpr size_t max_ntn_onboard_position_plan_state_file_size = 4U * 1024U * 1024U;
+/// Bounds every calendar that may still require exact cleanup. The two extra slots let a state with 64 historical
+/// clear tasks retain its persisted active and pending calendars until they are either reconciled or converted into
+/// clear tasks themselves.
+inline constexpr size_t max_ntn_onboard_position_plan_cleanup_claims = 66U;
 inline constexpr size_t max_ntn_onboard_position_plan_observed_positions = 65536U;
 
 /// Management-center artifacts that bind the persisted state to one planning context.
@@ -120,7 +123,17 @@ struct ntn_onboard_position_plan_state_store_result {
 };
 
 /// Private deterministic failpoints used only by the focused atomic-replacement tests.
-enum class ntn_onboard_position_plan_state_store_failpoint { none, before_rename, after_rename };
+enum class ntn_onboard_position_plan_state_store_failpoint {
+  none,
+  before_rename,
+  after_rename,
+  after_rename_exception
+};
+
+/// Installs one private, process-wide failpoint for the next default state-store call. Focused CU-CP tests use this to
+/// exercise post-rename handling without exposing a production configuration switch.
+void set_ntn_onboard_position_plan_state_store_failpoint_once_for_test(
+    ntn_onboard_position_plan_state_store_failpoint failpoint);
 
 /// Atomically replaces a private recovery state using a same-directory temporary file and durable POSIX syncs.
 /// An unexpected result means no rename was committed. A value always means the target was replaced; inspect durable
@@ -128,7 +141,8 @@ enum class ntn_onboard_position_plan_state_store_failpoint { none, before_rename
 expected<ntn_onboard_position_plan_state_store_result, std::string> store_ntn_onboard_position_plan_state_atomic(
     const std::string&                                path,
     const ntn_onboard_position_plan_persistent_state& state,
-    ntn_onboard_position_plan_state_store_failpoint failpoint = ntn_onboard_position_plan_state_store_failpoint::none);
+    ntn_onboard_position_plan_state_store_failpoint   failpoint =
+        ntn_onboard_position_plan_state_store_failpoint::none);
 
 } // namespace srs_cu_cp
 } // namespace srsran

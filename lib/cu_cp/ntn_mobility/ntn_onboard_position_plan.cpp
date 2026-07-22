@@ -1747,11 +1747,18 @@ bool ntn_onboard_position_plan_controller::require_du_reconciliation_after_conne
 
 bool ntn_onboard_position_plan_controller::confirm_recovery_applied(uint64_t           schedule_version,
                                                                     const std::string& calendar_hash,
-                                                                    std::chrono::system_clock::time_point now)
+                                                                    std::chrono::system_clock::time_point now,
+                                                                    bool                                   allow_confirmation,
+                                                                    bool                                   defer_pending_activation)
 {
   if (!recovery_candidate.has_value() || recovery_candidate->source.schedule_version != schedule_version ||
       normalize_hash(recovery_candidate->calendar_hash) != normalize_hash(calendar_hash) ||
       now >= recovery_candidate->source.valid_until) {
+    return false;
+  }
+  if (!allow_confirmation) {
+    // The matching response may be retried after a safe restart. Do not expose recovered application evidence that
+    // cannot be committed to the state file.
     return false;
   }
   if (recovery_candidate_was_active) {
@@ -1770,7 +1777,9 @@ bool ntn_onboard_position_plan_controller::confirm_recovery_applied(uint64_t    
     recovery_candidate.reset();
     deployment        = ntn_position_plan_deployment_stage::applied;
     deployment_reason = "du_reconciled_after_restart";
-    advance_time(now);
+    if (!defer_pending_activation) {
+      advance_time(now);
+    }
   }
   recovery_candidate_was_active = false;
   recovery                      = ntn_position_plan_recovery_stage::reconciled;
@@ -1885,7 +1894,8 @@ ntn_position_plan_submit_result ntn_onboard_position_plan_controller::submit(
   return {true, current_stage, ntn_position_plan_reject_reason::none};
 }
 
-bool ntn_onboard_position_plan_controller::advance_time(std::chrono::system_clock::time_point now)
+bool ntn_onboard_position_plan_controller::advance_time(std::chrono::system_clock::time_point now,
+                                                         bool                                   allow_activation)
 {
   if (recovery_candidate.has_value() && now >= recovery_candidate->source.valid_until) {
     const uint64_t    expired_version = recovery_candidate->source.schedule_version;
@@ -1931,6 +1941,11 @@ bool ntn_onboard_position_plan_controller::advance_time(std::chrono::system_cloc
       return false;
     }
     reject(ntn_position_plan_reject_reason::expired, expired_version);
+    return false;
+  }
+
+  if (!allow_activation) {
+    current_stage = ntn_position_plan_stage::pending;
     return false;
   }
 

@@ -703,10 +703,15 @@ private:
 
   void on_statistics_report_timer_expired();
   enum class ntn_state_persist_outcome { durable, not_committed, committed_not_durable };
+  using ntn_position_plan_clear_entry = std::pair<ntn_activated_position_plan, std::string>;
   void reload_ntn_onboard_position_plan();
   void restore_ntn_onboard_position_plan_state();
   ntn_state_persist_outcome persist_ntn_onboard_position_plan_state_locked(const char* reason,
                                                                             bool omit_clear_queue_head = false);
+  void restore_ntn_onboard_position_plan_checkpoint_fail_closed_locked(
+      const ntn_onboard_position_plan_controller&       controller_checkpoint,
+      const std::vector<ntn_position_plan_clear_entry>& clear_queue_checkpoint,
+      std::chrono::system_clock::time_point             now);
   void try_prepare_ntn_onboard_position_plan();
   void query_ntn_onboard_position_plan_application();
   bool queue_ntn_onboard_position_plan_clear_locked(const ntn_activated_position_plan& plan, std::string reason);
@@ -744,7 +749,7 @@ private:
   std::optional<std::pair<uint64_t, std::string>>         ntn_position_plan_prepare_dispatched;
   uint64_t                                                 ntn_position_plan_static_preflight_schedule_version = 0;
   std::array<f1ap_ntn_access_calendar_preflight_report, 2> ntn_position_plan_static_preflight_reports{};
-  std::vector<std::pair<ntn_activated_position_plan, std::string>> ntn_position_plan_clear_queue;
+  std::vector<ntn_position_plan_clear_entry>                       ntn_position_plan_clear_queue;
   unsigned                                                         ntn_position_plan_state_schema_version = 0;
   uint64_t                                                         ntn_position_plan_state_generation = 0;
   std::string                                                      ntn_position_plan_state_hash;
