@@ -302,6 +302,53 @@ test('first slab preserves nested thresholds when a release entry is ambiguous o
   assert.doesNotThrow(() => processNextVisibilitySlab({context, state: restored}));
 });
 
+test('a sub-microsecond release crossing at a slab boundary is owned exactly once', () => {
+  const satellites = createWalkerDelta({
+    planes: 42,
+    satellitesPerPlane: 84,
+    phaseFactor: 1,
+    altitudeKm: 500,
+    inclinationDeg: 60,
+    raanOffsetDeg: 0,
+    phaseOffsetDeg: 0
+  }).filter(({id}) => id === 'P30-S01');
+  const context = createSlabVisibilityContext({
+    satellites,
+    catalogGeometry: createCatalogGeometry([{
+      id: 'G013976',
+      lat: 29.19678,
+      lon: 2.16495,
+      childMask: 127
+    }]),
+    orbitModel: resolveOrbitModel({altitudeKm: 500}),
+    boundaryPaddingUs: 120_000_000,
+    toleranceUs: 1_000,
+    scanStepUs: 30_000_000,
+    screeningStepUs: 30_000_000,
+    marginTolerance: 1e-12
+  });
+  const initial = createSlabVisibilityState({
+    context,
+    auditStartTimeUs: 409_200_000_000,
+    auditEndTimeUs: 409_440_000_000,
+    slabDurationUs: 120_000_000
+  });
+
+  const left = processNextVisibilitySlab({context, state: initial});
+  assert.equal(left.ambiguous.length, 0);
+  assert.equal(left.state.openPairs.length, 1);
+
+  const right = processNextVisibilitySlab({context, state: left.state});
+  assert.equal(right.complete, true);
+  assert.equal(right.metrics.exact, true);
+  assert.equal(right.ambiguous.length, 0);
+  assert.equal(right.state.openPairs.length, 0);
+  assert.deepEqual(
+    right.events.filter(({kind}) => kind === 'release_exit').map(({timeUs}) => timeUs),
+    [409_320_000_000]
+  );
+});
+
 test('swept-cap screening benchmark skips remote pairs without losing open state', () => {
   const satellites = createWalkerDelta({
     planes: 1,

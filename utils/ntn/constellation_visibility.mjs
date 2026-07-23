@@ -5,6 +5,13 @@ import {
   resolveOrbitModel
 } from './constellation_audit_core.mjs';
 
+// marginTolerance controls root isolation, but it is too wide to decide which
+// half-open slab owns a crossing that lands within one tolerance bracket of a
+// slab boundary. At the boundary itself, only values indistinguishable from
+// floating-point roundoff remain unresolved; every other sign can assign the
+// crossing deterministically to the left or right slab.
+const BOUNDARY_ROUNDOFF_MARGIN = 64 * Number.EPSILON;
+
 function fail(message) {
   throw new Error(message);
 }
@@ -128,7 +135,7 @@ export function auditPairVisibility({
       for (const [boundary, name] of [[startTimeUs, 'start'], [endTimeUs, 'end']]) {
         if (crossing.bracketStartUs > boundary || crossing.bracketEndUs < boundary) continue;
         const boundaryMargin = marginAtTimeUs(boundary);
-        if (Math.abs(boundaryMargin) <= marginTolerance) {
+        if (Math.abs(boundaryMargin) <= BOUNDARY_ROUNDOFF_MARGIN) {
           const ambiguityStart = name === 'start'
             ? startTimeUs
             : Math.max(startTimeUs, endTimeUs - toleranceUs);

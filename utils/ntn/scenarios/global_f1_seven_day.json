@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "audit_kind": "ntn_constellation_planning_evidence",
-  "run_id": "global-f1-seven-day-nominal-v2",
+  "run_id": "global-f1-seven-day-nominal-v3",
   "engine": {
     "name": "ntn-headless-planner",
     "version": "1.0.0",
     "source_revision": "6a50517+ntn-plan-001",
-    "source_sha256": "sha256:c50ec4416320c49ac020a6f6201aebb86896b5750854ca992dbdea1c9567d130"
+    "source_sha256": "sha256:fcec229233085a63b09af157d60a4a476bd878bea65e696f0ba4a811fdfa4682"
   },
   "scenario": {
     "scenario_id": "walker-delta-60-3528-42-f1-nominal",
