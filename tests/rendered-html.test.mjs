@@ -61,6 +61,15 @@ test("audit evidence rejects F=0 and keeps the sampled F=1 candidate unselected"
   assert.match(planner, /PRACH接入日历/);
   assert.match(planner, /128 \/ 128次机会/);
   assert.match(planner, /两个星载小区/);
+  assert.match(planner, /日历就是卫星轮流照向不同地面区域的时间安排/);
+  assert.match(planner, /这颗卫星能否为所有可见地面区域排出接入时段/);
+  assert.match(planner, /多久安排一次网络发现机会/);
+  assert.match(planner, /多久安排一次接入机会/);
+  assert.match(planner, /查看80 ms轮转明细/);
+  assert.match(planner, /查看完整可见波位表/);
+  assert.match(planner, /if \(view !== "access"\) setView\("orbit"\)/);
+  assert.match(planner, /view !== "access" \? <section className="global-metrics"/);
+  assert.match(planner, /view !== "audit" && view !== "access"/);
   assert.match(planner, /<details className="technical-details/);
   assert.doesNotMatch(planner, /<details[^>]*\sopen(?:=|>)/);
 
@@ -73,6 +82,7 @@ test("audit evidence rejects F=0 and keeps the sampled F=1 candidate unselected"
   assert.match(css, /\.global-header nav \{[^}]*overflow-x:\s*auto/);
   assert.match(css, /\.global-workspace \{[^}]*grid-template-columns:\s*1fr/);
   assert.match(css, /\.calendar-grid \{[^}]*grid-template-columns:\s*repeat\(2,\s*1fr\)/);
+  assert.match(css, /\.access-answer-grid \{[^}]*grid-template-columns:\s*repeat\(2,\s*1fr\)/);
   assert.match(css, /\.decision-hero \{[^}]*grid-template-columns:\s*1fr/);
   assert.match(css, /@media \(max-width: 430px\)/);
   assert.match(css, /\.global-metrics \{[^}]*grid-template-columns:\s*1fr/);
