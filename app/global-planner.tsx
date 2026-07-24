@@ -153,11 +153,17 @@ function statusText(status?: string) {
 }
 
 function scenarioEvidenceText(scenario?: AuditScenario) {
-  if (scenario?.id === "global-45-seed-3528") return "单时刻粗筛失败（23个空窗）";
+  if (scenario?.id === "global-45-seed-3528") return "起始时刻有23个区域无法获得服务";
   if (scenario?.id === "global-45-f1-snapshot-candidate") {
-    return "一天离散粗筛无空窗（非连续证明）";
+    return "一天内各检查时刻均有候选卫星（尚未完成连续验证）";
   }
   return statusText(scenario?.auditStatus ?? scenario?.status);
+}
+
+function scenarioDisplayName(scenario: AuditScenario | undefined, index: number) {
+  if (scenario?.id === "global-45-seed-3528") return "初始方案";
+  if (scenario?.id === "global-45-f1-snapshot-candidate") return "调整后的方案";
+  return `备选方案 ${index + 1}`;
 }
 
 export function GlobalPlanner() {
@@ -165,7 +171,7 @@ export function GlobalPlanner() {
   const [timeSeconds, setTimeSeconds] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState<(typeof TIME_SPEEDS)[number]>(60);
-  // F=1 t=0 peak-load satellite and its nearest catalog position keep the
+  // The adjusted plan's t=0 peak-load satellite and its nearest catalog position keep the
   // initial coverage and calendar views representative of the audited case.
   const [selectedSatelliteId, setSelectedSatelliteId] = useState("P02-S04");
   const [selectedCellId, setSelectedCellId] = useState("G021777");
@@ -359,7 +365,7 @@ export function GlobalPlanner() {
       </header>
 
       {view !== "access" ? <section className="global-metrics" aria-label="工程结论指标">
-        <article className="metric-recommended"><span>当前评估方案</span><strong>60° · 42×84 · F=1</strong><small>500 km圆轨道 · 共{baseline.totalSatellites.toLocaleString("en-US")}颗卫星</small></article>
+        <article className="metric-recommended"><span>当前评估方案</span><strong>60° · 42轨道面 · 每面84星</strong><small>500 km圆轨道 · 共{baseline.totalSatellites.toLocaleString("en-US")}颗卫星</small></article>
         <article><span>一天内检查时刻</span><strong>{f1DayAudit.sampling.epochCount} / {f1DayAudit.sampling.epochCount}</strong><small>每2分钟检查一次 · 每个区域均有候选卫星</small></article>
         <article><span>最忙卫星服务区域数</span><strong>{f1DayAudit.summary.maximumVisibleL1PerSatellite} / {SATELLITE_CAPACITY}</strong><small>距离{SATELLITE_CAPACITY}个区域上限还有{SATELLITE_CAPACITY - f1DayAudit.summary.maximumVisibleL1PerSatellite}个</small></article>
         <article className="metric-review"><span>长时间连续服务验证</span><strong>待执行</strong><small>计划连续检查{audit.exactAudit?.durationDays ?? 7}天 · 目前尚未完成</small></article>
@@ -373,7 +379,7 @@ export function GlobalPlanner() {
       </section> : null}
 
       {view !== "audit" && view !== "access" ? <section className="runtime-context" aria-label="当前运行快照">
-        <span>F=1运行快照</span>
+        <span>当前方案运行快照</span>
         <dl>
           <div><dt>动画 / 覆盖快照</dt><dd>{formatClock(timeSeconds)} / {formatClock(coverageEpoch)}</dd></div>
           <div><dt>一级波位</dt><dd>{selectedCell?.id ?? selectedCellId}</dd></div>
@@ -417,7 +423,7 @@ export function GlobalPlanner() {
       {view === "orbit" ? (
         <section className="global-workspace orbit-workspace">
           <article className="global-stage">
-            <header><div><p>工程推荐候选 · F=1</p><h2>星座运行与单星负载</h2></div><span>{baseline.walker} · h={baseline.altitudeKm} km · i={baseline.inclinationDeg}°</span></header>
+            <header><div><p>当前工程候选</p><h2>星座运行与单星负载</h2></div><span>{baseline.planes}轨道面 × 每面{baseline.satellitesPerPlane}星 · {baseline.altitudeKm} km圆轨道 · {baseline.inclinationDeg}°倾角</span></header>
             <GlobalOrbitView timeSeconds={timeSeconds} selectedSatelliteId={selectedSatelliteId} onSelectSatellite={chooseSatellite} />
           </article>
           <aside className="global-inspector">
@@ -555,11 +561,11 @@ export function GlobalPlanner() {
 
           <section className="acceptance-actions"><header><h3>最终定案前还要完成三件事</h3><span>三项都完成后，才能确认全球陆地连续服务能力</span></header><div><article><b>01</b><h4>连续服务检查</h4><p>连续检查7天，确认两个检查时刻之间也不会出现短暂的服务中断。</p></article><article><b>02</b><h4>卫星接续检查</h4><p>确认一颗卫星离开时，下一颗卫星已经准备好接续服务，交接期间不中断。</p></article><article><b>03</b><h4>真实无线环境验证</h4><p>使用真实轨道、信号功率、干扰、地面站和无线设备完成验证。</p></article></div></section>
 
-          <details className="technical-details decision-details"><summary>查看技术依据和使用边界</summary><div className="decision-technical"><p>技术参数：覆盖目录包含±57°陆地的36,411个L1位置；F=1方案来自一天、每120 s检查一次的计算。正式方案尚未签署，连续事件检查仍未运行。</p><p>接入时序目标为SSB不超过80 ms、PRACH不超过640 ms。当前软件能够为每个星载小区的128个L1位置生成安排，但这不代表信号已经通过天线发出，也不代表真实PHY或RF环境已经通过验证。候选全集不会按256个容量上限裁剪。</p><section className="scenario-table"><header><h3>方案对比记录</h3><span>技术字段</span></header><div><table><thead><tr><th>候选</th><th>倾角</th><th>轨道面</th><th>每面卫星</th><th>F</th><th>证据状态</th></tr></thead><tbody>{(audit.scenarios ?? [displayedScenario]).filter(Boolean).map((scenario, index) => <tr key={scenario?.id ?? index}><td>{scenario?.id ?? (index === 0 ? "seed" : `candidate-${index}`)}</td><td>{scenario?.inclinationDeg ?? baseline.inclinationDeg}°</td><td>{scenario?.planes ?? "—"}</td><td>{scenario?.satellitesPerPlane ?? "—"}</td><td>{scenario?.phaseFactor ?? baseline.phaseFactor}</td><td>{scenarioEvidenceText(scenario)}</td></tr>)}</tbody></table></div></section></div></details>
+          <details className="technical-details decision-details"><summary>查看技术依据和使用边界</summary><div className="decision-technical"><p>技术参数：覆盖目录包含±57°陆地的36,411个L1位置；当前方案来自一天、每120 s检查一次的计算。正式方案尚未签署，连续事件检查仍未运行。</p><p>接入时序目标为SSB不超过80 ms、PRACH不超过640 ms。当前软件能够为每个星载小区的128个L1位置生成安排，但这不代表信号已经通过天线发出，也不代表真实PHY或RF环境已经通过验证。候选全集不会按256个容量上限裁剪。</p><section className="scenario-table"><header><h3>方案对比记录</h3><span>技术字段</span></header><div><table><thead><tr><th>方案</th><th>倾角</th><th>轨道面</th><th>每面卫星</th><th>当前状态</th></tr></thead><tbody>{(audit.scenarios ?? [displayedScenario]).filter(Boolean).map((scenario, index) => <tr key={scenario?.id ?? index}><td>{scenarioDisplayName(scenario, index)}</td><td>{scenario?.inclinationDeg ?? baseline.inclinationDeg}°</td><td>{scenario?.planes ?? "—"}</td><td>{scenario?.satellitesPerPlane ?? "—"}</td><td>{scenarioEvidenceText(scenario)}</td></tr>)}</tbody></table></div></section></div></details>
         </section>
       ) : null}
 
-      <footer className="global-footer"><span>波位目录 {String(metadata.version ?? "载入中")} · SHA-256 {String(metadata.integrity?.sha256 ?? metadata.contentHash ?? "pending").slice(0, 16)}</span><p>工程候选：500 km · 60° · 42×84 · F=1 · 45°接入 / 42°保持</p></footer>
+      <footer className="global-footer"><span>波位目录 {String(metadata.version ?? "载入中")} · SHA-256 {String(metadata.integrity?.sha256 ?? metadata.contentHash ?? "pending").slice(0, 16)}</span><p>工程候选：500 km圆轨道 · 60°倾角 · 42轨道面 × 每面84星 · 45°接入 / 42°保持</p></footer>
     </main>
   );
 }

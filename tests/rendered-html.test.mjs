@@ -21,7 +21,7 @@ test("server-renders the conclusion-first NTN engineering review", async () => {
   const html = (await response.text()).replaceAll("<!-- -->", "");
   assert.match(html, /NTN 全球陆地接入方案/);
   assert.match(html, /57°S～57°N陆地/);
-  assert.match(html, /60° · 42×84 · F=1/);
+  assert.match(html, /60° · 42轨道面 · 每面84星/);
   assert.match(html, /3,528颗卫星/);
   assert.match(html, /方案结论/);
   assert.match(html, /全球覆盖/);
@@ -36,10 +36,11 @@ test("server-renders the conclusion-first NTN engineering review", async () => {
   assert.match(html, /尚未最终定案/);
   assert.doesNotMatch(html, /动作演示|STEP|当前无选定方案|为什么还不能写/);
   assert.doesNotMatch(html, /64 个地固|地固 NCI|NCI 属于地固|每星 84 个 L1/);
+  assert.doesNotMatch(html, /F=0|F=1|<th>F<\/th>/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
 });
 
-test("audit evidence rejects F=0 and keeps the sampled F=1 candidate unselected", async () => {
+test("audit evidence rejects the initial arrangement and keeps the sampled candidate unselected", async () => {
   const [audit, seedSnapshot, f1Day, planner, css] = await Promise.all([
     readFile(new URL("../app/global-constellation-audit.json", import.meta.url), "utf8").then(JSON.parse),
     readFile(new URL("../app/global-constellation-snapshot.json", import.meta.url), "utf8").then(JSON.parse),

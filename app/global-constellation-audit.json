@@ -29,7 +29,7 @@
     "uncoveredL1": 23,
     "maximumVisibleL1PerSatellite": 206,
     "satellitesOver256L1": 0,
-    "note": "Coarse single-epoch evidence only; it is sufficient to reject F=0 at t=0 but cannot prove any alternative."
+    "note": "Coarse single-epoch evidence only; the initial arrangement has 23 uncovered positions and cannot prove any alternative."
   },
   "coarseAudit": {
     "status": "pass",
@@ -65,7 +65,7 @@
     },
     {
       "id": "global-45-f1-snapshot-candidate",
-      "label": "同规模 F=1 单时刻候选",
+      "label": "调整后的同规模方案",
       "walker": "Walker Delta 60°:3528/42/1",
       "inclinationDeg": 60,
       "planes": 42,

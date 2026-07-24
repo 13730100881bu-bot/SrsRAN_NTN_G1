@@ -12,7 +12,7 @@ import {
 const baseline = JSON.parse(await readFile(new URL("../app/orbit-baseline.json", import.meta.url), "utf8"));
 const audit = JSON.parse(await readFile(new URL("../app/global-constellation-audit.json", import.meta.url), "utf8"));
 
-test("global 45-degree engineering display uses the F=1 candidate", () => {
+test("global 45-degree engineering display uses the adjusted candidate", () => {
   const definitions = createWalkerDelta({
     planes: baseline.planes,
     satellitesPerPlane: baseline.satellitesPerPlane,

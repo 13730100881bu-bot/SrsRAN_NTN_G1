@@ -6,13 +6,13 @@ import { publicPath } from "./public-path";
 export async function generateMetadata(): Promise<Metadata> {
   return {
     title: "NTN全球陆地接入方案",
-    description: "42×84、F=1星座的全球陆地接入可行性结论、卫星负载与80 ms跳波束日历。",
+    description: "42轨道面、每面84星的全球陆地接入方案、卫星负载与80 ms跳波束日历。",
     icons: { icon: publicPath("/favicon.svg"), shortcut: publicPath("/favicon.svg") },
     openGraph: {
       title: "NTN全球陆地接入方案",
-      description: "F=1工程候选 · 720/720离散覆盖检查 · 单星峰值209/256",
+      description: "当前工程候选 · 720/720个检查时刻均有候选卫星 · 单星峰值209/256",
     },
-    twitter: { card: "summary", title: "NTN全球陆地接入方案", description: "F=1工程候选、覆盖结论与星载跳波束日历" },
+    twitter: { card: "summary", title: "NTN全球陆地接入方案", description: "全球陆地覆盖方案、卫星负载与星载跳波束日历" },
   };
 }
 
