@@ -8,6 +8,7 @@ import f1DayAuditJson from "./global-constellation-f1-day-coarse.json";
 import { GlobalCoverageMap, type GlobalMapCell } from "./global-map";
 import { GlobalOrbitView } from "./global-orbit-view";
 import { BASELINE_L1_CAPACITY } from "./beam-hopping-model";
+import { publicPath } from "./public-path";
 import { baselineSatelliteCellPlanningContext } from "./satellite-cell-model";
 import {
   EARTH_RADIUS_KM,
@@ -97,8 +98,8 @@ const f1DayAudit = f1DayAuditJson as {
     maximumSatellitesOver256L1: number;
   };
 };
-const GLOBAL_CATALOG_URL = "/data/global-land-l1-v1.json";
-const LAND_TOPOLOGY_URL = "/data/land-50m.json";
+const GLOBAL_CATALOG_URL = publicPath("/data/global-land-l1-v1.json");
+const LAND_TOPOLOGY_URL = publicPath("/data/land-50m.json");
 const SATELLITE_CAPACITY = 256;
 const CELL_CAPACITY = 128;
 const ANALOG_PER_SATELLITE = 32;
