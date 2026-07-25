@@ -33,6 +33,8 @@ test("server-renders the conclusion-first NTN engineering review", async () => {
   assert.match(html, /720 \/ 720/);
   assert.match(html, /可见.*不是.*实际负载/s);
   assert.match(html, /PRACH按每个已分配一级波位单独安排/);
+  assert.match(html, /是否已经接入基站程序/);
+  assert.match(html, /尚未接通/);
   assert.match(html, /不代表最终选型/);
   assert.doesNotMatch(html, /209\s*\/\s*256|距离256个区域上限/);
   assert.doesNotMatch(html, /动作演示|STEP|当前无选定方案|为什么还不能写/);
@@ -70,6 +72,8 @@ test("audit evidence rejects the initial arrangement and keeps the sampled candi
   assert.match(planner, /可见候选 · 由其他卫星负责/);
   assert.match(planner, /查看80 ms轮转明细/);
   assert.match(planner, /查看完整可见波位表/);
+  assert.match(planner, /基站程序目前只能接收一张/);
+  assert.match(planner, /完整可见清单和实际负责清单还不能同时送入基站程序/);
   assert.match(planner, /setOrbitFocusRequestId\(\(value\) => value \+ 1\)/);
   assert.match(planner, /focusRequestId=\{orbitFocusRequestId\}/);
   assert.match(planner, /aria-live="polite"/);
