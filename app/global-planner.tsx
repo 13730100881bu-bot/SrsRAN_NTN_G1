@@ -8,6 +8,7 @@ import { GlobalCoverageMap, type GlobalMapCell } from "./global-map";
 import { GlobalOrbitView } from "./global-orbit-view";
 import { parseGlobalSearchTarget } from "./global-search";
 import { BASELINE_L1_CAPACITY } from "./beam-hopping-model";
+import { BeamHoppingAnimation } from "./beam-hopping-animation";
 import { publicPath } from "./public-path";
 import { baselineSatelliteCellPlanningContext } from "./satellite-cell-model";
 import {
@@ -352,6 +353,13 @@ export function GlobalPlanner() {
       .map((cell) => ({ ...cell, cellBank: assignmentBankById.get(cell.id)! })),
     [analysis.cells, assignmentBankById],
   );
+  const animationCells = useMemo(
+    () => catalog
+      .filter(({ id }) => assignmentBankById.has(id))
+      .map((cell) => ({ ...cell, cellBank: assignmentBankById.get(cell.id)! })),
+    [assignmentBankById, catalog],
+  );
+  const selectedCellIdentities = baselineSatelliteCellPlanningContext.identitiesBySatellite.get(selectedSatellite.id);
   const windowsA = calendarWindows(assignedCells, 0);
   const windowsB = calendarWindows(assignedCells, 1);
   const catalogReady = catalog.length > 0;
@@ -522,6 +530,17 @@ export function GlobalPlanner() {
             </ol>
           </section>
 
+          <BeamHoppingAnimation
+            key={`${analysisSatellite.id}-${coverageEpoch}`}
+            satellite={analysisSatellite}
+            cells={accessCapacityReady ? animationCells : []}
+            nciByBank={[
+              selectedCellIdentities?.[0]?.nci ?? "unassigned-cell-a",
+              selectedCellIdentities?.[1]?.nci ?? "unassigned-cell-b",
+            ]}
+            landUrl={LAND_TOPOLOGY_URL}
+          />
+
           <section className="access-answer-grid" aria-label="跳波束日历核心结论">
             <article className={!assignmentReady ? "is-pending" : assignmentSnapshot.unassignedCount > 0 ? "is-failure" : "is-pass"}>
               <span>实际任务是否超过上限</span>
@@ -574,7 +593,7 @@ export function GlobalPlanner() {
               {([0, 1] as const).map((bank) => {
                 const windows = bank === 0 ? windowsA : windowsB;
                 const cellCount = assignmentSnapshot.selectedAssignedByCell[bank] ?? 0;
-                const identity = baselineSatelliteCellPlanningContext.identitiesBySatellite.get(selectedSatellite.id)?.[bank];
+                const identity = selectedCellIdentities?.[bank];
                 return (
                   <section className="cell-calendar" key={bank}>
                     <header>

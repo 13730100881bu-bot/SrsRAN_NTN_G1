@@ -165,6 +165,42 @@
 .access-journey span { margin-top: 9px; font-size: 12px; font-weight: 650; }
 .access-journey small { margin-top: 5px; color: #a9c0c6; font-size: 10px; line-height: 1.45; }
 
+.beam-animation-panel { margin: 0 16px 16px; overflow: hidden; color: #edf7f4; background: #0b2630; border: 1px solid #36515a; }
+.beam-animation-panel > header { padding: 16px 18px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 24px; border-bottom: 1px solid #36515a; }
+.beam-animation-panel > header > div:first-child > span { color: #7ed6ee; font-size: 10px; font-weight: 700; letter-spacing: .08em; }
+.beam-animation-panel h3 { margin: 5px 0 0; font-size: 18px; font-weight: 650; }
+.beam-animation-panel header p { margin: 7px 0 0; max-width: 740px; color: #bad0d4; font-size: 11px; line-height: 1.6; }
+.beam-animation-summary { min-width: 210px; display: grid; justify-items: end; text-align: right; }
+.beam-animation-summary > span { color: #7ed6ee; font: 700 12px ui-monospace, monospace; }
+.beam-animation-summary > b { margin-top: 4px; font-size: 14px; }
+.beam-animation-summary > small { margin-top: 3px; color: #c7d8da; font-size: 10px; }
+.beam-animation-summary > em { margin-top: 5px; max-width: 280px; overflow: hidden; color: #f2d09b; font: 500 9px ui-monospace, monospace; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.beam-animation-map { position: relative; min-height: 450px; overflow: hidden; background: #071c25; }
+.beam-animation-map canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.beam-animation-empty, .beam-animation-map .map-error { position: absolute; inset: 50% auto auto 50%; z-index: 2; margin: 0; padding: 9px 12px; color: #e9f4f1; background: rgba(7, 28, 37, .88); border: 1px solid #48636b; transform: translate(-50%, -50%); font-size: 11px; white-space: nowrap; }
+.beam-animation-legend { position: absolute; right: 14px; bottom: 13px; z-index: 2; padding: 9px 11px; display: flex; flex-wrap: wrap; gap: 12px; color: #dfeeed; background: rgba(7, 28, 37, .84); border: 1px solid rgba(127, 166, 174, .46); backdrop-filter: blur(5px); }
+.beam-animation-legend span { display: flex; align-items: center; gap: 6px; font-size: 9px; white-space: nowrap; }
+.beam-animation-legend i { width: 9px; height: 9px; display: inline-block; border-radius: 50%; background: #7ed6ee; box-shadow: 0 0 8px rgba(88, 210, 238, .7); }
+.beam-animation-legend i.cell-b { background: #ffad55; box-shadow: 0 0 8px rgba(255, 173, 85, .7); }
+.beam-animation-legend i.active-beam { width: 20px; height: 2px; border-radius: 0; background: linear-gradient(90deg, #ffe5aa, #7ed6ee); }
+.beam-animation-controls { padding: 12px 14px; display: grid; grid-template-columns: auto minmax(220px, 1fr) auto; align-items: center; gap: 16px; border-top: 1px solid #36515a; }
+.beam-animation-play, .beam-animation-speed button { min-height: 44px; color: #eef8f6; background: #153b46; border: 1px solid #52707a; font-size: 10px; font-weight: 700; cursor: pointer; }
+.beam-animation-play { min-width: 144px; padding: 0 14px; }
+.beam-animation-play:hover, .beam-animation-speed button:hover, .beam-animation-play:focus-visible, .beam-animation-speed button:focus-visible { color: #09232d; background: #8bdcf0; border-color: #8bdcf0; outline: 2px solid #f5c477; outline-offset: 2px; }
+.beam-animation-play:disabled { opacity: .5; cursor: not-allowed; }
+.beam-animation-controls > label { min-width: 0; display: grid; grid-template-columns: auto minmax(100px, 1fr) 76px; align-items: center; gap: 10px; }
+.beam-animation-controls label > span { color: #b9cdd1; font-size: 9px; font-weight: 650; }
+.beam-animation-controls input[type="range"] { width: 100%; accent-color: #7ed6ee; }
+.beam-animation-controls output { color: #f2d09b; font: 650 10px ui-monospace, monospace; text-align: right; }
+.beam-animation-speed { display: flex; gap: 5px; }
+.beam-animation-speed button { min-width: 44px; padding: 0 9px; }
+.beam-animation-speed button.active { color: #09232d; background: #7ed6ee; border-color: #7ed6ee; }
+.beam-slot-track { margin: 0 14px 12px; display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 3px; }
+.beam-slot-track span { min-width: 0; padding: 6px 2px; overflow: hidden; color: #8da8ae; background: #102f39; border: 1px solid #294a54; font: 650 8px ui-monospace, monospace; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+.beam-slot-track span.active { color: #09232d; background: #7ed6ee; border-color: #7ed6ee; }
+.beam-slot-track span.active.bank-1 { background: #ffad55; border-color: #ffad55; }
+.beam-animation-boundary { margin: 0; padding: 11px 14px 13px; color: #9fb6bb; background: #081e27; border-top: 1px solid #294a54; font-size: 9px; line-height: 1.55; }
+
 .access-answer-grid { margin: 0 16px 16px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .access-answer-grid article { min-width: 0; padding: 14px; display: grid; align-content: start; border: 1px solid var(--line); border-top-width: 4px; background: #fff; }
 .access-answer-grid article.is-pass { border-top-color: var(--green); }
@@ -272,6 +308,12 @@
   .schedule-summary-grid article, .acceptance-actions article { border-right: 0; border-bottom: 1px solid var(--line); }
   .schedule-summary-grid article:last-child, .acceptance-actions article:last-child { border-bottom: 0; }
   .access-guide { grid-template-columns: 1fr; gap: 16px; }
+  .beam-animation-panel > header { grid-template-columns: 1fr; gap: 12px; }
+  .beam-animation-summary { min-width: 0; justify-items: start; text-align: left; }
+  .beam-animation-map { min-height: 390px; }
+  .beam-animation-controls { grid-template-columns: auto 1fr; }
+  .beam-animation-controls > label { grid-column: 1 / -1; grid-row: 1; }
+  .beam-animation-speed { justify-content: flex-end; }
   .access-answer-grid { grid-template-columns: repeat(2, 1fr); }
   .access-cell-overview > header { align-items: flex-start; flex-direction: column; }
   .access-cell-overview > header p { text-align: left; }
@@ -303,7 +345,17 @@
   .map-zoom-panel > span { display: none; }
   .map-legend { right: 8px; left: 8px; }
   .decision-hero h2 { font-size: 20px; }
-  .access-guide, .access-cell-overview { margin: 10px; }
+  .access-guide, .access-cell-overview, .beam-animation-panel { margin: 10px; }
+  .beam-animation-panel > header { padding: 14px; }
+  .beam-animation-map { min-height: 330px; }
+  .beam-animation-legend { right: 8px; bottom: 8px; left: 8px; justify-content: center; }
+  .beam-animation-controls { grid-template-columns: 1fr; gap: 9px; }
+  .beam-animation-controls > label { grid-column: auto; grid-row: auto; grid-template-columns: 1fr 70px; }
+  .beam-animation-controls label > span { grid-column: 1 / -1; }
+  .beam-animation-play { width: 100%; }
+  .beam-animation-speed { justify-content: stretch; }
+  .beam-animation-speed button { flex: 1; }
+  .beam-slot-track { grid-template-columns: repeat(4, 1fr); }
   .access-journey, .access-answer-grid { grid-template-columns: 1fr; }
   .access-answer-grid { margin: 0 10px 10px; }
   .access-detail-block, .access-detail-block.visible-table, .access-technical { margin-left: 10px; margin-right: 10px; }
