@@ -177,11 +177,12 @@
 .beam-animation-summary > span { color: #7ed6ee; font: 700 12px ui-monospace, monospace; }
 .beam-animation-summary > b { margin-top: 4px; font-size: 14px; }
 .beam-animation-summary > small { margin-top: 5px; color: #c7d8da; font-size: 10px; }
-.beam-animation-map { position: relative; min-height: 500px; overflow: hidden; background: #071c25; }
-.beam-animation-map canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-.beam-animation-orbit-note { position: absolute; top: 9px; left: 50%; z-index: 2; display: grid; justify-items: center; pointer-events: none; transform: translateX(-50%); }
-.beam-animation-orbit-note b { color: #f7f3dd; font: 700 11px ui-monospace, monospace; }
-.beam-animation-orbit-note span { margin-top: 4px; color: #9fc2c8; font-size: 9px; white-space: nowrap; }
+.beam-animation-map { min-height: 500px; overflow: hidden; display: grid; grid-template-rows: auto minmax(0, 1fr); background: #071c25; }
+.beam-animation-canvas { position: relative; min-height: 0; overflow: hidden; }
+.beam-animation-canvas canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.beam-animation-orbit-note { min-height: 42px; padding: 7px 12px; box-sizing: border-box; display: flex; align-items: baseline; justify-content: center; gap: 9px; color: #dcebed; background: #071c25; border-bottom: 1px solid rgba(126, 214, 238, .2); pointer-events: none; }
+.beam-animation-orbit-note b { color: #f7f3dd; font: 700 11px/1.3 ui-monospace, monospace; }
+.beam-animation-orbit-note span { color: #9fc2c8; font-size: 9px; line-height: 1.4; white-space: nowrap; }
 .beam-animation-empty, .beam-animation-map .map-error { position: absolute; inset: 50% auto auto 50%; z-index: 2; margin: 0; padding: 9px 12px; color: #e9f4f1; background: rgba(7, 28, 37, .88); border: 1px solid #48636b; transform: translate(-50%, -50%); font-size: 11px; white-space: nowrap; }
 .beam-animation-legend { position: absolute; right: 14px; bottom: 13px; z-index: 2; padding: 9px 11px; display: flex; flex-wrap: wrap; gap: 12px; color: #dfeeed; background: rgba(7, 28, 37, .84); border: 1px solid rgba(127, 166, 174, .46); backdrop-filter: blur(5px); }
 .beam-animation-legend span { display: flex; align-items: center; gap: 6px; font-size: 9px; white-space: nowrap; }

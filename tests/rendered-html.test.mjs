@@ -82,9 +82,12 @@ test("audit evidence remains separate from the final engineering decision", asyn
   assert.match(beamAnimation, /不表示天线、波束成形或真实无线发射已经执行/);
   assert.match(beamAnimation, /const \[playing, setPlaying\] = useState\(false\)/);
   assert.match(beamAnimation, /<canvas/);
+  assert.match(beamAnimation, /<div className="beam-animation-orbit-note"[\s\S]*?<div className="beam-animation-canvas">/);
   assert.match(beamAnimation, /createGlobalPositionHexagon/);
   assert.match(beamAnimation, /geoMercator/);
   assert.match(beamAnimation, /drawHexagonLayer/);
+  assert.match(beamAnimation, /new ResizeObserver\(scheduleDraw\)/);
+  assert.match(beamAnimation, /window\.requestAnimationFrame\(draw\)/);
   assert.doesNotMatch(beamAnimation, /geoAzimuthalEqualArea|createLinearGradient\(satelliteX|fillText\(cell\.id/);
   assert.match(beamMapLayout, /createBeamAnimationMapViewport/);
   assert.match(beamMapLayout, /const orderedCells = \[\.\.\.cells\]\.sort/);
@@ -146,6 +149,9 @@ test("audit evidence remains separate from the final engineering decision", asyn
   assert.match(css, /\.calendar-grid \{[^}]*grid-template-columns:\s*repeat\(2,\s*1fr\)/);
   assert.match(css, /\.access-answer-grid \{[^}]*grid-template-columns:\s*repeat\(2,\s*1fr\)/);
   assert.match(css, /\.beam-animation-map \{[^}]*min-height:\s*430px/);
+  assert.match(css, /\.beam-animation-map \{[^}]*display:\s*grid[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\)/);
+  assert.match(css, /\.beam-animation-canvas \{[^}]*position:\s*relative[^}]*min-height:\s*0/);
+  assert.doesNotMatch(css, /\.beam-animation-orbit-note \{[^}]*position:\s*absolute/);
   assert.match(css, /\.beam-animation-controls \{[^}]*grid-template-columns:\s*auto\s+1fr/);
   assert.match(css, /\.decision-hero \{[^}]*grid-template-columns:\s*1fr/);
   assert.match(css, /@media \(max-width: 430px\)/);

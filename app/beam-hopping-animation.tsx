@@ -256,10 +256,18 @@ export function BeamHoppingAnimation({
       context.restore();
     };
 
-    const observer = new ResizeObserver(draw);
+    let drawFrame = 0;
+    const scheduleDraw = () => {
+      window.cancelAnimationFrame(drawFrame);
+      drawFrame = window.requestAnimationFrame(draw);
+    };
+    const observer = new ResizeObserver(scheduleDraw);
     observer.observe(parent);
-    draw();
-    return () => observer.disconnect();
+    scheduleDraw();
+    return () => {
+      observer.disconnect();
+      window.cancelAnimationFrame(drawFrame);
+    };
   }, [activeCells, frame, land, mapGeometry]);
 
   const activeBankLabel = frame?.cellBank === null || frame?.cellBank === undefined
@@ -286,21 +294,23 @@ export function BeamHoppingAnimation({
       </header>
 
       <div className={`beam-animation-map ${playing ? "is-playing" : ""}`}>
-        <canvas
-          ref={canvasRef}
-          role="img"
-          aria-label={`${satellite.id}一级波位跳变地图；${timeLabel}；${activeBankLabel}计划照向${activeCells.length}个一级波位`}
-        />
         <div className="beam-animation-orbit-note" aria-hidden="true">
           <b>{satellite.id}</b>
           <span>波束指向下方亮起区域</span>
         </div>
-        {cells.length === 0 ? <p className="beam-animation-empty">正在等待本星的一级波位分配结果</p> : null}
-        {landError ? <p className="map-error">陆地边界加载失败：{landError}</p> : null}
-        <div className="beam-animation-legend" aria-label="跳波束图例">
-          <span><i className="cell-a" />星载小区 A</span>
-          <span><i className="cell-b" />星载小区 B</span>
-          <span><i className="active-beam" />当前亮起</span>
+        <div className="beam-animation-canvas">
+          <canvas
+            ref={canvasRef}
+            role="img"
+            aria-label={`${satellite.id}一级波位跳变地图；${timeLabel}；${activeBankLabel}计划照向${activeCells.length}个一级波位`}
+          />
+          {cells.length === 0 ? <p className="beam-animation-empty">正在等待本星的一级波位分配结果</p> : null}
+          {landError ? <p className="map-error">陆地边界加载失败：{landError}</p> : null}
+          <div className="beam-animation-legend" aria-label="跳波束图例">
+            <span><i className="cell-a" />星载小区 A</span>
+            <span><i className="cell-b" />星载小区 B</span>
+            <span><i className="active-beam" />当前亮起</span>
+          </div>
         </div>
       </div>
 
