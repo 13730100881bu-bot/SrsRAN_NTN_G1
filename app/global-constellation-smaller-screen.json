@@ -7,7 +7,6 @@
   "engineeringDecision": {
     "status": "final_design_adopted",
     "adoptedSatelliteCount": 2990,
-    "supersededDisplayBaseline": 3528,
     "acceptancePending": true
   },
   "scenario": {

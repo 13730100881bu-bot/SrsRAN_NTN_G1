@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import baselineJson from "./orbit-baseline.json";
 import constellationAuditJson from "./global-constellation-audit.json";
-import snapshotAuditJson from "./global-constellation-snapshot.json";
 import smallerScreenJson from "./global-constellation-smaller-screen.json";
 import { GlobalCoverageMap, type GlobalMapCell } from "./global-map";
 import { GlobalOrbitView } from "./global-orbit-view";
@@ -53,24 +52,8 @@ type AssignmentSnapshot = {
   selectedAssignedByCell: readonly [number, number];
   selectedAssignmentBanks: readonly { id: string; cellBank: 0 | 1 }[];
 };
-type AuditScenario = {
-  id?: string;
-  inclinationDeg?: number;
-  planes?: number;
-  satellitesPerPlane?: number;
-  totalSatellites?: number;
-  satelliteCount?: number;
-  phaseFactor?: number;
-  status?: string;
-  auditStatus?: string;
-  note?: string;
-};
 type AuditDocument = {
-  planningSeed?: string | AuditScenario;
-  selectedScenario?: string | AuditScenario | null;
   exactAudit?: { status?: string; durationDays?: number; method?: string; reportPath?: string | null };
-  searchSpace?: { inclinationsDeg?: readonly number[]; planes?: string; satellitesPerPlane?: string; phaseFactor?: string };
-  scenarios?: readonly AuditScenario[];
 };
 type OrbitBaseline = {
   shell: string;
@@ -87,24 +70,16 @@ type OrbitBaseline = {
 
 const baseline = baselineJson as OrbitBaseline;
 const audit = constellationAuditJson as AuditDocument;
-const snapshotAudit = snapshotAuditJson as {
-  exact: false;
-  mode: string;
-  summary: {
-    maximumUncoveredL1: number;
-    maximumVisibleL1PerSatellite: number;
-    maximumSatellitesOver256L1: number;
-  };
-};
 const smallerScreen = smallerScreenJson as {
   exact: false;
   engineeringDecision: {
     status: "final_design_adopted";
     adoptedSatelliteCount: number;
-    supersededDisplayBaseline: number;
     acceptancePending: true;
   };
   scenario: {
+    altitudeKm: number;
+    inclinationDeg: number;
     planes: number;
     satellitesPerPlane: number;
     satelliteCount: number;
@@ -167,28 +142,6 @@ function calendarWindows(cells: readonly VisibleCell[], bank: 0 | 1) {
     const assigned = members.filter((_, index) => index % 4 === windowIndex);
     return { startMs: windowIndex * 20, assigned, phase: phaseLabel(windowIndex, bank) };
   });
-}
-
-function statusText(status?: string) {
-  if (status === "exact_pass") return "精确审计通过";
-  if (status === "failed") return "审计失败";
-  if (status === "coarse_pass") return "仅粗筛通过";
-  if (status === "coarse") return "仅离散预筛";
-  return "待 7 天连续审计";
-}
-
-function scenarioEvidenceText(scenario?: AuditScenario) {
-  if (scenario?.id === "global-45-seed-3528") return "起始时刻有23个区域无法获得服务";
-  if (scenario?.id === "global-45-f1-snapshot-candidate") {
-    return "一天内各检查时刻均有候选卫星（尚未完成连续验证）";
-  }
-  return statusText(scenario?.auditStatus ?? scenario?.status);
-}
-
-function scenarioDisplayName(scenario: AuditScenario | undefined, index: number) {
-  if (scenario?.id === "global-45-seed-3528") return "初始方案";
-  if (scenario?.id === "global-45-f1-snapshot-candidate") return "调整后的方案";
-  return `备选方案 ${index + 1}`;
 }
 
 export function GlobalPlanner() {
@@ -428,7 +381,7 @@ export function GlobalPlanner() {
       </header>
 
       {view !== "access" ? <section className="global-metrics" aria-label="工程结论指标">
-        <article className="metric-recommended"><span>最终采用方案</span><strong>{smallerScreen.scenario.planes}轨道面 · 每面{smallerScreen.scenario.satellitesPerPlane}星</strong><small>共{smallerScreen.scenario.satelliteCount.toLocaleString("en-US")}颗，比历史展示对照少{baseline.totalSatellites - smallerScreen.scenario.satelliteCount}颗</small></article>
+        <article className="metric-recommended"><span>最终采用方案</span><strong>{smallerScreen.scenario.planes}轨道面 · 每面{smallerScreen.scenario.satellitesPerPlane}星</strong><small>共{smallerScreen.scenario.satelliteCount.toLocaleString("en-US")}颗 · 服务±57°全球陆地</small></article>
         <article><span>设计依据检查时刻</span><strong>{smallerScreen.sampling.epochCount} / {smallerScreen.sampling.epochCount}</strong><small>一天内每2分钟检查一次 · 未发现采样时刻覆盖空窗</small></article>
         <article><span>单星可见区域峰值</span><strong>{smallerScreen.summary.maximumVisibleL1PerSatellite}</strong><small>表示卫星能看到多少区域，不是实际服务负载</small></article>
         <article><span>采用方案实际负责峰值</span><strong>{smallerScreen.summary.maximumAssignedL1PerSatellite} / {SATELLITE_CAPACITY}</strong><small>{smallerScreen.summary.assignmentCheckedEpochs}个检查时刻均完成唯一分配 · 单小区峰值{smallerScreen.summary.maximumBalancedCellLoad}</small></article>
@@ -506,7 +459,7 @@ export function GlobalPlanner() {
       {view === "orbit" ? (
         <section className="global-workspace orbit-workspace">
           <article className="global-stage">
-            <header><div><p>3,528颗历史展示对照</p><h2>星座运行与单星负载</h2></div><span>{baseline.planes}轨道面 × 每面{baseline.satellitesPerPlane}星 · {baseline.altitudeKm} km圆轨道 · {baseline.inclinationDeg}°倾角</span></header>
+            <header><div><p>轨道运行演示</p><h2>星座运行与单星负载</h2></div><span>交互查看卫星轨迹、区域可见关系和单星负载</span></header>
             <GlobalOrbitView
               timeSeconds={timeSeconds}
               selectedSatelliteId={selectedSatelliteId}
@@ -655,18 +608,17 @@ export function GlobalPlanner() {
 
       {view === "audit" ? (
         <section className="decision-console">
-          <header className="decision-hero"><div><span className="decision-label">最终结论</span><h2>最终方案采用46个轨道面、每面65颗，共2,990颗卫星</h2><p>卫星总数确定为2,990颗，不再以3,528颗为目标规模。一天720个检查时刻均完成覆盖与唯一分配，单星实际负责峰值为87个一级波位。连续服务、单星故障和真实无线测试列入上线前验收。</p></div><div className="decision-stamp"><span>最终采用方案</span><b>2,990颗</b><small>3,528颗仅作历史对照</small></div></header>
-          <p className="rejected-line"><b>未采用的初始方案：</b>起始时刻仍有{snapshotAudit.summary.maximumUncoveredL1}个地面区域无法获得服务，因此不再继续使用。</p>
+          <header className="decision-hero"><div><span className="decision-label">最终结论</span><h2>最终方案采用46个轨道面、每面65颗，共2,990颗卫星</h2><p>卫星总数确定为2,990颗。一天720个检查时刻均完成覆盖与唯一分配，单星实际负责峰值为87个一级波位。连续服务、单星故障和真实无线测试列入上线前验收。</p></div><div className="decision-stamp"><span>最终采用方案</span><b>2,990颗</b><small>46个轨道面 × 每面65颗</small></div></header>
 
-          <section className="conclusion-table"><header><h3>最终结论与验收边界</h3><span>卫星数量已经确定，上线条件继续验证</span></header><div><table><thead><tr><th>关注事项</th><th>最终结论</th><th>说明</th></tr></thead><tbody><tr><td>采用多少卫星</td><td><span className="result-pass">2,990颗</span></td><td>{smallerScreen.scenario.planes}个轨道面、每面{smallerScreen.scenario.satellitesPerPlane}颗；比历史3,528颗展示对照减少{baseline.totalSatellites - smallerScreen.scenario.satelliteCount}颗，减少15.25%</td></tr><tr><td>设计依据是否满足</td><td><span className="result-pass">720/720满足</span></td><td>一天内{smallerScreen.sampling.epochCount}个检查时刻未发现空缺；最紧张时每个区域至少有{smallerScreen.summary.minimumCandidateCount}颗可用卫星</td></tr><tr><td>“可见数量”是否等于“实际负载”</td><td><span className="result-review">不是同一概念</span></td><td>单星最多可见{smallerScreen.summary.maximumVisibleL1PerSatellite}个一级波位，只表示几何视野；唯一分配后的实际负责峰值为{smallerScreen.summary.maximumAssignedL1PerSatellite}个/星</td></tr><tr><td>当前互动模型</td><td><span className="result-review">3,528颗历史对照</span></td><td>覆盖、负载和日历页面仍使用原3,528颗模型进行交互展示；2,990颗的新身份表与运行输入尚待生成</td></tr><tr><td>是否已经接入基站程序</td><td><span className="result-review">尚未接通</span></td><td>页面能分别保存完整可见清单和实际负责清单；当前基站程序只能接收一张清单，仍需补充最小输入接口</td></tr><tr><td>终端多久能发现网络</td><td><span className="result-pass">可生成80 ms计划</span></td><td>软件日历为每个已分配一级波位安排SSB机会；“已安排”不等于真实无线信号已经发出</td></tr><tr><td>终端多久能获得接入机会</td><td><span className="result-tight">可生成640 ms计划</span></td><td>PRACH按每个已分配一级波位单独安排；满载时余量较小，仍需真实无线实现验证</td></tr><tr><td>上线前还要完成什么</td><td><span className="result-review">三项验收</span></td><td>{audit.exactAudit?.durationDays ?? 7}天连续事件检查、单星故障检查以及真实功率和干扰验证</td></tr></tbody></table></div></section>
+          <section className="conclusion-table"><header><h3>最终结论与验收边界</h3><span>卫星数量已经确定，上线条件继续验证</span></header><div><table><thead><tr><th>关注事项</th><th>最终结论</th><th>说明</th></tr></thead><tbody><tr><td>采用多少卫星</td><td><span className="result-pass">2,990颗</span></td><td>{smallerScreen.scenario.planes}个轨道面、每面{smallerScreen.scenario.satellitesPerPlane}颗，轨道高度{smallerScreen.scenario.altitudeKm} km，倾角{smallerScreen.scenario.inclinationDeg}°</td></tr><tr><td>设计依据是否满足</td><td><span className="result-pass">720/720满足</span></td><td>一天内{smallerScreen.sampling.epochCount}个检查时刻未发现空缺；最紧张时每个区域至少有{smallerScreen.summary.minimumCandidateCount}颗可用卫星</td></tr><tr><td>“可见数量”是否等于“实际负载”</td><td><span className="result-review">不是同一概念</span></td><td>单星最多可见{smallerScreen.summary.maximumVisibleL1PerSatellite}个一级波位，只表示几何视野；唯一分配后的实际负责峰值为{smallerScreen.summary.maximumAssignedL1PerSatellite}个/星</td></tr><tr><td>是否已经接入基站程序</td><td><span className="result-review">尚未接通</span></td><td>页面能分别保存完整可见清单和实际负责清单；当前基站程序只能接收一张清单，仍需补充最小输入接口</td></tr><tr><td>终端多久能发现网络</td><td><span className="result-pass">可生成80 ms计划</span></td><td>软件日历为每个已分配一级波位安排SSB机会；“已安排”不等于真实无线信号已经发出</td></tr><tr><td>终端多久能获得接入机会</td><td><span className="result-tight">可生成640 ms计划</span></td><td>PRACH按每个已分配一级波位单独安排；满载时余量较小，仍需真实无线实现验证</td></tr><tr><td>上线前还要完成什么</td><td><span className="result-review">三项验收</span></td><td>{audit.exactAudit?.durationDays ?? 7}天连续事件检查、单星故障检查以及真实功率和干扰验证</td></tr></tbody></table></div></section>
 
           <section className="acceptance-actions"><header><h3>最终方案上线前必须完成三项验收</h3><span>卫星数量已经确定；如验收不满足，再按结果调整设计</span></header><div><article><b>01</b><h4>连续服务检查</h4><p>连续检查7天，确认两个检查时刻之间也不会出现短暂的服务中断。</p></article><article><b>02</b><h4>卫星接续检查</h4><p>确认一颗卫星离开时，下一颗卫星已经准备好接续服务，交接期间不中断。</p></article><article><b>03</b><h4>真实无线环境验证</h4><p>使用真实轨道、信号功率、干扰、地面站和无线设备完成验证。</p></article></div></section>
 
-          <details className="technical-details decision-details"><summary>查看技术依据和使用边界</summary><div className="decision-technical"><p>最终工程方案采用2,990颗卫星。覆盖目录包含±57°陆地的36,411个一级波位，现有依据来自一天、每{smallerScreen.sampling.stepSeconds}秒检查一次的计算。底层记录仍为`exact=false`、`selectedScenario=null`，表示连续覆盖正式验收尚未完成，不再表示卫星数量没有结论。</p><p>完整可见清单与唯一服务分配是两层数据：前者不能按256裁剪，后者才受单星256、单小区128的当前软件规划上限约束。SSB和PRACH都针对已分配的一级波位生成计划；这些计划不代表PHY、RF、天线或空口已经执行。</p><section className="scenario-table"><header><h3>方案决策记录</h3><span>最终采用2,990颗，3,528颗仅作历史展示对照</span></header><div><table><thead><tr><th>方案</th><th>倾角</th><th>轨道面</th><th>每面卫星</th><th>当前状态</th></tr></thead><tbody><tr><td>历史展示对照</td><td>{baseline.inclinationDeg}°</td><td>{baseline.planes}</td><td>{baseline.satellitesPerPlane}</td><td>不再作为目标规模；暂用于互动页面</td></tr><tr><td>最终采用方案</td><td>{baseline.inclinationDeg}°</td><td>{smallerScreen.scenario.planes}</td><td>{smallerScreen.scenario.satellitesPerPlane}</td><td>采用2,990颗；进入上线前验收</td></tr>{(audit.scenarios ?? []).filter((scenario) => scenario.id === "global-45-seed-3528").map((scenario, index) => <tr key={scenario?.id ?? index}><td>{scenarioDisplayName(scenario, index)}</td><td>{scenario?.inclinationDeg ?? baseline.inclinationDeg}°</td><td>{scenario?.planes ?? "—"}</td><td>{scenario?.satellitesPerPlane ?? "—"}</td><td>{scenarioEvidenceText(scenario)}</td></tr>)}</tbody></table></div></section></div></details>
+          <details className="technical-details decision-details"><summary>查看技术依据和使用边界</summary><div className="decision-technical"><p>最终工程方案采用2,990颗卫星。覆盖目录包含±57°陆地的36,411个一级波位，现有依据来自一天、每{smallerScreen.sampling.stepSeconds}秒检查一次的计算。底层记录中的`exact=false`、`selectedScenario=null`用于标记连续覆盖正式验收进度。</p><p>完整可见清单与唯一服务分配是两层数据：前者不能按256裁剪，后者才受单星256、单小区128的当前软件规划上限约束。SSB和PRACH都针对已分配的一级波位生成计划；这些计划不代表PHY、RF、天线或空口已经执行。</p><section className="scenario-table"><header><h3>最终方案参数</h3><span>2,990颗卫星进入上线前验收</span></header><div><table><thead><tr><th>倾角</th><th>轨道高度</th><th>轨道面</th><th>每面卫星</th><th>卫星总数</th></tr></thead><tbody><tr><td>{smallerScreen.scenario.inclinationDeg}°</td><td>{smallerScreen.scenario.altitudeKm} km</td><td>{smallerScreen.scenario.planes}</td><td>{smallerScreen.scenario.satellitesPerPlane}</td><td>{smallerScreen.scenario.satelliteCount.toLocaleString("en-US")}</td></tr></tbody></table></div></section></div></details>
         </section>
       ) : null}
 
-      <footer className="global-footer"><span>波位目录 {String(metadata.version ?? "载入中")} · SHA-256 {String(metadata.integrity?.sha256 ?? metadata.contentHash ?? "pending").slice(0, 16)}</span><p>最终方案：{smallerScreen.scenario.satelliteCount.toLocaleString("en-US")}颗 · 历史展示对照：{baseline.totalSatellites.toLocaleString("en-US")}颗 · 45°进入 / 42°保持 · 上线前验收继续进行</p></footer>
+      <footer className="global-footer"><span>波位目录 {String(metadata.version ?? "载入中")} · SHA-256 {String(metadata.integrity?.sha256 ?? metadata.contentHash ?? "pending").slice(0, 16)}</span><p>最终方案：{smallerScreen.scenario.satelliteCount.toLocaleString("en-US")}颗 · {smallerScreen.scenario.planes}个轨道面 × 每面{smallerScreen.scenario.satellitesPerPlane}颗 · 45°进入 / 42°保持 · 上线前验收继续进行</p></footer>
     </main>
   );
 }

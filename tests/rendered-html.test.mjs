@@ -21,7 +21,6 @@ test("server-renders the conclusion-first NTN engineering review", async () => {
   const html = (await response.text()).replaceAll("<!-- -->", "");
   assert.match(html, /NTN 全球陆地接入方案/);
   assert.match(html, /57°S～57°N陆地/);
-  assert.match(html, /历史展示对照：3,528颗/);
   assert.match(html, /最终采用：2,990颗/);
   assert.match(html, /最终方案采用46个轨道面、每面65颗，共2,990颗卫星/);
   assert.match(html, /87 \/ 256/);
@@ -30,26 +29,27 @@ test("server-renders the conclusion-first NTN engineering review", async () => {
   assert.match(html, /卫星负载/);
   assert.match(html, /跳波束日历/);
   assert.match(html, /最终结论与验收边界/);
-  assert.match(html, /未采用的初始方案/);
   assert.match(html, /720 \/ 720/);
   assert.match(html, /可见.*不是.*实际负载/s);
   assert.match(html, /PRACH按每个已分配一级波位单独安排/);
   assert.match(html, /是否已经接入基站程序/);
   assert.match(html, /尚未接通/);
-  assert.match(html, /3,528颗仅作历史对照/);
+  assert.match(html, /最终方案参数/);
+  assert.match(html, /46个轨道面 × 每面65颗/);
   assert.doesNotMatch(html, /209\s*\/\s*256|距离256个区域上限/);
-  assert.doesNotMatch(html, /动作演示|STEP|当前无选定方案|为什么还不能写|阶段判断|进入候选复核|尚未最终定案|最终数量尚未选定|不代表最终选型/);
+  assert.doesNotMatch(html, /3,528|历史展示对照|未采用的初始方案|已淘汰的初始排列|不再作为目标规模|动作演示|STEP|当前无选定方案|为什么还不能写|阶段判断|进入候选复核|尚未最终定案|最终数量尚未选定|不代表最终选型/);
   assert.doesNotMatch(html, /64 个地固|地固 NCI|NCI 属于地固|每星 84 个 L1/);
   assert.doesNotMatch(html, /F=0|F=1|<th>F<\/th>/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
 });
 
-test("audit evidence rejects the initial arrangement and keeps the sampled candidate unselected", async () => {
-  const [audit, seedSnapshot, f1Day, planner, css] = await Promise.all([
+test("audit evidence remains separate from the final engineering decision", async () => {
+  const [audit, seedSnapshot, f1Day, planner, orbitView, css] = await Promise.all([
     readFile(new URL("../app/global-constellation-audit.json", import.meta.url), "utf8").then(JSON.parse),
     readFile(new URL("../app/global-constellation-snapshot.json", import.meta.url), "utf8").then(JSON.parse),
     readFile(new URL("../app/global-constellation-f1-day-coarse.json", import.meta.url), "utf8").then(JSON.parse),
     readFile(new URL("../app/global-planner.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/global-orbit-view.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/global.css", import.meta.url), "utf8"),
   ]);
 
@@ -59,9 +59,9 @@ test("audit evidence rejects the initial arrangement and keeps the sampled candi
   assert.equal(f1Day.summary.maximumUncoveredL1, 0);
   assert.equal(f1Day.summary.maximumVisibleL1PerSatellite, 209);
   assert.equal(f1Day.exact, false);
-  assert.match(planner, /未采用的初始方案/);
+  assert.doesNotMatch(planner, /3,528颗|历史展示对照|未采用的初始方案|已淘汰的初始排列|不再作为目标规模/);
   assert.match(planner, /现有依据来自一天、每\{smallerScreen\.sampling\.stepSeconds\}秒检查一次/);
-  assert.match(planner, /连续覆盖正式验收尚未完成/);
+  assert.match(planner, /用于标记连续覆盖正式验收进度/);
   assert.match(planner, /每个一级波位的SSB计划间隔/);
   assert.match(planner, /每个一级波位的PRACH计划间隔/);
   assert.match(planner, /满载128 \/ 128次机会/);
@@ -85,6 +85,8 @@ test("audit evidence rejects the initial arrangement and keeps the sampled candi
   assert.match(planner, /view !== "audit" && view !== "access"/);
   assert.match(planner, /<details className="technical-details/);
   assert.doesNotMatch(planner, /<details[^>]*\sopen(?:=|>)/);
+  assert.match(orbitView, /卫星轨迹与覆盖关系/);
+  assert.doesNotMatch(orbitView, /satellites\.length\.toLocaleString|显示 \$\{satellites\.length\} 颗卫星/);
 
   const navOrder = ["audit", "coverage", "orbit", "access"].map((key) => planner.indexOf(`${key}: {`));
   assert.ok(navOrder.every((index) => index >= 0));

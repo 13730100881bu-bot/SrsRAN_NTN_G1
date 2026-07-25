@@ -207,7 +207,6 @@
 .decision-stamp span { color: #8faab1; font-size: 10px; }
 .decision-stamp b { margin-top: 5px; color: #8de0bd; font-size: 22px; }
 .decision-stamp small { margin-top: 5px; color: #e7c48d; font-size: 11px; }
-.rejected-line { margin: 0; padding: 10px 24px; color: #81412f; background: #f8e7dd; border-bottom: 1px solid #e9c5b6; font-size: 12px; }
 .acceptance-actions { margin: 16px; border: 1px solid var(--line); }
 .acceptance-actions > div { display: grid; grid-template-columns: repeat(3, 1fr); }
 .acceptance-actions article { min-width: 0; padding: 14px; border-right: 1px solid var(--line); }

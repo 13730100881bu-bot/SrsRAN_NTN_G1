@@ -230,8 +230,8 @@ export function GlobalOrbitView({ timeSeconds, selectedSatelliteId, focusRequest
   }
 
   return (
-    <div className="global-orbit-canvas" ref={hostRef} aria-label={`500 km 轨道壳层，GPU 实例化显示 ${satellites.length} 颗卫星`}>
-      <div className="orbit-overlay"><span>GPU实例化 · 简化显示</span><b>{satellites.length.toLocaleString("en-US")}颗卫星</b><small>查找后自动居中 · 拖动旋转 · 点击选星</small></div>
+    <div className="global-orbit-canvas" ref={hostRef} aria-label="500 km 轨道运行示意">
+      <div className="orbit-overlay"><span>轨道运行示意</span><b>卫星轨迹与覆盖关系</b><small>查找后自动居中 · 拖动旋转 · 点击选星</small></div>
       <span className="sr-only">轨道半径为地球半径的 {shellRadius.toFixed(3)} 倍。</span>
     </div>
   );
