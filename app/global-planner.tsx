@@ -7,6 +7,7 @@ import snapshotAuditJson from "./global-constellation-snapshot.json";
 import f1DayAuditJson from "./global-constellation-f1-day-coarse.json";
 import { GlobalCoverageMap, type GlobalMapCell } from "./global-map";
 import { GlobalOrbitView } from "./global-orbit-view";
+import { parseGlobalSearchTarget } from "./global-search";
 import { BASELINE_L1_CAPACITY } from "./beam-hopping-model";
 import { publicPath } from "./public-path";
 import { baselineSatelliteCellPlanningContext } from "./satellite-cell-model";
@@ -176,6 +177,8 @@ export function GlobalPlanner() {
   const [selectedSatelliteId, setSelectedSatelliteId] = useState("P02-S04");
   const [selectedCellId, setSelectedCellId] = useState("G021777");
   const [search, setSearch] = useState("");
+  const [searchFeedback, setSearchFeedback] = useState<{ tone: "success" | "error" | "info"; message: string } | null>(null);
+  const [orbitFocusRequestId, setOrbitFocusRequestId] = useState(0);
   const [catalog, setCatalog] = useState<readonly GlobalMapCell[]>([]);
   const [metadata, setMetadata] = useState<CatalogMetadata>({});
   const [catalogError, setCatalogError] = useState("");
@@ -324,15 +327,39 @@ export function GlobalPlanner() {
     if (best) setSelectedSatelliteId(best.id);
   };
   const runSearch = () => {
-    const value = search.trim().toUpperCase();
-    const satellite = satellites.find(({ id }) => id === value);
-    if (satellite) {
-      setSelectedSatelliteId(satellite.id);
-      if (view !== "access") setView("orbit");
+    const target = parseGlobalSearchTarget(search);
+    if (!target) {
+      setSearchFeedback({ tone: "error", message: "请输入卫星编号（如 P35-S34）或地面区域编号（如 G021777）。" });
       return;
     }
-    const cell = catalog.find(({ id }) => id === value);
-    if (cell) { setSelectedCellId(cell.id); setView("coverage"); }
+
+    if (target.kind === "satellite") {
+      const satellite = satellites.find(({ id }) => id === target.id);
+      if (!satellite) {
+        setSearchFeedback({ tone: "error", message: `未找到卫星 ${target.id}，请检查编号。` });
+        return;
+      }
+      setSearch(satellite.id);
+      setSelectedSatelliteId(satellite.id);
+      setView("orbit");
+      setOrbitFocusRequestId((value) => value + 1);
+      setSearchFeedback({ tone: "success", message: `已找到 ${satellite.id}，并将它移到视图中央。` });
+      return;
+    }
+
+    if (catalog.length === 0) {
+      setSearchFeedback({ tone: "info", message: "地面区域目录正在载入，请稍后再试。" });
+      return;
+    }
+    const cell = catalog.find(({ id }) => id === target.id);
+    if (!cell) {
+      setSearchFeedback({ tone: "error", message: `未找到地面区域 ${target.id}，请检查编号。` });
+      return;
+    }
+    setSearch(cell.id);
+    setSelectedCellId(cell.id);
+    setView("coverage");
+    setSearchFeedback({ tone: "success", message: `已找到 ${cell.id}，右侧显示该区域的详细信息。` });
   };
   const windowsA = calendarWindows(analysis.cells, 0);
   const windowsB = calendarWindows(analysis.cells, 1);
@@ -375,7 +402,25 @@ export function GlobalPlanner() {
         <button type="button" className="play-button" onClick={() => { if (playing) setCoverageEpoch(timeSeconds); setPlaying((value) => !value); }}>{playing ? "暂停时间" : "播放时间"}</button>
         <label className="time-range"><span>动画时刻 {formatClock(timeSeconds)}</span><input type="range" min="0" max="86399" step="1" value={Math.floor(timeSeconds)} onChange={(event) => { const value = Number(event.target.value); setTimeSeconds(value); setCoverageEpoch(value); }} /></label>
         <div className="speed-control" aria-label="播放速度">{TIME_SPEEDS.map((value) => <button type="button" key={value} className={speed === value ? "active" : ""} onClick={() => setSpeed(value)}>{value}×</button>)}</div>
-        <form onSubmit={(event) => { event.preventDefault(); runSearch(); }}><label htmlFor="global-search">定位卫星或 L1</label><div><input id="global-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="P01-S01 / G000001" /><button type="submit">定位</button></div></form>
+        <form className="location-search" onSubmit={(event) => { event.preventDefault(); runSearch(); }}>
+          <label htmlFor="global-search">查找卫星或地面区域</label>
+          <div>
+            <input
+              id="global-search"
+              value={search}
+              onChange={(event) => { setSearch(event.target.value); setSearchFeedback(null); }}
+              placeholder="例如 P35-S34 或 G021777"
+              autoComplete="off"
+              spellCheck={false}
+              aria-describedby="global-search-feedback"
+              aria-invalid={searchFeedback?.tone === "error" ? "true" : undefined}
+            />
+            <button type="submit" disabled={!search.trim()}>查找</button>
+          </div>
+          <p id="global-search-feedback" className={`location-search-feedback ${searchFeedback?.tone ?? ""}`} aria-live="polite">
+            {searchFeedback?.message ?? "可省略前导零，也可以按 Enter 查找。"}
+          </p>
+        </form>
       </section> : null}
 
       {view !== "audit" && view !== "access" ? <section className="runtime-context" aria-label="当前运行快照">
@@ -424,7 +469,12 @@ export function GlobalPlanner() {
         <section className="global-workspace orbit-workspace">
           <article className="global-stage">
             <header><div><p>当前工程候选</p><h2>星座运行与单星负载</h2></div><span>{baseline.planes}轨道面 × 每面{baseline.satellitesPerPlane}星 · {baseline.altitudeKm} km圆轨道 · {baseline.inclinationDeg}°倾角</span></header>
-            <GlobalOrbitView timeSeconds={timeSeconds} selectedSatelliteId={selectedSatelliteId} onSelectSatellite={chooseSatellite} />
+            <GlobalOrbitView
+              timeSeconds={timeSeconds}
+              selectedSatelliteId={selectedSatelliteId}
+              focusRequestId={orbitFocusRequestId}
+              onSelectSatellite={chooseSatellite}
+            />
           </article>
           <aside className="global-inspector">
             <header><p>已选卫星</p><h2>{selectedSatellite.id}</h2><span className={`position-status ${analysis.scheduleOverflow ? "is-failure" : "is-pass"}`}>{analysis.scheduleOverflow ? "容量超限" : "容量满足"}</span></header>

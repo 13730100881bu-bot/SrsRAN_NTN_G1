@@ -13,13 +13,15 @@ import {
 type GlobalOrbitViewProps = {
   timeSeconds: number;
   selectedSatelliteId: string;
+  focusRequestId: number;
   onSelectSatellite: (id: string) => void;
 };
 
 const shellRadius = ORBIT_RADIUS_KM / EARTH_RADIUS_KM;
 
-export function GlobalOrbitView({ timeSeconds, selectedSatelliteId, onSelectSatellite }: GlobalOrbitViewProps) {
+export function GlobalOrbitView({ timeSeconds, selectedSatelliteId, focusRequestId, onSelectSatellite }: GlobalOrbitViewProps) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const lastFocusRequestRef = useRef(-1);
   const stateRef = useRef<{
     renderer: THREE.WebGLRenderer;
     camera: THREE.PerspectiveCamera;
@@ -49,6 +51,7 @@ export function GlobalOrbitView({ timeSeconds, selectedSatelliteId, onSelectSate
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
     camera.position.set(0, 0.2, 4.2);
+    camera.lookAt(0, 0, 0);
     const world = new THREE.Group();
     scene.add(world);
 
@@ -196,6 +199,12 @@ export function GlobalOrbitView({ timeSeconds, selectedSatelliteId, onSelectSate
       propagated.ecefKm[2] / EARTH_RADIUS_KM,
       -propagated.ecefKm[1] / EARTH_RADIUS_KM,
     );
+    if (lastFocusRequestRef.current !== focusRequestId) {
+      const selectedDirection = state.selected.position.clone().normalize();
+      const cameraDirection = state.camera.position.clone().normalize();
+      state.world.quaternion.setFromUnitVectors(selectedDirection, cameraDirection);
+      lastFocusRequestRef.current = focusRequestId;
+    }
 
     const points: THREE.Vector3[] = [];
     for (let index = 0; index <= 144; index += 1) {
@@ -209,7 +218,7 @@ export function GlobalOrbitView({ timeSeconds, selectedSatelliteId, onSelectSate
     }
     state.orbitLine.geometry.dispose();
     state.orbitLine.geometry = new THREE.BufferGeometry().setFromPoints(points);
-  }, [selectedSatelliteId, timeSeconds]);
+  }, [focusRequestId, selectedSatelliteId, timeSeconds]);
 
   if (!webglAvailable) {
     return (
@@ -222,7 +231,7 @@ export function GlobalOrbitView({ timeSeconds, selectedSatelliteId, onSelectSate
 
   return (
     <div className="global-orbit-canvas" ref={hostRef} aria-label={`500 km 轨道壳层，GPU 实例化显示 ${satellites.length} 颗卫星`}>
-      <div className="orbit-overlay"><span>GPU实例化 · 简化显示</span><b>{satellites.length.toLocaleString("en-US")}颗卫星</b><small>拖动旋转 · 点击选星 · 仅突出所选轨道面</small></div>
+      <div className="orbit-overlay"><span>GPU实例化 · 简化显示</span><b>{satellites.length.toLocaleString("en-US")}颗卫星</b><small>查找后自动居中 · 拖动旋转 · 点击选星</small></div>
       <span className="sr-only">轨道半径为地球半径的 {shellRadius.toFixed(3)} 倍。</span>
     </div>
   );

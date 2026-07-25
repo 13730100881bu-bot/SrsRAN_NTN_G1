@@ -68,7 +68,10 @@ test("audit evidence rejects the initial arrangement and keeps the sampled candi
   assert.match(planner, /多久安排一次接入机会/);
   assert.match(planner, /查看80 ms轮转明细/);
   assert.match(planner, /查看完整可见波位表/);
-  assert.match(planner, /if \(view !== "access"\) setView\("orbit"\)/);
+  assert.match(planner, /setOrbitFocusRequestId\(\(value\) => value \+ 1\)/);
+  assert.match(planner, /focusRequestId=\{orbitFocusRequestId\}/);
+  assert.match(planner, /aria-live="polite"/);
+  assert.match(planner, /可省略前导零，也可以按 Enter 查找/);
   assert.match(planner, /view !== "access" \? <section className="global-metrics"/);
   assert.match(planner, /view !== "audit" && view !== "access"/);
   assert.match(planner, /<details className="technical-details/);
@@ -81,6 +84,8 @@ test("audit evidence rejects the initial arrangement and keeps the sampled candi
 
   assert.match(css, /@media \(max-width: 760px\)/);
   assert.match(css, /\.global-header nav \{[^}]*overflow-x:\s*auto/);
+  assert.match(css, /\.global-toolbar form > div \{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+72px/);
+  assert.match(css, /\.global-toolbar form button \{[^}]*min-width:\s*72px[^}]*white-space:\s*nowrap/);
   assert.match(css, /\.global-workspace \{[^}]*grid-template-columns:\s*1fr/);
   assert.match(css, /\.calendar-grid \{[^}]*grid-template-columns:\s*repeat\(2,\s*1fr\)/);
   assert.match(css, /\.access-answer-grid \{[^}]*grid-template-columns:\s*repeat\(2,\s*1fr\)/);
