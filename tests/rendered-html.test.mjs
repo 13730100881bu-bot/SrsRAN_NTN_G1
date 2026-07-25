@@ -86,7 +86,13 @@ test("audit evidence remains separate from the final engineering decision", asyn
   assert.match(planner, /<details className="technical-details/);
   assert.doesNotMatch(planner, /<details[^>]*\sopen(?:=|>)/);
   assert.match(orbitView, /卫星轨迹与覆盖关系/);
+  assert.match(orbitView, /真实陆地轮廓/);
+  assert.match(orbitView, /createEarthTexture/);
+  assert.match(orbitView, /geoGraticule10/);
+  assert.match(orbitView, /陆地边界已加载/);
+  assert.doesNotMatch(orbitView, /WireframeGeometry/);
   assert.doesNotMatch(orbitView, /satellites\.length\.toLocaleString|显示 \$\{satellites\.length\} 颗卫星/);
+  assert.match(planner, /landUrl=\{LAND_TOPOLOGY_URL\}/);
 
   const navOrder = ["audit", "coverage", "orbit", "access"].map((key) => planner.indexOf(`${key}: {`));
   assert.ok(navOrder.every((index) => index >= 0));

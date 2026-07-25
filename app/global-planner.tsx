@@ -464,6 +464,7 @@ export function GlobalPlanner() {
               timeSeconds={timeSeconds}
               selectedSatelliteId={selectedSatelliteId}
               focusRequestId={orbitFocusRequestId}
+              landUrl={LAND_TOPOLOGY_URL}
               onSelectSatellite={chooseSatellite}
             />
           </article>

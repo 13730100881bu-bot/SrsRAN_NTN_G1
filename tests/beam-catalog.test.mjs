@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import test from "node:test";
-import { feature } from "topojson-client";
 import { geoContains } from "d3-geo";
 import {
   axisForL1Cell,
@@ -15,6 +14,7 @@ import {
   loadGlobalL1Catalog,
   NATIONAL_L1_TARGET,
 } from "../app/beam-catalog.ts";
+import { landFeatureFromTopology } from "../app/land-topology.ts";
 
 const require = createRequire(import.meta.url);
 const globalCatalogPath = new URL("../public/data/global-land-l1-v1.json", import.meta.url);
@@ -116,7 +116,12 @@ test("global L1 and derived L2 IDs are stable, ordered and consistent with child
 
 test("sampled global L1 centers are actually inside the packaged 1:50m land geometry", () => {
   const topology = JSON.parse(readFileSync(require.resolve("world-atlas/land-50m.json"), "utf8"));
-  const land = feature(topology, topology.objects.land);
+  const land = landFeatureFromTopology(topology);
+  assert.equal(land.type, "FeatureCollection");
+  assert.throws(
+    () => landFeatureFromTopology({ type: "Topology", objects: {} }),
+    /does not contain an object/,
+  );
   const sampleStride = Math.max(1, Math.floor(globalCatalog.cells.length / 64));
   const sampled = globalCatalog.cells.filter((_, index) => index % sampleStride === 0).slice(0, 64);
   assert.equal(sampled.length, 64);

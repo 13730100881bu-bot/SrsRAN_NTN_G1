@@ -38,6 +38,7 @@ Web 已使用本地 `world-atlas@2.0.2` 打包的 Natural Earth 4.1.0、`1:50m` 
 - 生成器：[`scripts/generate-global-land-catalog.mjs`](scripts/generate-global-land-catalog.mjs)
 - 紧凑目录：[`public/data/global-land-l1-v1.json`](public/data/global-land-l1-v1.json)
 - 本地陆地源：[`public/data/land-50m.json`](public/data/land-50m.json)
+- 三维地球：卫星负载页面复用同一份 Natural Earth 数据绘制陆地、海洋和经纬网，不依赖外部地图服务。
 - loader/type：[`app/beam-catalog.ts`](app/beam-catalog.ts)
 - focused tests：[`tests/beam-catalog.test.mjs`](tests/beam-catalog.test.mjs)
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { geoCircle, geoEquirectangular, geoPath, type GeoPermissibleObjects } from "d3-geo";
-import { feature } from "topojson-client";
+import { landFeatureFromTopology, type LandTopology } from "./land-topology";
 
 export type GlobalMapCell = {
   id: string;
@@ -25,17 +25,6 @@ type GlobalCoverageMapProps = {
   onSelectCell: (id: string) => void;
 };
 
-type TopologyLike = {
-  type: "Topology";
-  objects: Record<string, unknown>;
-};
-
-function topologyFeature(payload: TopologyLike) {
-  const object = payload.objects.land ?? Object.values(payload.objects)[0];
-  if (!object) throw new Error("land TopoJSON does not contain an object");
-  return feature(payload as never, object as never) as unknown as GeoPermissibleObjects;
-}
-
 export function GlobalCoverageMap({
   cells,
   visibleCells,
@@ -57,9 +46,9 @@ export function GlobalCoverageMap({
     fetch(landUrl)
       .then((response) => {
         if (!response.ok) throw new Error(`land request failed with ${response.status}`);
-        return response.json() as Promise<TopologyLike>;
+        return response.json() as Promise<LandTopology>;
       })
-      .then((payload) => { if (!cancelled) setLand(topologyFeature(payload)); })
+      .then((payload) => { if (!cancelled) setLand(landFeatureFromTopology(payload)); })
       .catch((error) => { if (!cancelled) setLandError(error instanceof Error ? error.message : String(error)); });
     return () => { cancelled = true; };
   }, [landUrl]);

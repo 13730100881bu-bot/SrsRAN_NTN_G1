@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { geoEquirectangular, geoGraticule10, geoPath, type GeoPermissibleObjects } from "d3-geo";
 import * as THREE from "three";
+import { landFeatureFromTopology, type LandTopology } from "./land-topology";
 import {
   EARTH_RADIUS_KM,
   ORBIT_RADIUS_KM,
@@ -14,12 +16,72 @@ type GlobalOrbitViewProps = {
   timeSeconds: number;
   selectedSatelliteId: string;
   focusRequestId: number;
+  landUrl: string;
   onSelectSatellite: (id: string) => void;
 };
 
 const shellRadius = ORBIT_RADIUS_KM / EARTH_RADIUS_KM;
 
-export function GlobalOrbitView({ timeSeconds, selectedSatelliteId, focusRequestId, onSelectSatellite }: GlobalOrbitViewProps) {
+function createEarthTexture(land: GeoPermissibleObjects) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 2048;
+  canvas.height = 1024;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("2D canvas is unavailable");
+
+  const projection = geoEquirectangular()
+    .translate([canvas.width / 2, canvas.height / 2])
+    .scale(canvas.width / (2 * Math.PI))
+    .precision(0.15);
+  const path = geoPath(projection, context);
+
+  const ocean = context.createLinearGradient(0, 0, 0, canvas.height);
+  ocean.addColorStop(0, "#071f2d");
+  ocean.addColorStop(0.28, "#0c3446");
+  ocean.addColorStop(0.5, "#12465a");
+  ocean.addColorStop(0.72, "#0c3446");
+  ocean.addColorStop(1, "#071f2d");
+  context.fillStyle = ocean;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  context.beginPath();
+  path(geoGraticule10());
+  context.strokeStyle = "rgba(174, 214, 220, 0.13)";
+  context.lineWidth = 1;
+  context.stroke();
+
+  context.save();
+  context.beginPath();
+  path(land);
+  context.clip();
+  const terrain = context.createLinearGradient(0, 0, 0, canvas.height);
+  terrain.addColorStop(0, "#aeb9a2");
+  terrain.addColorStop(0.2, "#809577");
+  terrain.addColorStop(0.5, "#54745c");
+  terrain.addColorStop(0.8, "#809577");
+  terrain.addColorStop(1, "#aeb9a2");
+  context.fillStyle = terrain;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.restore();
+
+  context.beginPath();
+  path(land);
+  context.strokeStyle = "rgba(226, 235, 209, 0.82)";
+  context.lineWidth = 1.4;
+  context.stroke();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+export function GlobalOrbitView({
+  timeSeconds,
+  selectedSatelliteId,
+  focusRequestId,
+  landUrl,
+  onSelectSatellite,
+}: GlobalOrbitViewProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const lastFocusRequestRef = useRef(-1);
   const stateRef = useRef<{
@@ -33,6 +95,7 @@ export function GlobalOrbitView({ timeSeconds, selectedSatelliteId, focusRequest
     frame: number;
   } | null>(null);
   const [webglAvailable, setWebglAvailable] = useState(true);
+  const [earthSurfaceStatus, setEarthSurfaceStatus] = useState<"loading" | "ready" | "error">("loading");
 
   useEffect(() => {
     const host = hostRef.current;
@@ -55,16 +118,38 @@ export function GlobalOrbitView({ timeSeconds, selectedSatelliteId, focusRequest
     const world = new THREE.Group();
     scene.add(world);
 
+    const earthMaterial = new THREE.MeshStandardMaterial({
+      color: 0x173b45,
+      roughness: 0.88,
+      metalness: 0.02,
+    });
     const earth = new THREE.Mesh(
-      new THREE.SphereGeometry(1, 40, 24),
-      new THREE.MeshStandardMaterial({ color: 0x173b45, roughness: 0.85, metalness: 0.05 }),
+      new THREE.SphereGeometry(1, 96, 64),
+      earthMaterial,
     );
     world.add(earth);
-    const grid = new THREE.LineSegments(
-      new THREE.WireframeGeometry(new THREE.SphereGeometry(1.004, 24, 12)),
-      new THREE.LineBasicMaterial({ color: 0x315e68, transparent: true, opacity: 0.45 }),
-    );
-    world.add(grid);
+    let earthTexture: THREE.CanvasTexture | null = null;
+    let cancelled = false;
+    const landRequest = new AbortController();
+    fetch(landUrl, { signal: landRequest.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error(`land request failed with ${response.status}`);
+        return response.json() as Promise<LandTopology>;
+      })
+      .then((payload) => {
+        if (cancelled) return;
+        earthTexture = createEarthTexture(landFeatureFromTopology(payload));
+        earthTexture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+        earthMaterial.map = earthTexture;
+        earthMaterial.color.set(0xffffff);
+        earthMaterial.needsUpdate = true;
+        setEarthSurfaceStatus("ready");
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setEarthSurfaceStatus("error");
+      });
 
     const bandGeometry = new THREE.BufferGeometry();
     const bandPoints: THREE.Vector3[] = [];
@@ -158,6 +243,8 @@ export function GlobalOrbitView({ timeSeconds, selectedSatelliteId, focusRequest
     stateRef.current = { renderer, camera, scene, world, instances, selected, orbitLine, frame: requestAnimationFrame(render) };
 
     return () => {
+      cancelled = true;
+      landRequest.abort();
       observer.disconnect();
       renderer.domElement.removeEventListener("pointerdown", down);
       renderer.domElement.removeEventListener("pointermove", move);
@@ -172,10 +259,11 @@ export function GlobalOrbitView({ timeSeconds, selectedSatelliteId, focusRequest
           else material.dispose();
         }
       });
+      earthTexture?.dispose();
       renderer.dispose();
       renderer.domElement.remove();
     };
-  }, [onSelectSatellite]);
+  }, [landUrl, onSelectSatellite]);
 
   useEffect(() => {
     const state = stateRef.current;
@@ -231,7 +319,7 @@ export function GlobalOrbitView({ timeSeconds, selectedSatelliteId, focusRequest
 
   return (
     <div className="global-orbit-canvas" ref={hostRef} aria-label="500 km 轨道运行示意">
-      <div className="orbit-overlay"><span>轨道运行示意</span><b>卫星轨迹与覆盖关系</b><small>查找后自动居中 · 拖动旋转 · 点击选星</small></div>
+      <div className="orbit-overlay"><span>真实陆地轮廓 · 轨道运行示意</span><b>卫星轨迹与覆盖关系</b><small>{earthSurfaceStatus === "ready" ? "陆地边界已加载" : earthSurfaceStatus === "error" ? "陆地边界加载失败，显示基础地球" : "正在加载陆地边界"} · 拖动旋转 · 点击选星</small></div>
       <span className="sr-only">轨道半径为地球半径的 {shellRadius.toFixed(3)} 倍。</span>
     </div>
   );
