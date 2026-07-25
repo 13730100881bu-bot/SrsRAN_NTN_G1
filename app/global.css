@@ -149,7 +149,7 @@
 .access-guide > div > span { color: #82d4ef; font-size: 10px; font-weight: 700; letter-spacing: .08em; }
 .access-guide h3 { margin: 6px 0 0; font-size: 18px; font-weight: 650; line-height: 1.35; }
 .access-guide p { margin: 8px 0 0; color: #b8cbd0; font-size: 12px; line-height: 1.6; }
-.access-journey { margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; list-style: none; background: #49636b; }
+.access-journey { margin: 0; padding: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 1px; list-style: none; background: #49636b; }
 .access-journey li { min-width: 0; padding: 12px; display: grid; align-content: start; background: #17343e; }
 .access-journey b { width: 22px; height: 22px; display: grid; place-items: center; color: #102a34; background: #82d4ef; border-radius: 50%; font: 700 10px ui-monospace, monospace; }
 .access-journey span { margin-top: 9px; font-size: 12px; font-weight: 650; }
@@ -160,6 +160,7 @@
 .access-answer-grid article.is-pass { border-top-color: var(--green); }
 .access-answer-grid article.is-tight { border-top-color: var(--orange); background: #fffaf2; }
 .access-answer-grid article.is-failure { border-top-color: #c45b42; background: #fff5f0; }
+.access-answer-grid article.is-pending { border-top-color: #7b8b91; background: #f6f8f8; }
 .access-answer-grid span { color: var(--muted); font-size: 10px; font-weight: 700; }
 .access-answer-grid b { margin-top: 7px; font: 650 18px ui-monospace, monospace; }
 .access-answer-grid strong { margin-top: 9px; font-size: 12px; font-weight: 650; }

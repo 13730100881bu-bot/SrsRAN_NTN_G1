@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import baselineJson from "./orbit-baseline.json";
 import constellationAuditJson from "./global-constellation-audit.json";
 import snapshotAuditJson from "./global-constellation-snapshot.json";
-import f1DayAuditJson from "./global-constellation-f1-day-coarse.json";
+import smallerScreenJson from "./global-constellation-smaller-screen.json";
 import { GlobalCoverageMap, type GlobalMapCell } from "./global-map";
 import { GlobalOrbitView } from "./global-orbit-view";
 import { parseGlobalSearchTarget } from "./global-search";
@@ -22,7 +22,7 @@ import {
 type View = "coverage" | "orbit" | "access" | "audit";
 type VisibleCell = GlobalMapCell & {
   distanceKm: number;
-  cellBank: 0 | 1;
+  cellBank?: 0 | 1;
   elevationDeg?: number;
   visibleFromSeconds?: number | null;
   visibleUntilSeconds?: number | null;
@@ -43,8 +43,15 @@ type CatalogMetadata = {
 type WorkerAnalysis = {
   cells: readonly VisibleCell[];
   visibleCount: number;
-  byCell: readonly [number, number];
-  scheduleOverflow: boolean;
+};
+type AssignmentSnapshot = {
+  ready: boolean;
+  unassignedCount: number;
+  peakAssigned: number;
+  peakAssignedSatelliteId: string;
+  selectedAssignedCount: number;
+  selectedAssignedByCell: readonly [number, number];
+  selectedAssignmentBanks: readonly { id: string; cellBank: 0 | 1 }[];
 };
 type AuditScenario = {
   id?: string;
@@ -89,14 +96,25 @@ const snapshotAudit = snapshotAuditJson as {
     maximumSatellitesOver256L1: number;
   };
 };
-const f1DayAudit = f1DayAuditJson as {
+const smallerScreen = smallerScreenJson as {
   exact: false;
+  scenario: {
+    planes: number;
+    satellitesPerPlane: number;
+    satelliteCount: number;
+  };
   sampling: { epochCount: number; stepSeconds: number };
   summary: {
+    coveragePassed: true;
+    assignmentPassed: true;
     maximumUncoveredL1: number;
     minimumCandidateCount: number;
     maximumVisibleL1PerSatellite: number;
-    maximumSatellitesOver256L1: number;
+    maximumEntryVisibleL1PerSatellite: number;
+    maximumAssignedL1PerSatellite: number;
+    maximumBalancedCellLoad: number;
+    scheduleOverflowEpochs: number;
+    assignmentCheckedEpochs: number;
   };
 };
 const GLOBAL_CATALOG_URL = publicPath("/data/global-land-l1-v1.json");
@@ -182,10 +200,19 @@ export function GlobalPlanner() {
   const [catalog, setCatalog] = useState<readonly GlobalMapCell[]>([]);
   const [metadata, setMetadata] = useState<CatalogMetadata>({});
   const [catalogError, setCatalogError] = useState("");
-  const [analysis, setAnalysis] = useState<WorkerAnalysis>({ cells: [], visibleCount: 0, byCell: [0, 0], scheduleOverflow: false });
+  const [analysis, setAnalysis] = useState<WorkerAnalysis>({ cells: [], visibleCount: 0 });
+  const [assignmentSnapshot, setAssignmentSnapshot] = useState<AssignmentSnapshot>({
+    ready: false,
+    unassignedCount: 0,
+    peakAssigned: 0,
+    peakAssignedSatelliteId: "",
+    selectedAssignedCount: 0,
+    selectedAssignedByCell: [0, 0],
+    selectedAssignmentBanks: [],
+  });
   const [candidateCounts, setCandidateCounts] = useState<readonly number[]>([]);
   const [uncoveredCount, setUncoveredCount] = useState(0);
-  const [fleetSnapshot, setFleetSnapshot] = useState({ peakVisible: 0, peakSatelliteId: "", overflowSatellites: 0 });
+  const [fleetSnapshot, setFleetSnapshot] = useState({ peakVisible: 0, peakSatelliteId: "" });
   const [coverageEpoch, setCoverageEpoch] = useState(0);
   const workerRef = useRef<Worker | null>(null);
   const requestRef = useRef(0);
@@ -218,8 +245,6 @@ export function GlobalPlanner() {
         setAnalysis({
           cells: message.cells as readonly VisibleCell[],
           visibleCount: Number(message.visibleCount),
-          byCell: message.byCell as readonly [number, number],
-          scheduleOverflow: Boolean(message.scheduleOverflow),
         });
       } else if (message.type === "globalCoverage" && Number(message.requestId) === globalRequestRef.current) {
         setCandidateCounts(message.counts as readonly number[]);
@@ -227,7 +252,15 @@ export function GlobalPlanner() {
         setFleetSnapshot({
           peakVisible: Number(message.peakVisible),
           peakSatelliteId: String(message.peakSatelliteId),
-          overflowSatellites: Number(message.overflowSatellites),
+        });
+        setAssignmentSnapshot({
+          ready: true,
+          unassignedCount: Number(message.unassignedCount),
+          peakAssigned: Number(message.peakAssigned),
+          peakAssignedSatelliteId: String(message.peakAssignedSatelliteId),
+          selectedAssignedCount: Number(message.selectedAssignedCount),
+          selectedAssignedByCell: message.selectedAssignedByCell as readonly [number, number],
+          selectedAssignmentBanks: message.selectedAssignmentBanks as readonly { id: string; cellBank: 0 | 1 }[],
         });
       } else if (message.type === "error") {
         setCatalogError(String(message.message));
@@ -261,28 +294,29 @@ export function GlobalPlanner() {
       satelliteId: analysisSatellite.id,
       latitudeDeg: analysisSatellite.lat,
       longitudeDeg: analysisSatellite.lon,
-      radiusKm: entryRadiusKm,
-      capacity: SATELLITE_CAPACITY,
+      radiusKm: holdRadiusKm,
       timeline: Array.from({ length: 181 }, (_, index) => {
         const offsetSeconds = (index - 90) * 10;
         const state = propagateSatellite(selectedDefinition, coverageEpoch + offsetSeconds);
         return { offsetSeconds, lat: state.lat, lon: state.lon };
       }),
     });
-  }, [analysisSatellite.id, analysisSatellite.lat, analysisSatellite.lon, catalog.length, coverageEpoch, entryRadiusKm, selectedDefinition]);
+  }, [analysisSatellite.id, analysisSatellite.lat, analysisSatellite.lon, catalog.length, coverageEpoch, holdRadiusKm, selectedDefinition]);
   useEffect(() => {
     if (!workerRef.current || catalog.length === 0) return;
     globalRequestRef.current += 1;
     workerRef.current.postMessage({
       type: "globalCoverage",
       requestId: globalRequestRef.current,
-      radiusKm: entryRadiusKm,
+      entryRadiusKm,
+      releaseRadiusKm: holdRadiusKm,
+      selectedSatelliteId,
       satelliteSubpoints: satellites.map((definition) => {
         const state = propagateSatellite(definition, coverageEpoch);
         return { id: state.id, lat: state.lat, lon: state.lon };
       }),
     });
-  }, [catalog.length, coverageEpoch, entryRadiusKm]);
+  }, [catalog.length, coverageEpoch, entryRadiusKm, holdRadiusKm, selectedSatelliteId]);
 
   const selectedCell = useMemo(
     () => catalog.find(({ id }) => id === selectedCellId) ?? catalog[0],
@@ -302,24 +336,6 @@ export function GlobalPlanner() {
   const selectedIsVisible = analysis.cells.some(({ id }) => id === selectedCellId);
   const selectedCellIndex = selectedCell ? catalog.indexOf(selectedCell) : -1;
   const selectedGlobalCandidateCount = selectedCellIndex >= 0 ? candidateCounts[selectedCellIndex] ?? 0 : 0;
-  const selectedScenarioRecord = typeof audit.selectedScenario === "string"
-    ? audit.scenarios?.find(({ id }) => id === audit.selectedScenario)
-    : audit.selectedScenario;
-  const selectedScenario = (selectedScenarioRecord?.auditStatus ?? selectedScenarioRecord?.status) === "exact_pass"
-    ? selectedScenarioRecord
-    : null;
-  const planningSeed = typeof audit.planningSeed === "string"
-    ? audit.scenarios?.find(({ id }) => id === audit.planningSeed)
-    : audit.planningSeed;
-  const engineeringCandidate = audit.scenarios?.find(({ id }) => id === "global-45-f1-snapshot-candidate");
-  const displayedScenario = selectedScenario ?? engineeringCandidate ?? planningSeed ?? audit.scenarios?.[0] ?? {
-    inclinationDeg: baseline.inclinationDeg,
-    planes: baseline.planes,
-    satellitesPerPlane: baseline.satellitesPerPlane,
-    totalSatellites: baseline.totalSatellites,
-    phaseFactor: baseline.phaseFactor,
-    status: "pending_exact",
-  };
 
   const chooseSatellite = useCallback((id: string) => setSelectedSatelliteId(id), []);
   const selectBestCandidate = () => {
@@ -361,21 +377,35 @@ export function GlobalPlanner() {
     setView("coverage");
     setSearchFeedback({ tone: "success", message: `已找到 ${cell.id}，右侧显示该区域的详细信息。` });
   };
-  const windowsA = calendarWindows(analysis.cells, 0);
-  const windowsB = calendarWindows(analysis.cells, 1);
+  const assignmentBankById = useMemo(
+    () => new Map(assignmentSnapshot.selectedAssignmentBanks.map(({ id, cellBank }) => [id, cellBank])),
+    [assignmentSnapshot.selectedAssignmentBanks],
+  );
+  const assignedCells = useMemo(
+    () => analysis.cells
+      .filter(({ id }) => assignmentBankById.has(id))
+      .map((cell) => ({ ...cell, cellBank: assignmentBankById.get(cell.id)! })),
+    [analysis.cells, assignmentBankById],
+  );
+  const windowsA = calendarWindows(assignedCells, 0);
+  const windowsB = calendarWindows(assignedCells, 1);
   const catalogReady = catalog.length > 0;
-  const capacityDecision = analysis.scheduleOverflow
-    ? "超出日历容量"
-    : `容量满足，余量${SATELLITE_CAPACITY - analysis.visibleCount}个L1`;
+  const assignmentReady = assignmentSnapshot.ready;
+  const capacityDecision = !assignmentReady
+    ? "全网唯一分配正在计算"
+    : assignmentSnapshot.unassignedCount > 0
+    ? `${assignmentSnapshot.unassignedCount}个区域尚未分配`
+    : `当前实际负责${assignmentSnapshot.selectedAssignedCount}个L1`;
   const currentJudgement = !catalogReady
     ? "正在载入全球波位目录"
     : view === "coverage"
       ? entryCandidates.length > 0 ? `可接入，${entryCandidates.length}颗候选卫星` : "当前无可接入卫星"
       : capacityDecision;
   const bestEntryCandidate = entryCandidates[0];
-  const largestOnboardCell = Math.max(...analysis.byCell, 0);
+  const largestOnboardCell = Math.max(...assignmentSnapshot.selectedAssignedByCell, 0);
   const accessCapacityReady = catalogReady
-    && !analysis.scheduleOverflow
+    && assignmentReady
+    && assignmentSnapshot.unassignedCount === 0
     && largestOnboardCell <= CELL_CAPACITY;
   const ssbOpportunityHeadroom = BASELINE_L1_CAPACITY.guaranteedDownlinkVisits - CELL_CAPACITY;
 
@@ -388,14 +418,15 @@ export function GlobalPlanner() {
             <button type="button" key={key} className={view === key ? "active" : ""} onClick={() => setView(key)} aria-pressed={view === key}>{VIEW_COPY[key].nav}</button>
           ))}
         </nav>
-        <div className="audit-chip review"><i />当前方案具备下一阶段验证条件</div>
+        <div className="audit-chip review"><i />星座规模仍在比较，尚未最终定案</div>
       </header>
 
       {view !== "access" ? <section className="global-metrics" aria-label="工程结论指标">
-        <article className="metric-recommended"><span>当前评估方案</span><strong>60° · 42轨道面 · 每面84星</strong><small>500 km圆轨道 · 共{baseline.totalSatellites.toLocaleString("en-US")}颗卫星</small></article>
-        <article><span>一天内检查时刻</span><strong>{f1DayAudit.sampling.epochCount} / {f1DayAudit.sampling.epochCount}</strong><small>每2分钟检查一次 · 每个区域均有候选卫星</small></article>
-        <article><span>最忙卫星服务区域数</span><strong>{f1DayAudit.summary.maximumVisibleL1PerSatellite} / {SATELLITE_CAPACITY}</strong><small>距离{SATELLITE_CAPACITY}个区域上限还有{SATELLITE_CAPACITY - f1DayAudit.summary.maximumVisibleL1PerSatellite}个</small></article>
-        <article className="metric-review"><span>长时间连续服务验证</span><strong>待执行</strong><small>计划连续检查{audit.exactAudit?.durationDays ?? 7}天 · 目前尚未完成</small></article>
+        <article className="metric-recommended"><span>较小候选</span><strong>{smallerScreen.scenario.planes}轨道面 · 每面{smallerScreen.scenario.satellitesPerPlane}星</strong><small>共{smallerScreen.scenario.satelliteCount.toLocaleString("en-US")}颗，比当前展示基线少{baseline.totalSatellites - smallerScreen.scenario.satelliteCount}颗</small></article>
+        <article><span>较小候选检查时刻</span><strong>{smallerScreen.sampling.epochCount} / {smallerScreen.sampling.epochCount}</strong><small>一天内每2分钟检查一次 · 暂未发现覆盖空窗</small></article>
+        <article><span>单星可见区域峰值</span><strong>{smallerScreen.summary.maximumVisibleL1PerSatellite}</strong><small>表示卫星能看到多少区域，不是实际服务负载</small></article>
+        <article><span>较小候选实际负责峰值</span><strong>{smallerScreen.summary.maximumAssignedL1PerSatellite} / {SATELLITE_CAPACITY}</strong><small>{smallerScreen.summary.assignmentCheckedEpochs}个检查时刻均完成唯一分配 · 单小区峰值{smallerScreen.summary.maximumBalancedCellLoad}</small></article>
+        <article className="metric-review"><span>长时间连续服务验证</span><strong>待执行</strong><small>仍需连续检查{audit.exactAudit?.durationDays ?? 7}天，较小候选尚未选定</small></article>
       </section> : null}
 
       {view !== "audit" ? <section className="global-toolbar" aria-label="时间与查询控制">
@@ -429,7 +460,8 @@ export function GlobalPlanner() {
           <div><dt>动画 / 覆盖快照</dt><dd>{formatClock(timeSeconds)} / {formatClock(coverageEpoch)}</dd></div>
           <div><dt>一级波位</dt><dd>{selectedCell?.id ?? selectedCellId}</dd></div>
           <div><dt>所选卫星</dt><dd>{selectedSatellite.id}</dd></div>
-          <div><dt>卫星可见L1</dt><dd>{analysis.visibleCount} / {SATELLITE_CAPACITY}</dd></div>
+          <div><dt>卫星可见L1</dt><dd>{analysis.visibleCount}</dd></div>
+          <div><dt>卫星实际负责L1</dt><dd>{assignmentReady ? `${assignmentSnapshot.selectedAssignedCount} / ${SATELLITE_CAPACITY}` : "计算中"}</dd></div>
           <div className={currentJudgement.includes("超出") || currentJudgement.includes("无可接入") ? "is-failure" : "is-pass"}><dt>当前结论</dt><dd>{currentJudgement}</dd></div>
         </dl>
       </section> : null}
@@ -477,9 +509,20 @@ export function GlobalPlanner() {
             />
           </article>
           <aside className="global-inspector">
-            <header><p>已选卫星</p><h2>{selectedSatellite.id}</h2><span className={`position-status ${analysis.scheduleOverflow ? "is-failure" : "is-pass"}`}>{analysis.scheduleOverflow ? "容量超限" : "容量满足"}</span></header>
-            <dl><div><dt>轨道面 / 槽位</dt><dd>P{String(selectedSatellite.plane).padStart(2, "0")} / S{String(selectedSatellite.slot).padStart(2, "0")}</dd></div><div><dt>星下点</dt><dd>{selectedSatellite.lat.toFixed(2)}°, {selectedSatellite.lon.toFixed(2)}°</dd></div><div><dt>负载快照时刻</dt><dd>{formatClock(coverageEpoch)}</dd></div><div><dt>45°内完整可见L1</dt><dd>{analysis.visibleCount} / {SATELLITE_CAPACITY}</dd></div><div><dt>当前容量余量</dt><dd className={analysis.scheduleOverflow ? "is-failure" : ""}>{SATELLITE_CAPACITY - analysis.visibleCount}个L1</dd></div><div><dt>两个星载小区</dt><dd>{analysis.byCell[0]} / {analysis.byCell[1]}</dd></div><div><dt>一天预审峰值</dt><dd>{f1DayAudit.summary.maximumVisibleL1PerSatellite} / {SATELLITE_CAPACITY}</dd></div><div><dt>当前超限卫星</dt><dd>{fleetSnapshot.overflowSatellites}颗</dd></div></dl>
-            <details className="technical-details"><summary>技术边界</summary><p>轨道位置采用二体圆轨道加地球自转计算；正式工程还需使用TLE/SGP4/J2复核。当前容量判断只针对L1接入日历，不等同于功率、干扰、gateway或RF能力验收。</p></details>
+            <header><p>已选卫星</p><h2>{selectedSatellite.id}</h2><span className={`position-status ${largestOnboardCell > CELL_CAPACITY ? "is-failure" : "is-pass"}`}>{largestOnboardCell > CELL_CAPACITY ? "分配超限" : "分配正常"}</span></header>
+            <dl>
+              <div><dt>轨道面 / 槽位</dt><dd>P{String(selectedSatellite.plane).padStart(2, "0")} / S{String(selectedSatellite.slot).padStart(2, "0")}</dd></div>
+              <div><dt>星下点</dt><dd>{selectedSatellite.lat.toFixed(2)}°, {selectedSatellite.lon.toFixed(2)}°</dd></div>
+              <div><dt>快照时刻</dt><dd>{formatClock(coverageEpoch)}</dd></div>
+              <div><dt>当前能看到的L1</dt><dd>{analysis.visibleCount}个</dd></div>
+              <div><dt>当前实际负责的L1</dt><dd>{assignmentReady ? `${assignmentSnapshot.selectedAssignedCount} / ${SATELLITE_CAPACITY}` : "计算中"}</dd></div>
+              <div><dt>容量余量</dt><dd>{assignmentReady ? `${SATELLITE_CAPACITY - assignmentSnapshot.selectedAssignedCount}个L1` : "计算中"}</dd></div>
+              <div><dt>两个星载小区</dt><dd>{assignmentReady ? `${assignmentSnapshot.selectedAssignedByCell[0]} / ${assignmentSnapshot.selectedAssignedByCell[1]}` : "计算中"}</dd></div>
+              <div><dt>全网实际负责峰值</dt><dd>{assignmentReady ? `${assignmentSnapshot.peakAssigned} · ${assignmentSnapshot.peakAssignedSatelliteId}` : "计算中"}</dd></div>
+              <div><dt>单星可见峰值</dt><dd>{fleetSnapshot.peakVisible} · {fleetSnapshot.peakSatelliteId || "计算中"}</dd></div>
+              <div><dt>当前未分配L1</dt><dd className={assignmentReady && assignmentSnapshot.unassignedCount > 0 ? "is-failure" : ""}>{assignmentReady ? `${assignmentSnapshot.unassignedCount}个` : "计算中"}</dd></div>
+            </dl>
+            <details className="technical-details"><summary>计算边界</summary><p>“可见”表示卫星在几何上能看到该区域；“实际负责”表示完成全网唯一分配后交给这颗卫星的区域。容量只检查实际负责的区域。轨道模型仍需用真实星历、地面站、功率和干扰条件复核。</p></details>
           </aside>
         </section>
       ) : null}
@@ -489,10 +532,10 @@ export function GlobalPlanner() {
           <header className="access-summary">
             <div>
               <p>跳波束日历 · {selectedSatellite.id} · {formatClock(coverageEpoch)} 快照</p>
-              <h2>这颗卫星能否为所有可见地面区域排出接入时段？</h2>
+              <h2>这颗卫星如何为实际负责的地面区域安排接入时段？</h2>
             </div>
-            <span className={!catalogReady ? "pending" : accessCapacityReady ? "scheduled" : "failed"}>
-              {!catalogReady ? "正在计算" : accessCapacityReady ? "本次安排可行" : "需要调整卫星"}
+            <span className={!catalogReady || !assignmentReady ? "pending" : accessCapacityReady ? "scheduled" : "failed"}>
+              {!catalogReady || !assignmentReady ? "正在计算" : accessCapacityReady ? "本次安排可行" : "需要调整卫星"}
             </span>
           </header>
 
@@ -500,51 +543,52 @@ export function GlobalPlanner() {
             <div>
               <span>先看这里</span>
               <h3 id="access-guide-title">日历就是卫星轮流照向不同地面区域的时间安排</h3>
-              <p>页面先判断容量是否够，再把可见地面波位分给两个星载小区，最后检查终端能否及时发现网络并发起接入。</p>
+              <p>卫星先保存完整的可见区域清单；全网完成唯一分配后，只有这颗卫星实际负责的区域才进入两个星载小区和接入日历。</p>
             </div>
             <ol className="access-journey">
-              <li><b>1</b><span>收集可见波位</span><small>当前{analysis.visibleCount}个地面区域</small></li>
-              <li><b>2</b><span>分给两个小区</span><small>{analysis.byCell[0]}个 / {analysis.byCell[1]}个</small></li>
-              <li><b>3</b><span>安排下行发现</span><small>每个区域80 ms内有一次计划机会</small></li>
-              <li><b>4</b><span>安排上行接入</span><small>每个区域640 ms内有一次计划机会</small></li>
+              <li><b>1</b><span>保留可见清单</span><small>当前能看到{analysis.visibleCount}个一级波位</small></li>
+              <li><b>2</b><span>确认实际责任</span><small>本星负责{assignmentSnapshot.selectedAssignedCount}个一级波位</small></li>
+              <li><b>3</b><span>分给两个小区</span><small>{assignmentSnapshot.selectedAssignedByCell[0]}个 / {assignmentSnapshot.selectedAssignedByCell[1]}个</small></li>
+              <li><b>4</b><span>安排网络发现</span><small>每个已分配一级波位80 ms内有一次计划机会</small></li>
+              <li><b>5</b><span>安排上行接入</span><small>每个已分配一级波位640 ms内有一次PRACH机会</small></li>
             </ol>
           </section>
 
           <section className="access-answer-grid" aria-label="跳波束日历核心结论">
-            <article className={analysis.scheduleOverflow ? "is-failure" : "is-pass"}>
-              <span>容量够不够</span>
-              <b>{analysis.visibleCount} / {SATELLITE_CAPACITY}</b>
-              <strong>{analysis.scheduleOverflow ? "放不下全部区域" : "可见区域可以全部排入"}</strong>
-              <p>256是单颗卫星本阶段最多可安排的地面波位数。</p>
+            <article className={!assignmentReady ? "is-pending" : assignmentSnapshot.unassignedCount > 0 ? "is-failure" : "is-pass"}>
+              <span>实际任务是否超过上限</span>
+              <b>{assignmentReady ? `${assignmentSnapshot.selectedAssignedCount} / ${SATELLITE_CAPACITY}` : "计算中"}</b>
+              <strong>{!assignmentReady ? "正在完成全网唯一分配" : assignmentSnapshot.unassignedCount > 0 ? "全网仍有区域没有负责人" : "实际负责数量在规划范围内"}</strong>
+              <p>256是当前软件规划中单星最多负责的一级波位数，不是卫星能形成的波束数量，也不是可见清单的裁剪线。</p>
             </article>
             <article className={largestOnboardCell > CELL_CAPACITY ? "is-failure" : "is-pass"}>
               <span>两个小区是否超限</span>
-              <b>{analysis.byCell[0]} / {analysis.byCell[1]}</b>
+              <b>{assignmentSnapshot.selectedAssignedByCell[0]} / {assignmentSnapshot.selectedAssignedByCell[1]}</b>
               <strong>{largestOnboardCell > CELL_CAPACITY ? "至少一个小区超限" : "两个小区都在容量内"}</strong>
-              <p>每个小区最多负责128个地面波位。</p>
+              <p>每个稳定星载小区在本阶段最多负责128个一级波位；小区身份不会随波位改变。</p>
             </article>
             <article className="is-pass">
-              <span>多久安排一次网络发现机会</span>
+              <span>一级波位多久获得一次网络发现机会</span>
               <b>计划间隔≤80 ms</b>
               <strong>下行发现时段可排</strong>
-              <p>每小区安排128项，仍保留{ssbOpportunityHeadroom}次计划机会；真实信号仍需无线验证。</p>
+              <p>当前最忙小区安排{largestOnboardCell}项；按满载128项计算仍保留{ssbOpportunityHeadroom}次计划机会。真实信号仍需无线验证。</p>
             </article>
             <article className="is-tight">
-              <span>多久安排一次接入机会</span>
+              <span>一级波位多久获得一次PRACH机会</span>
               <b>计划间隔≤640 ms</b>
-              <strong>满足目标，但没有计划余量</strong>
-              <p>这是当前最紧张的一项，需要在后续无线实现中重点验证。</p>
+              <strong>按每个已分配一级波位单独安排</strong>
+              <p>满载时每小区128个一级波位对应128次机会；PRACH不是按整颗卫星合并计算，真实接收仍需后续无线验证。</p>
             </article>
           </section>
 
           <section className="access-cell-overview">
             <header>
-              <div><span>两个小区如何分工</span><h3>把可见波位分成两组，分别轮流服务</h3></div>
-              <p>小区身份跟随卫星保持稳定；地面波位只是在当前时间段被分到其中一组。</p>
+              <div><span>两个小区如何分工</span><h3>把本星实际负责的一级波位分成两组</h3></div>
+              <p>完整可见清单不会被容量裁剪；只有全网唯一分配给本星的一级波位进入日历。小区身份跟随卫星保持稳定。</p>
             </header>
             <div>
               {([0, 1] as const).map((bank) => {
-                const cellCount = analysis.byCell[bank] ?? 0;
+                const cellCount = assignmentSnapshot.selectedAssignedByCell[bank] ?? 0;
                 return (
                   <article key={`overview-${bank}`}>
                     <div><span>星载小区 {bank === 0 ? "A" : "B"}</span><b>{cellCount}个地面波位</b></div>
@@ -561,7 +605,7 @@ export function GlobalPlanner() {
             <div className="access-detail-content">
               {([0, 1] as const).map((bank) => {
                 const windows = bank === 0 ? windowsA : windowsB;
-                const cellCount = analysis.byCell[bank] ?? 0;
+                const cellCount = assignmentSnapshot.selectedAssignedByCell[bank] ?? 0;
                 const identity = baselineSatelliteCellPlanningContext.identitiesBySatellite.get(selectedSatellite.id)?.[bank];
                 return (
                   <section className="cell-calendar" key={bank}>
@@ -589,13 +633,13 @@ export function GlobalPlanner() {
             <summary><span><b>查看验算表</b><small>用于核对容量、下行发现、上行接入和模拟波束上限</small></span><em>技术明细</em></summary>
             <section className="engineering-results">
               <header><h3>接入日历工程指标</h3><span>当前快照与单测覆盖的时间账本</span></header>
-              <div><table><thead><tr><th>指标</th><th>要求</th><th>当前结果</th><th>结论</th></tr></thead><tbody><tr><td>单星可见L1</td><td>≤{SATELLITE_CAPACITY}</td><td>{analysis.visibleCount} / {SATELLITE_CAPACITY}</td><td><span className={analysis.scheduleOverflow ? "result-failed" : "result-pass"}>{analysis.scheduleOverflow ? "超限" : "满足"}</span></td></tr><tr><td>单个星载小区</td><td>≤{CELL_CAPACITY}</td><td>{analysis.byCell[0]} / {analysis.byCell[1]}</td><td><span className={largestOnboardCell > CELL_CAPACITY ? "result-failed" : "result-pass"}>{largestOnboardCell > CELL_CAPACITY ? "超限" : "满足"}</span></td></tr><tr><td>SSB访问周期</td><td>≤80 ms</td><td>128 / {BASELINE_L1_CAPACITY.guaranteedDownlinkVisits}次机会</td><td><span className="result-pass">时间账本可排</span></td></tr><tr><td>PRACH接入周期</td><td>≤640 ms</td><td>128 / 128次机会</td><td><span className="result-tight">可排，无余量</span></td></tr><tr><td>瞬时模拟波束</td><td>≤{ANALOG_PER_SATELLITE}路</td><td>{ANALOG_PER_SATELLITE}路上限</td><td><span className="result-pass">满足</span></td></tr></tbody></table></div>
+              <div><table><thead><tr><th>指标</th><th>要求</th><th>当前结果</th><th>结论</th></tr></thead><tbody><tr><td>完整可见一级波位清单</td><td>不得按容量裁剪</td><td>{analysis.visibleCount}个全部保留</td><td><span className="result-pass">清单完整</span></td></tr><tr><td>单星实际负责一级波位</td><td>≤{SATELLITE_CAPACITY}</td><td>{assignmentSnapshot.selectedAssignedCount} / {SATELLITE_CAPACITY}</td><td><span className={assignmentSnapshot.unassignedCount > 0 ? "result-failed" : "result-pass"}>{assignmentSnapshot.unassignedCount > 0 ? "存在未分配区域" : "满足"}</span></td></tr><tr><td>两个星载小区</td><td>各≤{CELL_CAPACITY}</td><td>{assignmentSnapshot.selectedAssignedByCell[0]} / {assignmentSnapshot.selectedAssignedByCell[1]}</td><td><span className={largestOnboardCell > CELL_CAPACITY ? "result-failed" : "result-pass"}>{largestOnboardCell > CELL_CAPACITY ? "超限" : "满足"}</span></td></tr><tr><td>每个一级波位的SSB计划间隔</td><td>≤80 ms</td><td>满载128 / {BASELINE_L1_CAPACITY.guaranteedDownlinkVisits}次机会</td><td><span className="result-pass">软件日历可排</span></td></tr><tr><td>每个一级波位的PRACH计划间隔</td><td>≤640 ms</td><td>满载128 / 128次机会</td><td><span className="result-tight">软件日历可排</span></td></tr><tr><td>瞬时模拟波束</td><td>≤{ANALOG_PER_SATELLITE}路</td><td>{ANALOG_PER_SATELLITE}路上限</td><td><span className="result-pass">满足</span></td></tr></tbody></table></div>
             </section>
           </details>
 
           <details className="access-detail-block visible-table">
             <summary><span><b>查看完整可见波位表</b><small>{selectedSatellite.id}当前共{analysis.visibleCount}个 · {String(metadata.version ?? "载入中")}</small></span><em>原始数据</em></summary>
-            <div><table><thead><tr><th>L1</th><th>星载小区</th><th>仰角</th><th>45°可见区间</th><th>仰角时间线</th><th>距星下点</th><th>纬度</th><th>经度</th></tr></thead><tbody>{analysis.cells.map((cell) => <tr key={cell.id}><td>{cell.id}</td><td>{cell.cellBank + 1}</td><td>{cell.elevationDeg?.toFixed(1) ?? "—"}°</td><td>{cell.visibleFromSeconds ?? "—"}…{cell.visibleUntilSeconds ?? "—"} s</td><td>{cell.elevationTimeline?.map((sample) => `${sample.offsetSeconds}:${sample.elevationDeg.toFixed(1)}°`).join(" / ") ?? "—"}</td><td>{cell.distanceKm.toFixed(1)} km</td><td>{cell.lat.toFixed(4)}°</td><td>{cell.lon.toFixed(4)}°</td></tr>)}</tbody></table></div>
+            <div><table><thead><tr><th>L1</th><th>当前用途</th><th>仰角</th><th>45°可见区间</th><th>仰角时间线</th><th>距星下点</th><th>纬度</th><th>经度</th></tr></thead><tbody>{analysis.cells.map((cell) => { const bank = assignmentBankById.get(cell.id); return <tr key={cell.id}><td>{cell.id}</td><td>{bank === undefined ? "可见候选 · 由其他卫星负责" : `本星负责 · 小区${bank === 0 ? "A" : "B"}`}</td><td>{cell.elevationDeg?.toFixed(1) ?? "—"}°</td><td>{cell.visibleFromSeconds ?? "—"}…{cell.visibleUntilSeconds ?? "—"} s</td><td>{cell.elevationTimeline?.map((sample) => `${sample.offsetSeconds}:${sample.elevationDeg.toFixed(1)}°`).join(" / ") ?? "—"}</td><td>{cell.distanceKm.toFixed(1)} km</td><td>{cell.lat.toFixed(4)}°</td><td>{cell.lon.toFixed(4)}°</td></tr>; })}</tbody></table></div>
           </details>
 
           <details className="technical-details access-technical"><summary>这项结论还不代表什么</summary><p>当前页面证明的是软件能够排出接入日历。真实广播、终端接入检测、功率、天线和射频切换仍需在后续无线链路中验证；“已安排”不等于信号已经从天线发出。</p></details>
@@ -604,18 +648,18 @@ export function GlobalPlanner() {
 
       {view === "audit" ? (
         <section className="decision-console">
-          <header className="decision-hero"><div><span className="decision-label">阶段判断</span><h2>当前方案具备覆盖目标区域和安排终端接入的基础条件</h2><p>目前的计算表明，在已经检查的一天内，卫星数量和接入时段能够满足规划需求。下一步还要确认更长时间的连续服务，并在真实轨道和无线设备条件下验证，完成后才能确定最终方案。</p></div><div className="decision-stamp"><span>下一步</span><b>继续工程验证</b><small>尚未最终定案</small></div></header>
+          <header className="decision-hero"><div><span className="decision-label">阶段判断</span><h2>卫星数量有继续减少的空间，但较小方案还不能直接定案</h2><p>新的计算把“卫星看得到多少区域”和“卫星实际负责多少区域”分开。当前容量并不是主要限制，覆盖连续性和卫星交接更值得优先验证。较小候选只通过了一天的离散检查，仍需更长时间和故障场景验证。</p></div><div className="decision-stamp"><span>当前结论</span><b>进入候选复核</b><small>不代表最终选型</small></div></header>
           <p className="rejected-line"><b>未采用的初始方案：</b>起始时刻仍有{snapshotAudit.summary.maximumUncoveredL1}个地面区域无法获得服务，因此不再继续使用。</p>
 
-          <section className="conclusion-table"><header><h3>方案现状</h3><span>用普通语言说明当前能力与尚待完成的工作</span></header><div><table><thead><tr><th>关注事项</th><th>当前判断</th><th>说明</th></tr></thead><tbody><tr><td>目标区域能否获得卫星服务</td><td><span className="result-pass">当前检查满足</span></td><td>{f1DayAudit.sampling.epochCount}/{f1DayAudit.sampling.epochCount}个检查时刻均有可用卫星；最紧张时每个区域至少有{f1DayAudit.summary.minimumCandidateCount}颗候选卫星</td></tr><tr><td>单颗卫星能否承载当前区域</td><td><span className="result-pass">容量足够</span></td><td>最忙时安排{f1DayAudit.summary.maximumVisibleL1PerSatellite}个地面区域，上限{SATELLITE_CAPACITY}个，还可容纳{SATELLITE_CAPACITY - f1DayAudit.summary.maximumVisibleL1PerSatellite}个</td></tr><tr><td>两组星载服务资源是否够用</td><td><span className="result-pass">容量足够</span></td><td>最忙时约为105个和104个，分别低于128个上限</td></tr><tr><td>终端多久能发现网络</td><td><span className="result-pass">可按80 ms目标安排</span></td><td>每组在80 ms内共有{BASELINE_L1_CAPACITY.guaranteedDownlinkVisits}次安排机会，服务128个区域后仍有40次余量</td></tr><tr><td>终端多久能获得接入机会</td><td><span className="result-tight">可按640 ms目标安排</span></td><td>每组128个区域正好使用128次机会，余量较小，需要在真实无线环境继续验证</td></tr><tr><td>能否长时间连续服务</td><td><span className="result-review">尚待确认</span></td><td>计划进行的{audit.exactAudit?.durationDays ?? 7}天连续检查尚未执行</td></tr></tbody></table></div></section>
+          <section className="conclusion-table"><header><h3>方案现状</h3><span>把已经证明的结果与仍待验证的事项分开说明</span></header><div><table><thead><tr><th>关注事项</th><th>当前判断</th><th>说明</th></tr></thead><tbody><tr><td>是否可以减少卫星数量</td><td><span className="result-pass">可以继续筛选</span></td><td>{smallerScreen.scenario.planes}个轨道面、每面{smallerScreen.scenario.satellitesPerPlane}颗，共{smallerScreen.scenario.satelliteCount.toLocaleString("en-US")}颗的候选已通过一天离散检查；比当前展示基线少{baseline.totalSatellites - smallerScreen.scenario.satelliteCount}颗，但尚未选定</td></tr><tr><td>目标区域在检查时刻是否有卫星可用</td><td><span className="result-pass">离散检查满足</span></td><td>{smallerScreen.sampling.epochCount}/{smallerScreen.sampling.epochCount}个检查时刻未发现空缺；最紧张时每个区域至少有{smallerScreen.summary.minimumCandidateCount}颗候选卫星</td></tr><tr><td>“可见数量”是否等于“实际负载”</td><td><span className="result-review">不是同一概念</span></td><td>单星最多可见{smallerScreen.summary.maximumVisibleL1PerSatellite}个一级波位，只表示几何视野；同一批检查中，唯一分配后的实际负责峰值为{smallerScreen.summary.maximumAssignedL1PerSatellite}个/星</td></tr><tr><td>当前展示时刻的全网分配是否完整</td><td><span className={!assignmentReady ? "result-review" : assignmentSnapshot.unassignedCount === 0 ? "result-pass" : "result-failed"}>{!assignmentReady ? "载入后计算" : assignmentSnapshot.unassignedCount === 0 ? "全部有负责人" : "仍有未分配区域"}</span></td><td>{assignmentReady ? `当前实际分配峰值为${assignmentSnapshot.peakAssigned}个一级波位/星；未分配${assignmentSnapshot.unassignedCount}个` : "浏览器载入波位目录后，在后台完成当前时刻的全网唯一分配"}</td></tr><tr><td>终端多久能发现网络</td><td><span className="result-pass">可生成80 ms计划</span></td><td>软件日历为每个已分配一级波位安排SSB机会；“已安排”不等于真实无线信号已经发出</td></tr><tr><td>终端多久能获得接入机会</td><td><span className="result-tight">可生成640 ms计划</span></td><td>PRACH按每个已分配一级波位单独安排；满载时余量较小，仍需真实无线实现验证</td></tr><tr><td>能否长时间连续服务</td><td><span className="result-review">尚待确认</span></td><td>{audit.exactAudit?.durationDays ?? 7}天连续事件检查、单星故障检查以及真实功率和干扰条件尚未完成</td></tr></tbody></table></div></section>
 
           <section className="acceptance-actions"><header><h3>最终定案前还要完成三件事</h3><span>三项都完成后，才能确认全球陆地连续服务能力</span></header><div><article><b>01</b><h4>连续服务检查</h4><p>连续检查7天，确认两个检查时刻之间也不会出现短暂的服务中断。</p></article><article><b>02</b><h4>卫星接续检查</h4><p>确认一颗卫星离开时，下一颗卫星已经准备好接续服务，交接期间不中断。</p></article><article><b>03</b><h4>真实无线环境验证</h4><p>使用真实轨道、信号功率、干扰、地面站和无线设备完成验证。</p></article></div></section>
 
-          <details className="technical-details decision-details"><summary>查看技术依据和使用边界</summary><div className="decision-technical"><p>技术参数：覆盖目录包含±57°陆地的36,411个L1位置；当前方案来自一天、每120 s检查一次的计算。正式方案尚未签署，连续事件检查仍未运行。</p><p>接入时序目标为SSB不超过80 ms、PRACH不超过640 ms。当前软件能够为每个星载小区的128个L1位置生成安排，但这不代表信号已经通过天线发出，也不代表真实PHY或RF环境已经通过验证。候选全集不会按256个容量上限裁剪。</p><section className="scenario-table"><header><h3>方案对比记录</h3><span>技术字段</span></header><div><table><thead><tr><th>方案</th><th>倾角</th><th>轨道面</th><th>每面卫星</th><th>当前状态</th></tr></thead><tbody>{(audit.scenarios ?? [displayedScenario]).filter(Boolean).map((scenario, index) => <tr key={scenario?.id ?? index}><td>{scenarioDisplayName(scenario, index)}</td><td>{scenario?.inclinationDeg ?? baseline.inclinationDeg}°</td><td>{scenario?.planes ?? "—"}</td><td>{scenario?.satellitesPerPlane ?? "—"}</td><td>{scenarioEvidenceText(scenario)}</td></tr>)}</tbody></table></div></section></div></details>
+          <details className="technical-details decision-details"><summary>查看技术依据和使用边界</summary><div className="decision-technical"><p>覆盖目录包含±57°陆地的36,411个一级波位。较小候选来自一天、每{smallerScreen.sampling.stepSeconds}秒检查一次的固定步长计算。结果为粗筛，`exact=false`、`selectedScenario=null`，不能表述为全球连续覆盖已经通过。</p><p>完整可见清单与唯一服务分配是两层数据：前者不能按256裁剪，后者才受单星256、单小区128的当前软件规划上限约束。SSB和PRACH都针对已分配的一级波位生成计划；这些计划不代表PHY、RF、天线或空口已经执行。</p><section className="scenario-table"><header><h3>方案对比记录</h3><span>当前阶段只比较候选，不做最终选型</span></header><div><table><thead><tr><th>方案</th><th>倾角</th><th>轨道面</th><th>每面卫星</th><th>当前状态</th></tr></thead><tbody><tr><td>当前展示基线</td><td>{baseline.inclinationDeg}°</td><td>{baseline.planes}</td><td>{baseline.satellitesPerPlane}</td><td>作为网页运行基线保留，尚未正式验收</td></tr><tr><td>较小候选</td><td>{baseline.inclinationDeg}°</td><td>{smallerScreen.scenario.planes}</td><td>{smallerScreen.scenario.satellitesPerPlane}</td><td>一天固定步长粗筛通过，待7天连续事件与故障场景复核</td></tr>{(audit.scenarios ?? []).filter((scenario) => scenario.id === "global-45-seed-3528").map((scenario, index) => <tr key={scenario?.id ?? index}><td>{scenarioDisplayName(scenario, index)}</td><td>{scenario?.inclinationDeg ?? baseline.inclinationDeg}°</td><td>{scenario?.planes ?? "—"}</td><td>{scenario?.satellitesPerPlane ?? "—"}</td><td>{scenarioEvidenceText(scenario)}</td></tr>)}</tbody></table></div></section></div></details>
         </section>
       ) : null}
 
-      <footer className="global-footer"><span>波位目录 {String(metadata.version ?? "载入中")} · SHA-256 {String(metadata.integrity?.sha256 ?? metadata.contentHash ?? "pending").slice(0, 16)}</span><p>工程候选：500 km圆轨道 · 60°倾角 · 42轨道面 × 每面84星 · 45°接入 / 42°保持</p></footer>
+      <footer className="global-footer"><span>波位目录 {String(metadata.version ?? "载入中")} · SHA-256 {String(metadata.integrity?.sha256 ?? metadata.contentHash ?? "pending").slice(0, 16)}</span><p>当前展示基线：{baseline.totalSatellites.toLocaleString("en-US")}颗 · 较小粗筛候选：{smallerScreen.scenario.satelliteCount.toLocaleString("en-US")}颗 · 45°进入 / 42°保持 · 最终数量尚未选定</p></footer>
     </main>
   );
 }

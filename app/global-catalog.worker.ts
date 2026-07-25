@@ -1,3 +1,5 @@
+import { matchL1CandidatesToCapacity } from "./capacity-matching";
+
 type CatalogCell = {
   id: string;
   lat: number;
@@ -21,18 +23,20 @@ type AnalyzeMessage = {
   latitudeDeg: number;
   longitudeDeg: number;
   radiusKm: number;
-  capacity: number;
   timeline?: readonly { offsetSeconds: number; lat: number; lon: number }[];
 };
 type GlobalCoverageMessage = {
   type: "globalCoverage";
   requestId: number;
-  radiusKm: number;
+  entryRadiusKm: number;
+  releaseRadiusKm: number;
+  selectedSatelliteId: string;
   satelliteSubpoints: readonly { id: string; lat: number; lon: number }[];
 };
 
 let catalog: readonly CatalogCell[] = [];
 let catalogMetadata: Record<string, unknown> = {};
+let previousAssignments = new Map<string, string>();
 const earthRadiusKm = 6378.137;
 const toRadians = (value: number) => value * Math.PI / 180;
 const toDegrees = (value: number) => value * 180 / Math.PI;
@@ -89,14 +93,6 @@ self.addEventListener("message", async (event: MessageEvent<LoadMessage | Analyz
       .filter((cell) => cell.distanceKm <= message.radiusKm)
       .sort((left, right) => left.distanceKm - right.distanceKm || left.id.localeCompare(right.id));
 
-    // A deterministic balanced spatial split.  It is a calendar input, not a
-    // permanent property of the earth-fixed position.
-    const localLongitude = (longitude: number) => ((longitude - message.longitudeDeg + 540) % 360) - 180;
-    const byLongitude = [...visible].sort((left, right) =>
-      localLongitude(left.lon) - localLongitude(right.lon) || left.lat - right.lat || left.id.localeCompare(right.id),
-    );
-    const splitIndex = Math.ceil(byLongitude.length / 2);
-    const bankById = new Map(byLongitude.map((cell, index) => [cell.id, index < splitIndex ? 0 as const : 1 as const]));
     const cells = visible.map((cell) => {
       const timeline = (message.timeline ?? []).map((sample) => ({
         offsetSeconds: sample.offsetSeconds,
@@ -111,7 +107,6 @@ self.addEventListener("message", async (event: MessageEvent<LoadMessage | Analyz
       }
       return {
         ...cell,
-        cellBank: bankById.get(cell.id) ?? 0,
         elevationDeg: elevationFromGroundDistance(cell.distanceKm),
         visibleFromSeconds: currentIndex >= 0 ? timeline[first].offsetSeconds : null,
         visibleUntilSeconds: currentIndex >= 0 ? timeline[last].offsetSeconds : null,
@@ -119,7 +114,6 @@ self.addEventListener("message", async (event: MessageEvent<LoadMessage | Analyz
         tableVersion: catalogMetadata.version ?? "unknown",
       };
     });
-    const byCell = [cells.filter((cell) => cell.cellBank === 0).length, cells.filter((cell) => cell.cellBank === 1).length];
 
     self.postMessage({
       type: "analysis",
@@ -127,9 +121,6 @@ self.addEventListener("message", async (event: MessageEvent<LoadMessage | Analyz
       satelliteId: message.satelliteId,
       cells,
       visibleCount: cells.length,
-      byCell,
-      capacity: message.capacity,
-      scheduleOverflow: cells.length > message.capacity || byCell.some((count) => count > message.capacity / 2),
     });
     return;
   }
@@ -138,7 +129,7 @@ self.addEventListener("message", async (event: MessageEvent<LoadMessage | Analyz
     const binSizeDeg = 6;
     const longitudeBins = Math.ceil(360 / binSizeDeg);
     const key = (latIndex: number, lonIndex: number) => `${latIndex}:${((lonIndex % longitudeBins) + longitudeBins) % longitudeBins}`;
-    const bins = new Map<string, Array<{ lat: number; lon: number }>>();
+    const bins = new Map<string, Array<{ id: string; lat: number; lon: number }>>();
     for (const point of message.satelliteSubpoints) {
       const latIndex = Math.floor((point.lat + 90) / binSizeDeg);
       const lonIndex = Math.floor((point.lon + 180) / binSizeDeg);
@@ -148,20 +139,40 @@ self.addEventListener("message", async (event: MessageEvent<LoadMessage | Analyz
       bins.set(bucketKey, bucket);
     }
     const counts = new Uint16Array(catalog.length);
+    const candidateSets: Array<{
+      positionId: string;
+      candidates: Array<{ satelliteId: string; elevationDeg: number }>;
+    }> = [];
     let uncovered = 0;
     catalog.forEach((cell, cellIndex) => {
       const latIndex = Math.floor((cell.lat + 90) / binSizeDeg);
       const lonIndex = Math.floor((cell.lon + 180) / binSizeDeg);
-      let count = 0;
+      const candidates: Array<{ satelliteId: string; elevationDeg: number }> = [];
+      let entryCandidateCount = 0;
+      const previousSatelliteId = previousAssignments.get(cell.id);
       for (let latOffset = -1; latOffset <= 1; latOffset += 1) {
         for (let lonOffset = -2; lonOffset <= 2; lonOffset += 1) {
           for (const satellite of bins.get(key(latIndex + latOffset, lonIndex + lonOffset)) ?? []) {
-            if (distanceKm(cell, satellite) <= message.radiusKm) count += 1;
+            const distance = distanceKm(cell, satellite);
+            const isEntryCandidate = distance <= message.entryRadiusKm;
+            const isRetainedIncumbent = satellite.id === previousSatelliteId
+              && distance <= message.releaseRadiusKm;
+            if (isEntryCandidate || isRetainedIncumbent) {
+              candidates.push({
+                satelliteId: satellite.id,
+                elevationDeg: elevationFromGroundDistance(distance),
+              });
+              if (isEntryCandidate) entryCandidateCount += 1;
+            }
           }
         }
       }
-      counts[cellIndex] = count;
-      if (count === 0) uncovered += 1;
+      candidates.sort((left, right) =>
+        right.elevationDeg - left.elevationDeg || left.satelliteId.localeCompare(right.satelliteId),
+      );
+      counts[cellIndex] = entryCandidateCount;
+      if (candidates.length === 0) uncovered += 1;
+      candidateSets.push({ positionId: cell.id, candidates });
     });
     const catalogBins = new Map<string, CatalogCell[]>();
     for (const cell of catalog) {
@@ -174,7 +185,6 @@ self.addEventListener("message", async (event: MessageEvent<LoadMessage | Analyz
     }
     let peakVisible = 0;
     let peakSatelliteId = "";
-    let overflowSatellites = 0;
     for (const satellite of message.satelliteSubpoints) {
       const latIndex = Math.floor((satellite.lat + 90) / binSizeDeg);
       const lonIndex = Math.floor((satellite.lon + 180) / binSizeDeg);
@@ -182,13 +192,45 @@ self.addEventListener("message", async (event: MessageEvent<LoadMessage | Analyz
       for (let latOffset = -1; latOffset <= 1; latOffset += 1) {
         for (let lonOffset = -2; lonOffset <= 2; lonOffset += 1) {
           for (const cell of catalogBins.get(key(latIndex + latOffset, lonIndex + lonOffset)) ?? []) {
-            if (distanceKm(cell, satellite) <= message.radiusKm) visible += 1;
+            if (distanceKm(cell, satellite) <= message.releaseRadiusKm) visible += 1;
           }
         }
       }
-      if (visible > 256) overflowSatellites += 1;
       if (visible > peakVisible) { peakVisible = visible; peakSatelliteId = satellite.id; }
     }
+
+    const assignments = matchL1CandidatesToCapacity(candidateSets, 256, previousAssignments);
+    previousAssignments = assignments;
+    const assignedCounts = new Map<string, number>();
+    for (const satelliteId of assignments.values()) {
+      assignedCounts.set(satelliteId, (assignedCounts.get(satelliteId) ?? 0) + 1);
+    }
+    let peakAssigned = 0;
+    let peakAssignedSatelliteId = "";
+    for (const [satelliteId, count] of assignedCounts) {
+      if (count > peakAssigned || (count === peakAssigned && satelliteId < peakAssignedSatelliteId)) {
+        peakAssigned = count;
+        peakAssignedSatelliteId = satelliteId;
+      }
+    }
+    const selectedSubpoint = message.satelliteSubpoints.find(({ id }) => id === message.selectedSatelliteId);
+    const selectedAssigned = catalog
+      .filter((cell) => assignments.get(cell.id) === message.selectedSatelliteId)
+      .sort((left, right) => {
+        if (!selectedSubpoint) return left.id.localeCompare(right.id);
+        const leftLongitude = ((left.lon - selectedSubpoint.lon + 540) % 360) - 180;
+        const rightLongitude = ((right.lon - selectedSubpoint.lon + 540) % 360) - 180;
+        return leftLongitude - rightLongitude || left.lat - right.lat || left.id.localeCompare(right.id);
+      });
+    const splitIndex = Math.ceil(selectedAssigned.length / 2);
+    const selectedAssignmentBanks = selectedAssigned.map((cell, index) => ({
+      id: cell.id,
+      cellBank: index < splitIndex ? 0 : 1,
+    }));
+    const selectedAssignedByCell = [
+      splitIndex,
+      selectedAssigned.length - splitIndex,
+    ];
     self.postMessage({
       type: "globalCoverage",
       requestId: message.requestId,
@@ -196,7 +238,12 @@ self.addEventListener("message", async (event: MessageEvent<LoadMessage | Analyz
       uncovered,
       peakVisible,
       peakSatelliteId,
-      overflowSatellites,
+      unassignedCount: catalog.length - assignments.size,
+      peakAssigned,
+      peakAssignedSatelliteId,
+      selectedAssignmentBanks,
+      selectedAssignedCount: selectedAssigned.length,
+      selectedAssignedByCell,
     });
   }
 });

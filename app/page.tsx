@@ -5,7 +5,7 @@ export const dynamic = "force-static";
 
 export const metadata: Metadata = {
   title: "NTN全球陆地接入方案",
-  description: "42轨道面、每面84星的全球陆地覆盖方案、单星容量与星载双小区80 ms接入日历。",
+  description: "对比不同卫星规模，展示全球陆地覆盖、一级波位唯一分配，以及星载双小区接入日历。",
 };
 
 export default function Home() {
