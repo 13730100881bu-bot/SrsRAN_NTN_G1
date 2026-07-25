@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "screen_id": "global-smaller-constellation-screen-v1",
+  "audit_level": "coarse",
+  "exact": false,
+  "selectedScenario": null,
+  "selection_eligible": false,
+  "catalog_l1_count": 36411,
+  "catalog_version": "global-land-l1-v1",
+  "catalog_content_hash": "b39fe9c3ee9a9355b3546036b7f16e0fb858c953f8558cc4295122f2169fbe7a",
+  "catalog_hash_verified": true,
+  "sampling": {
+    "duration_seconds": 86400,
+    "step_seconds": 120,
+    "sample_count": 720
+  },
+  "planning_limits": {
+    "altitude_km": 500,
+    "entry_elevation_deg": 45,
+    "release_elevation_deg": 42,
+    "satellite_capacity": 256,
+    "cell_capacity": 128
+  },
+  "scenarios": [
+    {
+      "id": "smaller-46x65",
+      "inclination_deg": 60,
+      "planes": 46,
+      "satellites_per_plane": 65,
+      "phase_factor": 33,
+      "raan_offset_deg": 0,
+      "phase_offset_deg": 0,
+      "satellite_count": 2990,
+      "sample_count": 720,
+      "coverage_passed": true,
+      "assignment_passed": true,
+      "maximum_uncovered_l1": 0,
+      "minimum_entry_candidate_count": 2,
+      "minimum_eligible_candidate_count": 2,
+      "maximum_release_visible_l1_per_satellite": 254,
+      "maximum_entry_visible_l1_per_satellite": 209,
+      "maximum_assigned_l1_per_satellite": 87,
+      "maximum_balanced_cell_partition_peak": 44,
+      "maximum_owner_changes_per_sample": 36411,
+      "schedule_overflow_samples": 0,
+      "conclusive_assignment_samples": 720,
+      "assignment_method": "sticky_best_elevation_with_complete_inventory_bound",
+      "first_failure": null
+    },
+    {
+      "id": "current-42x84",
+      "inclination_deg": 60,
+      "planes": 42,
+      "satellites_per_plane": 84,
+      "phase_factor": 1,
+      "raan_offset_deg": 0,
+      "phase_offset_deg": 0,
+      "satellite_count": 3528,
+      "sample_count": 720,
+      "coverage_passed": true,
+      "assignment_passed": true,
+      "maximum_uncovered_l1": 0,
+      "minimum_entry_candidate_count": 1,
+      "minimum_eligible_candidate_count": 1,
+      "maximum_release_visible_l1_per_satellite": 254,
+      "maximum_entry_visible_l1_per_satellite": 209,
+      "maximum_assigned_l1_per_satellite": 87,
+      "maximum_balanced_cell_partition_peak": 44,
+      "maximum_owner_changes_per_sample": 36411,
+      "schedule_overflow_samples": 0,
+      "conclusive_assignment_samples": 720,
+      "assignment_method": "sticky_best_elevation_with_complete_inventory_bound",
+      "first_failure": null
+    }
+  ],
+  "smallest_passing_sampled_candidate": {
+    "id": "smaller-46x65",
+    "satellite_count": 2990,
+    "planes": 46,
+    "satellites_per_plane": 65
+  },
+  "limitations": [
+    "fixed_step_sampling_is_not_continuous_coverage_proof",
+    "orbit_epoch_and_absolute_raan_phase_not_frozen",
+    "owner_change_counts_at_120_second_steps_are_not_handover_evidence",
+    "smallest_passing_candidate_is_only_smallest_in_this_manifest",
+    "scenarios_exceeding_the_complete_inventory_capacity_bound_require_full_matching",
+    "gateway_constraints_not_modeled",
+    "n_minus_one_failure_audit_not_run",
+    "pci_time_conflict_audit_not_run",
+    "software_planning_evidence_only"
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "screen_id": "global-smaller-constellation-screen-v1",
+  "catalog_version": "global-land-l1-v1",
+  "catalog_content_hash": "b39fe9c3ee9a9355b3546036b7f16e0fb858c953f8558cc4295122f2169fbe7a",
+  "altitude_km": 500,
+  "entry_elevation_deg": 45,
+  "release_elevation_deg": 42,
+  "duration_seconds": 86400,
+  "step_seconds": 120,
+  "satellite_capacity": 256,
+  "cell_capacity": 128,
+  "scenarios": [
+    {
+      "id": "current-42x84",
+      "inclination_deg": 60,
+      "planes": 42,
+      "satellites_per_plane": 84,
+      "phase_factor": 1,
+      "raan_offset_deg": 0,
+      "phase_offset_deg": 0
+    },
+    {
+      "id": "smaller-46x65",
+      "inclination_deg": 60,
+      "planes": 46,
+      "satellites_per_plane": 65,
+      "phase_factor": 33,
+      "raan_offset_deg": 0,
+      "phase_offset_deg": 0
+    }
+  ]
+}
