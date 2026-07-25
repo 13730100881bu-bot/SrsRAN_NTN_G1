@@ -37,7 +37,11 @@ type CatalogMetadata = {
   l2Count?: number;
   counts?: { l1?: number; l2?: number; fullL1?: number; edgeL1?: number };
   integrity?: { sha256?: string };
-  generation?: { equalAreaGrid?: boolean; maximumRelativeAreaDeviationPct?: number };
+  generation?: {
+    equalAreaGrid?: boolean;
+    l1NominalSpacingKm?: number;
+    maximumRelativeAreaDeviationPct?: number;
+  };
   [key: string]: unknown;
 };
 type WorkerAnalysis = {
@@ -452,6 +456,7 @@ export function GlobalPlanner() {
               satellite={analysisSatellite}
               entryAngularRadiusDeg={entryRadiusKm / EARTH_RADIUS_KM * 180 / Math.PI}
               holdAngularRadiusDeg={holdRadiusKm / EARTH_RADIUS_KM * 180 / Math.PI}
+              positionSpacingKm={Number(metadata.generation?.l1NominalSpacingKm ?? 60)}
               landUrl={LAND_TOPOLOGY_URL}
               onSelectCell={setSelectedCellId}
             />

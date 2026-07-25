@@ -46,12 +46,13 @@ test("server-renders the conclusion-first NTN engineering review", async () => {
 });
 
 test("audit evidence remains separate from the final engineering decision", async () => {
-  const [audit, seedSnapshot, f1Day, planner, globalMap, orbitView, beamAnimation, animationModel, css] = await Promise.all([
+  const [audit, seedSnapshot, f1Day, planner, globalMap, hexagonModel, orbitView, beamAnimation, animationModel, css] = await Promise.all([
     readFile(new URL("../app/global-constellation-audit.json", import.meta.url), "utf8").then(JSON.parse),
     readFile(new URL("../app/global-constellation-snapshot.json", import.meta.url), "utf8").then(JSON.parse),
     readFile(new URL("../app/global-constellation-f1-day-coarse.json", import.meta.url), "utf8").then(JSON.parse),
     readFile(new URL("../app/global-planner.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/global-map.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/global-position-hexagon.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/global-orbit-view.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/beam-hopping-animation.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/beam-hopping-animation-model.ts", import.meta.url), "utf8"),
@@ -112,6 +113,17 @@ test("audit evidence remains separate from the final engineering decision", asyn
   assert.match(globalMap, /滚轮缩放 · 点击选择一级波位/);
   assert.match(globalMap, /addEventListener\("wheel", handleWheel, \{ passive: false \}\)/);
   assert.match(globalMap, /createGlobalMapProjection/);
+  assert.match(globalMap, /一级波位六边形边界/);
+  assert.match(globalMap, /每个六边形代表一个一级波位/);
+  assert.match(globalMap, /createGlobalPositionHexagon/);
+  assert.match(globalMap, /drawHexagonLayer/);
+  assert.match(globalMap, /baseLayerRef/);
+  assert.match(globalMap, /Per-second visibility changes only repaint the overlays/);
+  assert.match(globalMap, /getComputedStyle\(parent\)\.minHeight/);
+  assert.doesNotMatch(globalMap, /fillRect\(point\[0\] - 0\.5/);
+  assert.match(hexagonModel, /HEXAGON_BEARINGS_DEG = \[0, 60, 120, 180, 240, 300\]/);
+  assert.match(hexagonModel, /spacingKm \/ Math\.sqrt\(3\)/);
+  assert.match(planner, /positionSpacingKm=\{Number\(metadata\.generation\?\.l1NominalSpacingKm \?\? 60\)\}/);
   assert.match(globalMap, /恢复全图/);
 
   const navOrder = ["audit", "coverage", "orbit", "access"].map((key) => planner.indexOf(`${key}: {`));
