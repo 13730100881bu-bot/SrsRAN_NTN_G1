@@ -1,7 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { geoCircle, geoEquirectangular, geoPath, type GeoPermissibleObjects } from "d3-geo";
+import { geoCircle, geoPath, type GeoPermissibleObjects } from "d3-geo";
+import {
+  createGlobalMapProjection,
+  DEFAULT_GLOBAL_MAP_VIEW,
+  GLOBAL_MAP_MAX_ZOOM,
+  GLOBAL_MAP_MIN_ZOOM,
+  zoomGlobalMapViewAt,
+  type GlobalMapView,
+} from "./global-map-view";
 import { landFeatureFromTopology, type LandTopology } from "./land-topology";
 
 export type GlobalMapCell = {
@@ -37,8 +45,10 @@ export function GlobalCoverageMap({
   onSelectCell,
 }: GlobalCoverageMapProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const mapViewRef = useRef<GlobalMapView>(DEFAULT_GLOBAL_MAP_VIEW);
   const [land, setLand] = useState<GeoPermissibleObjects | null>(null);
   const [landError, setLandError] = useState("");
+  const [mapView, setMapView] = useState<GlobalMapView>(DEFAULT_GLOBAL_MAP_VIEW);
   const visibleIds = useMemo(() => new Set(visibleCells.map(({ id }) => id)), [visibleCells]);
 
   useEffect(() => {
@@ -52,6 +62,34 @@ export function GlobalCoverageMap({
       .catch((error) => { if (!cancelled) setLandError(error instanceof Error ? error.message : String(error)); });
     return () => { cancelled = true; };
   }, [landUrl]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return undefined;
+
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const bounds = canvas.getBoundingClientRect();
+      const deltaPixels = event.deltaY * (event.deltaMode === WheelEvent.DOM_DELTA_LINE
+        ? 16
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? bounds.height : 1);
+      const current = mapViewRef.current;
+      const next = zoomGlobalMapViewAt(
+        current,
+        current.zoom * Math.exp(-deltaPixels * 0.0015),
+        [event.clientX - bounds.left, event.clientY - bounds.top],
+        bounds.width,
+        bounds.height,
+      );
+      if (next.zoom === current.zoom && next.centerLon === current.centerLon && next.centerLat === current.centerLat) return;
+
+      mapViewRef.current = next;
+      setMapView(next);
+    };
+
+    canvas.addEventListener("wheel", handleWheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", handleWheel);
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -73,10 +111,7 @@ export function GlobalCoverageMap({
       context.setTransform(ratio, 0, 0, ratio, 0, 0);
       context.clearRect(0, 0, width, height);
 
-      const projection = geoEquirectangular()
-        .translate([width / 2, height / 2])
-        .scale(Math.min(width / (2 * Math.PI), height / Math.PI) * 0.97)
-        .precision(0.2);
+      const projection = createGlobalMapProjection(width, height, mapView);
       const path = geoPath(projection, context);
 
       context.fillStyle = "#0c2730";
@@ -187,15 +222,33 @@ export function GlobalCoverageMap({
     observer.observe(parent);
     draw();
     return () => observer.disconnect();
-  }, [candidateCounts, cells, entryAngularRadiusDeg, holdAngularRadiusDeg, land, satellite, selectedCellId, visibleCells, visibleIds]);
+  }, [candidateCounts, cells, entryAngularRadiusDeg, holdAngularRadiusDeg, land, mapView, satellite, selectedCellId, visibleCells, visibleIds]);
+
+  const changeZoom = (requestedZoom: number) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const bounds = canvas.getBoundingClientRect();
+    const next = zoomGlobalMapViewAt(
+      mapViewRef.current,
+      requestedZoom,
+      [bounds.width / 2, bounds.height / 2],
+      bounds.width,
+      bounds.height,
+    );
+    mapViewRef.current = next;
+    setMapView(next);
+  };
+
+  const resetMapView = () => {
+    mapViewRef.current = DEFAULT_GLOBAL_MAP_VIEW;
+    setMapView(DEFAULT_GLOBAL_MAP_VIEW);
+  };
 
   const selectNearest = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const bounds = canvas.getBoundingClientRect();
-    const projection = geoEquirectangular()
-      .translate([bounds.width / 2, bounds.height / 2])
-      .scale(Math.min(bounds.width / (2 * Math.PI), bounds.height / Math.PI) * 0.97);
+    const projection = createGlobalMapProjection(bounds.width, bounds.height, mapViewRef.current);
     const coordinate = projection.invert?.([event.clientX - bounds.left, event.clientY - bounds.top]);
     if (!coordinate) return;
     let nearest: GlobalMapCell | undefined;
@@ -214,13 +267,22 @@ export function GlobalCoverageMap({
       <canvas
         ref={canvasRef}
         onPointerDown={selectNearest}
-        aria-label={`全球陆地波位地图；${satellite.id} 当前几何可见 ${visibleCells.length} 个 L1`}
+        aria-label={`全球陆地一级波位地图；${satellite.id} 当前几何可见 ${visibleCells.length} 个一级波位；支持滚轮缩放和点击选择`}
       />
       {landError ? <p className="map-error">陆地边界加载失败：{landError}</p> : null}
+      <div className="map-zoom-panel">
+        <span>滚轮缩放 · 点击选择一级波位</span>
+        <div aria-label="地图缩放控制">
+          <button type="button" aria-label="缩小地图" disabled={mapView.zoom <= GLOBAL_MAP_MIN_ZOOM} onClick={() => changeZoom(mapView.zoom / 1.5)}>−</button>
+          <output aria-live="polite" aria-label={`当前地图缩放比例 ${Math.round(mapView.zoom * 100)}%`}>{Math.round(mapView.zoom * 100)}%</output>
+          <button type="button" aria-label="放大地图" disabled={mapView.zoom >= GLOBAL_MAP_MAX_ZOOM} onClick={() => changeZoom(mapView.zoom * 1.5)}>+</button>
+          <button type="button" className="map-reset-button" disabled={mapView.zoom <= GLOBAL_MAP_MIN_ZOOM} onClick={resetMapView}>恢复全图</button>
+        </div>
+      </div>
       <div className="map-legend" aria-label="地图图例">
         <span><i className="entry" />≥45° 可新接入</span>
         <span><i className="hold" />42°～45° 仅保持</span>
-        <span><i className="visible" />所选卫星可见L1</span>
+        <span><i className="visible" />所选卫星可见一级波位</span>
         <span><i className="gap" />当前时刻无≥45°候选</span>
       </div>
     </div>

@@ -86,8 +86,16 @@
 
 .global-map-canvas, .global-orbit-canvas { position: relative; min-height: 570px; overflow: hidden; background: #0c2730; }
 .global-map-canvas canvas, .global-orbit-canvas canvas { display: block; width: 100%; height: 100%; }
-.global-map-canvas canvas { cursor: crosshair; }
+.global-map-canvas canvas { cursor: crosshair; touch-action: manipulation; }
 .global-orbit-canvas canvas { cursor: grab; }
+.map-zoom-panel { position: absolute; top: 10px; right: 10px; display: grid; justify-items: end; gap: 5px; color: #e9f3f1; }
+.map-zoom-panel > span { padding: 5px 8px; background: #081d24e8; font-size: 10px; }
+.map-zoom-panel > div { display: flex; align-items: center; overflow: hidden; border: 1px solid #4b6971; background: #081d24ed; }
+.map-zoom-panel button { min-width: 34px; min-height: 32px; padding: 0 8px; border: 0; border-right: 1px solid #4b6971; color: #eef7f5; background: transparent; cursor: pointer; font: 650 15px/1 ui-monospace, monospace; }
+.map-zoom-panel button:hover:not(:disabled), .map-zoom-panel button:focus-visible { background: #174552; }
+.map-zoom-panel button:disabled { color: #748b91; cursor: default; }
+.map-zoom-panel output { min-width: 50px; color: #70cfee; font: 650 10px/1 ui-monospace, monospace; text-align: center; }
+.map-zoom-panel .map-reset-button { min-width: 70px; border-right: 0; font: 650 10px/1.2 system-ui, sans-serif; }
 .map-legend { position: absolute; left: 12px; bottom: 11px; padding: 8px 10px; display: flex; flex-wrap: wrap; gap: 7px 14px; color: #dce9e5; background: #0a222be8; font-size: 10px; }
 .map-legend span { display: flex; align-items: center; gap: 5px; }
 .map-legend i { width: 14px; height: 3px; display: block; background: #42c2ed; }
@@ -291,6 +299,8 @@
   .global-stage > header, .access-summary { align-items: flex-start; flex-direction: column; }
   .global-stage header > span { max-width: none; text-align: left; }
   .global-map-canvas, .global-orbit-canvas, .orbit-fallback { min-height: 350px; }
+  .map-zoom-panel { top: 8px; right: 8px; }
+  .map-zoom-panel > span { display: none; }
   .map-legend { right: 8px; left: 8px; }
   .decision-hero h2 { font-size: 20px; }
   .access-guide, .access-cell-overview { margin: 10px; }

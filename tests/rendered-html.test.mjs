@@ -19,6 +19,7 @@ test("server-renders the conclusion-first NTN engineering review", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = (await response.text()).replaceAll("<!-- -->", "");
+  const visibleHtml = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "");
   assert.match(html, /NTN 全球陆地接入方案/);
   assert.match(html, /57°S～57°N陆地/);
   assert.match(html, /最终采用：2,990颗/);
@@ -40,15 +41,17 @@ test("server-renders the conclusion-first NTN engineering review", async () => {
   assert.doesNotMatch(html, /3,528|历史展示对照|未采用的初始方案|已淘汰的初始排列|不再作为目标规模|动作演示|STEP|当前无选定方案|为什么还不能写|阶段判断|进入候选复核|尚未最终定案|最终数量尚未选定|不代表最终选型/);
   assert.doesNotMatch(html, /64 个地固|地固 NCI|NCI 属于地固|每星 84 个 L1/);
   assert.doesNotMatch(html, /F=0|F=1|<th>F<\/th>/);
+  assert.doesNotMatch(visibleHtml, /\bL1\b|\bL2\b|global-land-l1-v1/i);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
 });
 
 test("audit evidence remains separate from the final engineering decision", async () => {
-  const [audit, seedSnapshot, f1Day, planner, orbitView, css] = await Promise.all([
+  const [audit, seedSnapshot, f1Day, planner, globalMap, orbitView, css] = await Promise.all([
     readFile(new URL("../app/global-constellation-audit.json", import.meta.url), "utf8").then(JSON.parse),
     readFile(new URL("../app/global-constellation-snapshot.json", import.meta.url), "utf8").then(JSON.parse),
     readFile(new URL("../app/global-constellation-f1-day-coarse.json", import.meta.url), "utf8").then(JSON.parse),
     readFile(new URL("../app/global-planner.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/global-map.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/global-orbit-view.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/global.css", import.meta.url), "utf8"),
   ]);
@@ -93,6 +96,11 @@ test("audit evidence remains separate from the final engineering decision", asyn
   assert.doesNotMatch(orbitView, /WireframeGeometry/);
   assert.doesNotMatch(orbitView, /satellites\.length\.toLocaleString|显示 \$\{satellites\.length\} 颗卫星/);
   assert.match(planner, /landUrl=\{LAND_TOPOLOGY_URL\}/);
+  assert.doesNotMatch(`${planner}\n${globalMap}`, /（L1）|（L2）|个L1|个L2|可见L1|负责L1|未分配L1|<th>L1<\/th>/);
+  assert.match(globalMap, /滚轮缩放 · 点击选择一级波位/);
+  assert.match(globalMap, /addEventListener\("wheel", handleWheel, \{ passive: false \}\)/);
+  assert.match(globalMap, /createGlobalMapProjection/);
+  assert.match(globalMap, /恢复全图/);
 
   const navOrder = ["audit", "coverage", "orbit", "access"].map((key) => planner.indexOf(`${key}: {`));
   assert.ok(navOrder.every((index) => index >= 0));

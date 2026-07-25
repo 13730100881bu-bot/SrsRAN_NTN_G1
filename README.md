@@ -21,22 +21,22 @@
 
 星座筛选由仓库根目录的 `utils/ntn/constellation_screen.mjs` 生成可复现报告。最终方案与上线验收分开：采用 2,990 星的结论已经确定，固定步长报告仍不能写成全球连续覆盖正式通过。
 
-旧 `Walker Delta 53°:720/30/1`、大陆及海南 `2,620` 个 L1 / `18,208` 个 L2、每星 `42/84` 日历容量和相应一天 120 s 采样结果，均保留为历史中国样例，不是当前全球基线。
+旧 `Walker Delta 53°:720/30/1`、大陆及海南 `2,620` 个一级波位 / `18,208` 个二级波位、每星 `42/84` 日历容量和相应一天 120 s 采样结果，均保留为历史中国样例，不是当前全球基线。
 
 ## 已生成的全球波位目录
 
 Web 已使用本地 `world-atlas@2.0.2` 打包的 Natural Earth 4.1.0、`1:50m` land 数据生成 `57°S～57°N` 目录：
 
-- `36,411` 个 L1，其中 `33,871` 个 full、`2,540` 个 edge。
-- `249,375` 个有效 L2。
+- `36,411` 个一级波位，其中 `33,871` 个完整波位、`2,540` 个边缘波位。
+- `249,375` 个有效二级波位。
 - 244 个等 `sin(latitude)` 纬度带；目标球面单元面积 `3,117.691454 km²`，最大面积偏差 `0.1115%`。
-- L1 使用稳定顺序号 `G000001`～`G036411`；L2 使用 `<L1>-0`～`<L1>-6`，仅为 `childMask` 中有效的局部槽位生成 ID。
+- 一级波位使用稳定顺序号 `G000001`～`G036411`；二级波位使用 `<一级波位编号>-0`～`<一级波位编号>-6`，仅为 `childMask` 中有效的局部槽位生成 ID。
 - cells 完整性 SHA-256：`b39fe9c3ee9a9355b3546036b7f16e0fb858c953f8558cc4295122f2169fbe7a`。
 
 实现与数据入口：
 
 - 生成器：[`scripts/generate-global-land-catalog.mjs`](scripts/generate-global-land-catalog.mjs)
-- 紧凑目录：[`public/data/global-land-l1-v1.json`](public/data/global-land-l1-v1.json)
+- 紧凑目录：[全球陆地波位数据文件](public/data/global-land-l1-v1.json)
 - 本地陆地源：[`public/data/land-50m.json`](public/data/land-50m.json)
 - 三维地球：卫星负载页面复用同一份 Natural Earth 数据绘制陆地、海洋和经纬网，不依赖外部地图服务。
 - loader/type：[`app/beam-catalog.ts`](app/beam-catalog.ts)

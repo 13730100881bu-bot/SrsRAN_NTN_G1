@@ -120,6 +120,12 @@ const formatClock = (seconds: number) => {
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")}Z`;
 };
 
+function catalogDisplayName(version: unknown) {
+  if (typeof version !== "string" || version.length === 0) return "目录载入中";
+  const revision = /(?:^|-)v(\d+)$/.exec(version)?.[1];
+  return revision ? `全球陆地波位目录 v${revision}` : "全球陆地波位目录";
+}
+
 function enabledChildren(mask: GlobalMapCell["childMask"]) {
   if (mask === undefined) return 7;
   if (Array.isArray(mask)) return mask.filter(Boolean).length;
@@ -354,7 +360,7 @@ export function GlobalPlanner() {
     ? "全网唯一分配正在计算"
     : assignmentSnapshot.unassignedCount > 0
     ? `${assignmentSnapshot.unassignedCount}个区域尚未分配`
-    : `当前实际负责${assignmentSnapshot.selectedAssignedCount}个L1`;
+    : `当前实际负责${assignmentSnapshot.selectedAssignedCount}个一级波位`;
   const currentJudgement = !catalogReady
     ? "正在载入全球波位目录"
     : view === "coverage"
@@ -367,6 +373,7 @@ export function GlobalPlanner() {
     && assignmentSnapshot.unassignedCount === 0
     && largestOnboardCell <= CELL_CAPACITY;
   const ssbOpportunityHeadroom = BASELINE_L1_CAPACITY.guaranteedDownlinkVisits - CELL_CAPACITY;
+  const catalogName = catalogDisplayName(metadata.version);
 
   return (
     <main className="global-shell">
@@ -419,8 +426,8 @@ export function GlobalPlanner() {
           <div><dt>动画 / 覆盖快照</dt><dd>{formatClock(timeSeconds)} / {formatClock(coverageEpoch)}</dd></div>
           <div><dt>一级波位</dt><dd>{selectedCell?.id ?? selectedCellId}</dd></div>
           <div><dt>所选卫星</dt><dd>{selectedSatellite.id}</dd></div>
-          <div><dt>卫星可见L1</dt><dd>{analysis.visibleCount}</dd></div>
-          <div><dt>卫星实际负责L1</dt><dd>{assignmentReady ? `${assignmentSnapshot.selectedAssignedCount} / ${SATELLITE_CAPACITY}` : "计算中"}</dd></div>
+          <div><dt>卫星可见一级波位</dt><dd>{analysis.visibleCount}</dd></div>
+          <div><dt>卫星实际负责一级波位</dt><dd>{assignmentReady ? `${assignmentSnapshot.selectedAssignedCount} / ${SATELLITE_CAPACITY}` : "计算中"}</dd></div>
           <div className={currentJudgement.includes("超出") || currentJudgement.includes("无可接入") ? "is-failure" : "is-pass"}><dt>当前结论</dt><dd>{currentJudgement}</dd></div>
         </dl>
       </section> : null}
@@ -428,7 +435,7 @@ export function GlobalPlanner() {
       {view === "coverage" ? (
         <section className="global-workspace coverage-workspace">
           <article className="global-stage">
-            <header><div><p>45°接入 · 42°保持</p><h2>全球陆地覆盖状态</h2></div><span>{catalog.length.toLocaleString("en-US")}个L1 · {Number(metadata.counts?.l2 ?? 0).toLocaleString("en-US")}个L2 · {String(metadata.version ?? "载入中")}</span></header>
+            <header><div><p>45°接入 · 42°保持</p><h2>全球陆地覆盖状态</h2></div><span>{catalog.length.toLocaleString("en-US")}个一级波位 · {Number(metadata.counts?.l2 ?? 0).toLocaleString("en-US")}个二级波位 · {catalogName}</span></header>
             <GlobalCoverageMap
               cells={catalog}
               visibleCells={analysis.cells}
@@ -442,8 +449,8 @@ export function GlobalPlanner() {
             />
           </article>
           <aside className="global-inspector">
-            <header><p>已选一级波位（L1）</p><h2>{selectedCell?.id ?? "目录载入中"}</h2><span className={`position-status ${entryCandidates.length > 0 ? "is-pass" : "is-failure"}`}>{entryCandidates.length > 0 ? "当前可接入" : "当前不可接入"}</span></header>
-            {selectedCell ? <dl><div><dt>地面坐标</dt><dd>{selectedCell.lat.toFixed(4)}°, {selectedCell.lon.toFixed(4)}°</dd></div><div><dt>有效二级波位（L2）</dt><dd>{enabledChildren(selectedCell.childMask)} / 7</dd></div><div><dt>45°以上候选卫星</dt><dd>{selectedGlobalCandidateCount}颗</dd></div><div><dt>最佳候选</dt><dd>{bestEntryCandidate ? `${bestEntryCandidate.id} · ${bestEntryCandidate.elevation.toFixed(1)}°` : "无"}</dd></div><div><dt>所选卫星</dt><dd>{selectedIsVisible ? "可覆盖该波位" : "未达到45°"}</dd></div><div><dt>当前全局空窗</dt><dd className={uncoveredCount > 0 ? "is-failure" : ""}>{uncoveredCount}个L1</dd></div></dl> : null}
+            <header><p>已选一级波位</p><h2>{selectedCell?.id ?? "目录载入中"}</h2><span className={`position-status ${entryCandidates.length > 0 ? "is-pass" : "is-failure"}`}>{entryCandidates.length > 0 ? "当前可接入" : "当前不可接入"}</span></header>
+            {selectedCell ? <dl><div><dt>地面坐标</dt><dd>{selectedCell.lat.toFixed(4)}°, {selectedCell.lon.toFixed(4)}°</dd></div><div><dt>有效二级波位</dt><dd>{enabledChildren(selectedCell.childMask)} / 7</dd></div><div><dt>45°以上候选卫星</dt><dd>{selectedGlobalCandidateCount}颗</dd></div><div><dt>最佳候选</dt><dd>{bestEntryCandidate ? `${bestEntryCandidate.id} · ${bestEntryCandidate.elevation.toFixed(1)}°` : "无"}</dd></div><div><dt>所选卫星</dt><dd>{selectedIsVisible ? "可覆盖该波位" : "未达到45°"}</dd></div><div><dt>当前全局空窗</dt><dd className={uncoveredCount > 0 ? "is-failure" : ""}>{uncoveredCount}个一级波位</dd></div></dl> : null}
             <button type="button" className="candidate-button" disabled={entryCandidates.length === 0} onClick={selectBestCandidate}>选用仰角最高的候选卫星</button>
             <section className="candidate-list">
               <h3>候选卫星（按仰角列前8颗）</h3>
@@ -474,13 +481,13 @@ export function GlobalPlanner() {
               <div><dt>轨道面 / 槽位</dt><dd>P{String(selectedSatellite.plane).padStart(2, "0")} / S{String(selectedSatellite.slot).padStart(2, "0")}</dd></div>
               <div><dt>星下点</dt><dd>{selectedSatellite.lat.toFixed(2)}°, {selectedSatellite.lon.toFixed(2)}°</dd></div>
               <div><dt>快照时刻</dt><dd>{formatClock(coverageEpoch)}</dd></div>
-              <div><dt>当前能看到的L1</dt><dd>{analysis.visibleCount}个</dd></div>
-              <div><dt>当前实际负责的L1</dt><dd>{assignmentReady ? `${assignmentSnapshot.selectedAssignedCount} / ${SATELLITE_CAPACITY}` : "计算中"}</dd></div>
-              <div><dt>容量余量</dt><dd>{assignmentReady ? `${SATELLITE_CAPACITY - assignmentSnapshot.selectedAssignedCount}个L1` : "计算中"}</dd></div>
+              <div><dt>当前能看到的一级波位</dt><dd>{analysis.visibleCount}个</dd></div>
+              <div><dt>当前实际负责的一级波位</dt><dd>{assignmentReady ? `${assignmentSnapshot.selectedAssignedCount} / ${SATELLITE_CAPACITY}` : "计算中"}</dd></div>
+              <div><dt>容量余量</dt><dd>{assignmentReady ? `${SATELLITE_CAPACITY - assignmentSnapshot.selectedAssignedCount}个一级波位` : "计算中"}</dd></div>
               <div><dt>两个星载小区</dt><dd>{assignmentReady ? `${assignmentSnapshot.selectedAssignedByCell[0]} / ${assignmentSnapshot.selectedAssignedByCell[1]}` : "计算中"}</dd></div>
               <div><dt>全网实际负责峰值</dt><dd>{assignmentReady ? `${assignmentSnapshot.peakAssigned} · ${assignmentSnapshot.peakAssignedSatelliteId}` : "计算中"}</dd></div>
               <div><dt>单星可见峰值</dt><dd>{fleetSnapshot.peakVisible} · {fleetSnapshot.peakSatelliteId || "计算中"}</dd></div>
-              <div><dt>当前未分配L1</dt><dd className={assignmentReady && assignmentSnapshot.unassignedCount > 0 ? "is-failure" : ""}>{assignmentReady ? `${assignmentSnapshot.unassignedCount}个` : "计算中"}</dd></div>
+              <div><dt>当前未分配一级波位</dt><dd className={assignmentReady && assignmentSnapshot.unassignedCount > 0 ? "is-failure" : ""}>{assignmentReady ? `${assignmentSnapshot.unassignedCount}个` : "计算中"}</dd></div>
             </dl>
             <details className="technical-details"><summary>计算边界</summary><p>“可见”表示卫星在几何上能看到该区域；“实际负责”表示完成全网唯一分配后交给这颗卫星的区域。容量只检查实际负责的区域。轨道模型仍需用真实星历、地面站、功率和干扰条件复核。</p></details>
           </aside>
@@ -571,7 +578,7 @@ export function GlobalPlanner() {
                 return (
                   <section className="cell-calendar" key={bank}>
                     <header>
-                      <div><p>星载小区 {bank === 0 ? "A" : "B"}</p><h3>{cellCount} / {CELL_CAPACITY}个L1 · 余量{CELL_CAPACITY - cellCount}</h3></div>
+                      <div><p>星载小区 {bank === 0 ? "A" : "B"}</p><h3>{cellCount} / {CELL_CAPACITY}个一级波位 · 余量{CELL_CAPACITY - cellCount}</h3></div>
                       <div className="cell-calendar-summary"><span>16路模拟 · 64路数字</span><small>NCI {identity?.nci ?? "未分配"} · PCI {identity?.pci ?? "未分配"} · Registry {baselineSatelliteCellPlanningContext.registryVersion}</small></div>
                     </header>
                     <div className="calendar-grid">
@@ -599,8 +606,8 @@ export function GlobalPlanner() {
           </details>
 
           <details className="access-detail-block visible-table">
-            <summary><span><b>查看完整可见波位表</b><small>{selectedSatellite.id}当前共{analysis.visibleCount}个 · {String(metadata.version ?? "载入中")}</small></span><em>原始数据</em></summary>
-            <div><table><thead><tr><th>L1</th><th>当前用途</th><th>仰角</th><th>45°可见区间</th><th>仰角时间线</th><th>距星下点</th><th>纬度</th><th>经度</th></tr></thead><tbody>{analysis.cells.map((cell) => { const bank = assignmentBankById.get(cell.id); return <tr key={cell.id}><td>{cell.id}</td><td>{bank === undefined ? "可见候选 · 由其他卫星负责" : `本星负责 · 小区${bank === 0 ? "A" : "B"}`}</td><td>{cell.elevationDeg?.toFixed(1) ?? "—"}°</td><td>{cell.visibleFromSeconds ?? "—"}…{cell.visibleUntilSeconds ?? "—"} s</td><td>{cell.elevationTimeline?.map((sample) => `${sample.offsetSeconds}:${sample.elevationDeg.toFixed(1)}°`).join(" / ") ?? "—"}</td><td>{cell.distanceKm.toFixed(1)} km</td><td>{cell.lat.toFixed(4)}°</td><td>{cell.lon.toFixed(4)}°</td></tr>; })}</tbody></table></div>
+            <summary><span><b>查看完整可见波位表</b><small>{selectedSatellite.id}当前共{analysis.visibleCount}个 · {catalogName}</small></span><em>原始数据</em></summary>
+            <div><table><thead><tr><th>一级波位编号</th><th>当前用途</th><th>仰角</th><th>45°可见区间</th><th>仰角时间线</th><th>距星下点</th><th>纬度</th><th>经度</th></tr></thead><tbody>{analysis.cells.map((cell) => { const bank = assignmentBankById.get(cell.id); return <tr key={cell.id}><td>{cell.id}</td><td>{bank === undefined ? "可见候选 · 由其他卫星负责" : `本星负责 · 小区${bank === 0 ? "A" : "B"}`}</td><td>{cell.elevationDeg?.toFixed(1) ?? "—"}°</td><td>{cell.visibleFromSeconds ?? "—"}…{cell.visibleUntilSeconds ?? "—"} s</td><td>{cell.elevationTimeline?.map((sample) => `${sample.offsetSeconds}:${sample.elevationDeg.toFixed(1)}°`).join(" / ") ?? "—"}</td><td>{cell.distanceKm.toFixed(1)} km</td><td>{cell.lat.toFixed(4)}°</td><td>{cell.lon.toFixed(4)}°</td></tr>; })}</tbody></table></div>
           </details>
 
           <details className="technical-details access-technical"><summary>这项结论还不代表什么</summary><p>当前页面证明的是离线规划能够排出接入日历。完整可见清单和实际负责清单还不能同时送入基站程序；真实广播、终端接入检测、功率、天线和射频切换也仍需在后续无线链路中验证。“已安排”不等于信号已经从天线发出。</p></details>
@@ -619,7 +626,7 @@ export function GlobalPlanner() {
         </section>
       ) : null}
 
-      <footer className="global-footer"><span>波位目录 {String(metadata.version ?? "载入中")} · SHA-256 {String(metadata.integrity?.sha256 ?? metadata.contentHash ?? "pending").slice(0, 16)}</span><p>最终方案：{smallerScreen.scenario.satelliteCount.toLocaleString("en-US")}颗 · {smallerScreen.scenario.planes}个轨道面 × 每面{smallerScreen.scenario.satellitesPerPlane}颗 · 45°进入 / 42°保持 · 上线前验收继续进行</p></footer>
+      <footer className="global-footer"><span>{catalogName} · SHA-256 {String(metadata.integrity?.sha256 ?? metadata.contentHash ?? "pending").slice(0, 16)}</span><p>最终方案：{smallerScreen.scenario.satelliteCount.toLocaleString("en-US")}颗 · {smallerScreen.scenario.planes}个轨道面 × 每面{smallerScreen.scenario.satellitesPerPlane}颗 · 45°进入 / 42°保持 · 上线前验收继续进行</p></footer>
     </main>
   );
 }
