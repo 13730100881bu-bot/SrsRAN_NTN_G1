@@ -544,6 +544,7 @@ export function GlobalPlanner() {
               selectedCellIdentities?.[1]?.nci ?? "unassigned-cell-b",
             ]}
             landUrl={LAND_TOPOLOGY_URL}
+            positionSpacingKm={Number(metadata.generation?.l1NominalSpacingKm ?? 60)}
           />
 
           <section className="access-answer-grid" aria-label="跳波束日历核心结论">

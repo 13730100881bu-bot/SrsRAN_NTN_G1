@@ -46,7 +46,7 @@ test("server-renders the conclusion-first NTN engineering review", async () => {
 });
 
 test("audit evidence remains separate from the final engineering decision", async () => {
-  const [audit, seedSnapshot, f1Day, planner, globalMap, hexagonModel, orbitView, beamAnimation, animationModel, css] = await Promise.all([
+  const [audit, seedSnapshot, f1Day, planner, globalMap, hexagonModel, orbitView, beamAnimation, beamMapLayout, animationModel, css] = await Promise.all([
     readFile(new URL("../app/global-constellation-audit.json", import.meta.url), "utf8").then(JSON.parse),
     readFile(new URL("../app/global-constellation-snapshot.json", import.meta.url), "utf8").then(JSON.parse),
     readFile(new URL("../app/global-constellation-f1-day-coarse.json", import.meta.url), "utf8").then(JSON.parse),
@@ -55,6 +55,7 @@ test("audit evidence remains separate from the final engineering decision", asyn
     readFile(new URL("../app/global-position-hexagon.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/global-orbit-view.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/beam-hopping-animation.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/beam-hopping-map-layout.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/beam-hopping-animation-model.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/global.css", import.meta.url), "utf8"),
   ]);
@@ -75,12 +76,18 @@ test("audit evidence remains separate from the final engineering decision", asyn
   assert.match(planner, /日历就是卫星轮流照向不同地面区域的时间安排/);
   assert.match(planner, /<BeamHoppingAnimation/);
   assert.match(planner, /cells=\{accessCapacityReady \? animationCells : \[\]\}/);
-  assert.match(beamAnimation, /卫星沿轨道连续运动，跳变的是波束指向/);
+  assert.match(beamAnimation, /地图自动放大到这颗卫星实际负责的区域/);
   assert.match(beamAnimation, /卫星如何轮流照向不同的一级波位/);
-  assert.match(beamAnimation, /播放跳波束动画/);
-  assert.match(beamAnimation, /动画经过放慢处理，不代表天线指向、信号功率、波束成形参数或真实无线发射已经执行/);
+  assert.match(beamAnimation, /播放动画/);
+  assert.match(beamAnimation, /不表示天线、波束成形或真实无线发射已经执行/);
   assert.match(beamAnimation, /const \[playing, setPlaying\] = useState\(false\)/);
   assert.match(beamAnimation, /<canvas/);
+  assert.match(beamAnimation, /createGlobalPositionHexagon/);
+  assert.match(beamAnimation, /geoMercator/);
+  assert.match(beamAnimation, /drawHexagonLayer/);
+  assert.doesNotMatch(beamAnimation, /geoAzimuthalEqualArea|createLinearGradient\(satelliteX|fillText\(cell\.id/);
+  assert.match(beamMapLayout, /createBeamAnimationMapViewport/);
+  assert.match(beamMapLayout, /const orderedCells = \[\.\.\.cells\]\.sort/);
   assert.match(animationModel, /createCellBeamSchedule/);
   assert.match(animationModel, /entry\.purpose === "ssb"/);
   assert.match(planner, /这颗卫星如何为实际负责的地面区域安排接入时段/);
@@ -138,7 +145,7 @@ test("audit evidence remains separate from the final engineering decision", asyn
   assert.match(css, /\.global-workspace \{[^}]*grid-template-columns:\s*1fr/);
   assert.match(css, /\.calendar-grid \{[^}]*grid-template-columns:\s*repeat\(2,\s*1fr\)/);
   assert.match(css, /\.access-answer-grid \{[^}]*grid-template-columns:\s*repeat\(2,\s*1fr\)/);
-  assert.match(css, /\.beam-animation-map \{[^}]*min-height:\s*390px/);
+  assert.match(css, /\.beam-animation-map \{[^}]*min-height:\s*430px/);
   assert.match(css, /\.beam-animation-controls \{[^}]*grid-template-columns:\s*auto\s+1fr/);
   assert.match(css, /\.decision-hero \{[^}]*grid-template-columns:\s*1fr/);
   assert.match(css, /@media \(max-width: 430px\)/);

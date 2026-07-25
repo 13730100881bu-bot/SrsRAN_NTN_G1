@@ -17,7 +17,7 @@ function makeCells(perBank) {
   );
 }
 
-test("animation turns the existing 80 ms access schedule into 32 readable frames", () => {
+test("animation turns the existing 80 ms access schedule into 32 schedule frames", () => {
   const frames = createBeamAnimationFrames(makeCells(16), "P02-S04", ["000000001", "000000002"]);
 
   assert.equal(BEAM_ANIMATION_CYCLE_MS, 80);
