@@ -16,7 +16,7 @@
 
 ## 2. 全球与轨道 seed
 
-当前目标是 `57°S～57°N` 全球陆地、500 km、候选/退出仰角 `45°/42°`。网页当前展示的 42×84、3,528 星只是比较基线，不是定案；46×65、2,990 星候选少 538 星，即减少 15.25%。该候选的一天/120 s 报告在 720/720 个离散时刻同时得到 `coverage=true` 和 `assignment=true`，但固定步长采样仍不证明采样间连续覆盖。当前保持 `selectedScenario=null`、`exact=false`。
+当前目标是 `57°S～57°N` 全球陆地、500 km、候选/退出仰角 `45°/42°`。最终方案采用 46×65、共 2,990 颗卫星，比 42×84、3,528 颗历史展示对照少 538 颗，即减少 15.25%。一天/120 s 报告在 720/720 个离散时刻同时得到 `coverage=true` 和 `assignment=true`。固定步长采样仍不证明采样间连续覆盖；`selectedScenario=null`、`exact=false` 表示上线验收尚未完成，不再表示卫星数量没有结论。
 
 旧 `53°:720/30/1`、大陆及海南 2,620 L1 和 24 小时/120 s 离散审计只作为历史中国样例。
 
@@ -199,9 +199,9 @@ L2 只有存在 PDU/DRB demand 且 applied 后才调度；`control_only` UE 不�
 
 ## 11. 精确审计与状态
 
-全球候选必须运行至少 7 天事件驱动审计，精确捕获 `45°/42°` 穿越、容量饱和、ownership 变化、PCI 冲突、SSB/PRACH deadline、gateway 和 N-1 事件。网页 3,528 星基线与 2,990 星候选都未被选择；当前 `selectedScenario=null`、`exact=false`。
+2,990 颗最终方案必须运行至少 7 天事件驱动验收，精确捕获 `45°/42°` 穿越、容量饱和、ownership 变化、PCI 冲突、SSB/PRACH deadline、gateway 和 N-1 事件。网页 3,528 颗模型仅为历史展示对照；当前 `selectedScenario=null`、`exact=false` 表示连续验收记录尚未完成。
 
-2,990 星候选已经完成一天/120 s 的 720 个离散时刻检查：
+2,990 颗最终方案已经完成一天/120 s 的 720 个离散时刻检查：
 
 | 证据层 | 720 个采样点结果 | 边界 |
 |---|---|---|
@@ -219,7 +219,7 @@ C++ 基站运行日志、pcap 或空口证据。
 | 全球目录生成器、asset 与 loader | 已实现 | Natural Earth 1:50m 生成 36,411 L1 / 249,375 L2；不是 CU-CP 运行态 |
 | 全球目录一致性 | 已有测试覆盖 | `catalog:check` 与 focused 目录测试 `6/6` 通过；`exactRegularSphericalHexagons=false`、`exactCoastlineClipping=false` |
 | actual assignment 128/256 日历包络 | 已有测试覆盖 | 最差 80 ms 日历 168 次机会、配置取 128 assigned L1/小区；不是波束数或 PHY/RU/RF 证明 |
-| 2,990 星一天 coarse 报告 | 已有离线规划证据 | 目录内容 hash 已重新校验；120 s 的 coverage 与 unique assignment 均为 720/720，actual 峰值 87/星、44/小区、overflow 0；公共 epoch 尚未冻结，仍非连续证明，也不是 C++ 运行态证据 |
+| 2,990 颗最终方案的一天 coarse 报告 | 已有离线规划证据 | 已采用为最终工程方案；目录内容 hash 已重新校验，120 s 的 coverage 与 unique assignment 均为 720/720，actual 峰值 87/星、44/小区、overflow 0；公共 epoch 尚未冻结，仍非连续证明，也不是 C++ 运行态证据 |
 | 完整可见清单 + 实际负责子集输入 | 规划中 | 当前 CU-CP 只有 `visible_l1_positions` 且会全部划入小区；双集合私有契约尚未实现 |
 | CU-CP 双小区版本化计划与日历 dry-run | 已有测试覆盖 | 保留完整 inventory、确定性划分、80/640 ms 审计、257 L1 显式 overflow、activation epoch 原子切换；不是全球覆盖证明 |
 | DU/MAC SSB/PRACH 软件 gate | 已有测试覆盖 | `applied` 仅表示匹配 version/hash/intents 的软件 snapshot；不含 position/port 或 RF evidence |
@@ -244,10 +244,10 @@ C++ 基站运行日志、pcap 或空口证据。
 ## 12. 下一步与声明边界
 
 1. 以已生成的 36,411 L1 / 249,375 L2 Web 目录做仿真输入，另行冻结正式运营 GIS 与精确海岸裁剪。
-2. 继续参数化扫描 Walker 星座；3,528 星是网页基线，2,990 星是 sampled candidate，二者都不预选。
+2. 以 46×65、2,990 颗作为最终工程方案继续验证；3,528 颗仅保留为历史网页展示对照。
 3. 为 CU-CP 增加最小私有双集合契约：完整可见清单用于审计，实际负责子集用于两个小区和日历；不得用一个字段冒充两者。
 4. 对 actual assignment 的 128/256 做 guard、功率、带宽、公共信令和 PRACH 降额，不裁剪完整可见清单。
 5. 冻结公共 epoch，运行至少 7 天事件驱动、gateway 和 N-1 审计。
-6. 生成全球 PCI 冲突图；报告经评审后才填写 `selectedScenario`。
+6. 生成全球 PCI 冲突图；7 天验收通过后填写 `selectedScenario` 审计记录。
 
 `80/640 ms`、20 ms occasion、2.5 ms sub-visit、`16/64`、`n10` 和 `48/8/8` 都是规划参数。128/256 只限定 actual assignment 中每小区/每星实际负责的 L1，是当前离散日历模型和 CU-CP 执行包络，不是波束数或协议常量。srsRAN 当前已实现单集合的管理中心版本化输入、两个稳定星载 NCI/PCI、输入集合的双小区划分与软件日历 gate；尚未实现完整可见清单与负责子集的双集合输入、全球连续覆盖证明、可信 Initial UL position sideband、模拟端口到硬件句柄映射或真实 PHY/RU/RF 跳变，因此这些能力仍不能标为 C++ 或 RF 运行态证据。

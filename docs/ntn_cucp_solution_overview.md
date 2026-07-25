@@ -1,6 +1,6 @@
 # NTN CU-CP 中文主方案
 
-> 这是一份“先看懂、再深入”的总纲。目标系统是**星载再生基站**：CU-CP 部署在卫星上，控制星上小区和跳波束资源。当前目标范围已扩展到南纬 `57°` 至北纬 `57°` 的全球陆地；本文同时保留当前工作区单星控制面原型和旧中国样例事实，并把它们与全球目标严格分栏。Web 搜索 seed 不等于星座定案，更不等于 CU-CP 运行态已经支持该目标。
+> 这是一份“先看懂、再深入”的总纲。目标系统是**星载再生基站**：CU-CP 部署在卫星上，控制星上小区和跳波束资源。最终工程方案采用 46 个轨道面、每面 65 颗，共 2,990 颗卫星，服务南纬 `57°` 至北纬 `57°` 的全球陆地。Web 离线结果是方案依据，不等于 CU-CP 或真实无线设备已经支持该目标。
 
 ## 1. 一句话看懂方案
 
@@ -18,16 +18,16 @@
 - F1AP 是中心与现场之间的传递通道。
 - AMF 是核心网一侧，接收位置、会话和寻呼相关信息。
 
-## 2. 两套基线必须分开
+## 2. 最终方案与历史实现必须分开
 
 ### 2.1 下一阶段目标规划
 
-目标架构面向南纬 `57°` 至北纬 `57°` 的全球陆地星载再生基站。全球 Web 目录已经实现并有 focused 测试覆盖；CUCP-035/036 已实现默认关闭的版本化双小区计划、完整 L1 inventory、接入日历 dry-run、原子激活和 SSB/PRACH 软件 gate。星座选择、7 天精确审计、可信 Initial UL position sideband，以及 PHY/RU/RF 真实跳波束仍为 `规划中`。
+目标架构面向南纬 `57°` 至北纬 `57°` 的全球陆地星载再生基站，最终采用 46×65、共 2,990 颗卫星。全球 Web 目录已经实现并有 focused 测试覆盖；CUCP-035/036 已实现默认关闭的版本化双小区计划、完整 L1 inventory、接入日历 dry-run、原子激活和 SSB/PRACH 软件 gate。7 天连续验收、可信 Initial UL position sideband，以及 PHY/RU/RF 真实跳波束仍为 `规划中`。
 
 | 项目 | 目标规划值 | 如何理解 |
 |---|---:|---|
 | 服务 mask | `57°S～57°N` 全球陆地 | 海洋和更高纬度不纳入本阶段连续服务验收 |
-| 轨道搜索 seed | `Walker Delta 60°:3528/42/0` | 42 个轨道面、每面 84 星、500 km、`F=0`；只用于启动搜索 |
+| 最终星座方案 | `Walker Delta 60°:2990/46/33` | 46 个轨道面、每面 65 颗、500 km；3,528 颗模型仅为历史展示对照 |
 | 新选 / 退出仰角 | `45° / 42°` | 形成 3° 滞回；500 km 下地面半径约 `448 / 494 km` |
 | 地固 L1 / L2 | `36,411 / 249,375` | Web 已生成 `G######` / `G######-n`；正式运营 GIS 尚未冻结 |
 | 星载 NR 小区 | 每星 `2` 个 | NCI/PCI 随星载小区，不地固、不跨星迁移 |
@@ -38,7 +38,7 @@
 | L1 ownership | 每个 epoch 最多一个 primary owner | target 可准备，但不成为第二个 primary |
 | L1 SSB / PRACH 重访 | `80 / 640 ms` | 均为规划参数，不是协议常量 |
 
-规划 NCI 是管理中心 registry 分配的 opaque 36-bit ID，不从 `satellite_id`、波位 ID 或坐标推导。若最终选择 3,528 星，则需要预留 `3,528 × 2 = 7,056` 个星载小区 NCI；该数字随最终星座变化。NCI 在 PLMN 内唯一，NCGI 由 PLMN identity 与 NCI 组合后全球唯一。无需额外引入 `onboard_cell_index` 或 `SatelliteCellBinding`。PCI 绑定长期星载小区，由“同频且同时可见”冲突图统一复用规划；它不随每次跳波束访问改变。当前还没有全球连续时间 PCI 冲突报告。
+规划 NCI 是管理中心 registry 分配的 opaque 36-bit ID，不从 `satellite_id`、波位 ID 或坐标推导。2,990 颗最终方案需要 `2,990 × 2 = 5,980` 个星载小区 NCI；现有 3,528 颗展示 registry 的 7,056 个 NCI 不能直接复用。NCI 在 PLMN 内唯一，NCGI 由 PLMN identity 与 NCI 组合后全球唯一。无需额外引入 `onboard_cell_index` 或 `SatelliteCellBinding`。PCI 绑定长期星载小区，由“同频且同时可见”冲突图统一复用规划；它不随每次跳波束访问改变。当前还没有全球连续时间 PCI 冲突报告。
 
 日历使用 10 ms access slot，每个 DL 端口在 slot 内有 4 次顺序 `2.5 ms` 子访问；三相位模拟 DL/UL 为 `11/5、11/5、10/6`。任意 80 ms 窗口的最差对齐仍有 42 个 DL port-occasion，即 168 次访问机会，配置容量取 `min(168,128)=128` L1/小区、256 L1/星。因此 128/256 是当前 Web 离散日历的最差相位硬保证，不是平均值或理论机会总数；真实 guard、功率、带宽、公共信令、PRACH 和 PHY/RU/RF 仍需工程复核。
 
@@ -53,8 +53,9 @@
 | `60°:3528/42/0`，`t=0` | 23 个 L1 无 45° 候选；峰值 visible load `206/256`；0 星溢出 | F=0 seed 明确失败，不可 selected |
 | `60°:3528/42/1`，`t=0` | 0 空窗；最少候选 1；峰值 `207/256`；0 星溢出 | 只证明该单一 epoch 的 coarse 条件 |
 | `60°:3528/42/1`，一天/120 s | `720/720` 离散 epoch 无空窗；最少候选 1；峰值 `209/256`；溢出 epoch 0 | `auditLevel=coarse`、`exact=false`，不证明采样间连续性 |
+| `60°:2990/46/33`，一天/120 s | `720/720` 离散 epoch 无空窗并完成唯一分配；实际负责峰值 `87/星`、`44/小区` | 最终采用方案的设计依据；仍需 7 天连续覆盖和真实无线验收 |
 
-[`global-constellation-audit.json`](../web_replicas/ntn_beam_planner/app/global-constellation-audit.json) 仍记录 `selectedScenario=null`、exact audit `status=not_run`。F=0 已排除；F=1 仍只是不可选择的 coarse 候选。没有真实 7 天事件驱动精确报告时，不得写“连续覆盖已通过”，也不得声称 N-1、handover、ready/applied、PCI 或 PHY/RU/RF 已验证。
+[`global-constellation-audit.json`](../web_replicas/ntn_beam_planner/app/global-constellation-audit.json) 仍记录 `selectedScenario=null`、exact audit `status=not_run`，表示连续验收记录尚未完成，不再表示卫星数量没有结论。没有真实 7 天事件驱动精确报告时，不得写“连续覆盖已通过”，也不得声称 N-1、handover、ready/applied、PCI 或 PHY/RU/RF 已验证。
 
 旧 `Walker Delta 53°:720/30/1`、大陆及海南 `2,620/18,208` 波位目录和一天 120 s 采样数字只作为历史中国样例保留。旧样例曾得到 `720/720` 离散快照、`1,261,561` 个旧 owner 变化/释放等结果；这些数字不能外推到全球 mask，也不是事件驱动 handover 报告。
 
@@ -306,10 +307,10 @@ CU-CP 是 NTN 资源权威，但分布式系统可能因为超时、重连或部
 | 资源 audit / repair 与 CLI | 已有测试覆盖 | query、compare、repair action 和命令测试存在 | 长时间掉线重连下的恢复稳定性 |
 | split attach、ICS、Capability、PDU Session、ping 基线 | 已有运行态证据 | 当前 srsUE/Open5GS/split 栈完成过基础业务链路 | 该基线本身不等于全部 NTN 功能通过 |
 | CUCP-075 系统测试编排 | 已实现 | live/sim 场景 registry 和统一入口已经存在 | 当前没有 `CUCP-075-*` suite summary，不能宣称整套已通过 |
-| 全球每星两个长期星载 NCI/PCI planning registry | 已有测试覆盖 | Web 生成 7,056 个唯一 36-bit NCI；CU-CP 接收显式 opaque identity，禁止运行时派生 | 局部 Walker proxy 不是全球连续可见性/RF 冲突图；registry 网络下发服务未实现 |
+| 历史 3,528 颗展示模型的星载 NCI/PCI registry | 已有测试覆盖 | Web 生成 7,056 个唯一 36-bit NCI；CU-CP 接收显式 opaque identity，禁止运行时派生 | 最终 2,990 颗方案所需的 5,980-NCI registry 尚未生成；局部 Walker proxy 也不是全球连续可见性/RF 冲突图 |
 | 全球目录生成器、asset 与 loader | 已实现 | Web 已生成并加载 36,411 L1 / 249,375 L2 | 不等于 CU-CP 运行态或正式运营 GIS 冻结 |
 | 全球目录确定性、land containment 与完整性 | 已有测试覆盖 | `catalog:check` 和 focused 目录测试 `6/6` 通过 | `exactRegularSphericalHexagons=false`、`exactCoastlineClipping=false` |
-| 全球 coarse visible inventory CLI 与报告 | 已有测试覆盖 | F=0 snapshot 失败；F=1 一天/120 s 为 720/720 离散 epoch | 固定步长采样不证明连续覆盖，不能 selected |
+| 全球 coarse visible inventory CLI 与报告 | 已有测试覆盖 | 2,990 颗方案一天/120 s 为 720/720 离散 epoch，并完成唯一分配 | 支持工程方案决定，但固定步长采样不证明连续覆盖 |
 | 全球 exact visible inventory 与 assignment | 规划中 | 目录和 coarse CLI 可作为输入 | 7 天事件驱动审计 `not_run`，`selectedScenario=null` |
 | `128 × 2 = 256` 日历硬保证 | 已有测试覆盖 | 最差 80 ms 日历 168 次机会，配置取 128/小区 | 尚无真实 guard/功率/带宽和 PHY/RU 证据 |
 | 版本化波位表、双小区划分与软件 activation gate | 已有测试覆盖 | CU-CP 完整 inventory、hash/version、80/640 ms 日历、原子切换与 DU/MAC software feedback | 尚无全球 producer、可信 Initial UL position 或 RF 证据 |
@@ -348,7 +349,7 @@ CU-CP 是 NTN 资源权威，但分布式系统可能因为超时、重连或部
 ### 阶段 A：完成离线规划闭环
 
 - 以已生成的 `G######` / `G######-n` Web 目录为仿真输入，另行评审正式运营 GIS、精确海岸裁剪和版本冻结；旧中国 2,620 L1 只留作回归样例。
-- 从已被 coarse 排除的 `60°:3528/42/0` 和尚未可选的 `60°:3528/42/1` 出发，继续扫描面数、每面星数、`F`、RAAN 和相位偏置；`selectedScenario` 在精确审计完成前保持为空。
+- 以最终采用的 `60°:2990/46/33` 为对象冻结公共 epoch 和绝对相位，完成 7 天连续验收；`selectedScenario` 在精确审计完成前保持为空。
 - 建立每星两个长期 opaque NCI 的 registry，并按同时可见、同频冲突图规划可复用 PCI。
 - 用事件驱动传播连续捕获 `45°/42°` 进入、退出、容量饱和和接管事件，至少运行 7 天，并加入 N-1、gateway、切换惩罚、ownership 冻结、滞回与 CHO。
 - 对 `128/256` 日历保证做 guard、功率、带宽、SIB/Paging/RAR 和上行 PRACH 工程复核，再把 2.5 ms retarget 交给 PHY/RU 验证。
@@ -393,7 +394,7 @@ CU-CP 是 NTN 资源权威，但分布式系统可能因为超时、重连或部
 - [接口边界合同](../ai_harness/context/ntn_cucp_interface_contracts.md)：RRC、F1AP、NGAP 和禁止层次。
 - [能力矩阵](../ai_harness/context/ntn_cucp_spec_matrix.md)：各能力是否属于 CU-CP。
 - [Task Change Index](ntn_cucp_task_change_index.md)：功能到代码和测试区域的索引。
-- [全球陆地轨道搜索方案](ntn_orbit_constellation_plan.md)：3528 星搜索 seed、7 天事件驱动审计和逐 L1 ownership。
+- [全球陆地轨道搜索方案](ntn_orbit_constellation_plan.md)：2,990 颗最终方案、7 天事件驱动验收和逐 L1 ownership。
 - [星载双小区与波位规划](ntn_beam_constellation_plan.md)：L1/L2 目录、NCI/PCI 和载荷容量边界。
 - [跳波束与初始接入设计](ntn_beam_hopping_access_plan.md)：`32/128` 资源日历、SSB 和 PRACH 时序。
 - [早期 LEO 500 km 分阶段计划](ntn_cucp_leo_500km_plan.md)：Phase 0～6 的演进记录。
@@ -405,4 +406,4 @@ CU-CP 是 NTN 资源权威，但分布式系统可能因为超时、重连或部
 - `已有测试覆盖` 表示存在对应测试资产或已有 focused 记录，不表示本次文档整理重新运行了 CTest。
 - `已有运行态证据` 只按链接摘要中的 PASS 范围表述，不扩大到 UE decode、PHY、RU 或跨厂家互通。
 - 本文同步当前类型、配置与软件运行边界；private contract 不等于公开协议字段或设备能力。
-- 全球 `G` 目录和 coarse audit CLI 在 Web 中已实现并有 focused 测试覆盖，但仍不是正式运营 GIS 或连续覆盖证明。F=0 seed 已在 `t=0` 失败；F=1 一天/120 s 的 `720/720` 仅为离散 coarse 证据。CU-CP 已实现每星两个稳定小区、`128/256` inventory/calendar 包络和 `80/640 ms` dry-run，DU/MAC 只实现软件 gate；2.5 ms 真实 retarget、全球逐 L1 producer/接管、可信 Initial UL position 和 PHY/RU/RF 仍未实现。精确审计为 `not_run`，`selectedScenario=null`。
+- 全球 `G` 目录和 coarse audit CLI 在 Web 中已实现并有 focused 测试覆盖，但仍不是正式运营 GIS 或连续覆盖证明。最终采用 46×65、2,990 颗；其一天/120 s 的 `720/720` 结果仅为离散设计依据。CU-CP 已实现每星两个稳定小区、`128/256` inventory/calendar 包络和 `80/640 ms` dry-run，DU/MAC 只实现软件 gate；2.5 ms 真实 retarget、全球逐 L1 producer/接管、可信 Initial UL position 和 PHY/RU/RF 仍未实现。精确审计为 `not_run`，`selectedScenario=null`，表示上线验收尚未完成。

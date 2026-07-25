@@ -63,10 +63,12 @@ Use a staged validation ladder:
 - The legacy beam-table prototype uses 843 digital service beams, 137 analog
   access beams, 16 active analog beams and 256 loaded digital beams. These are
   not the onboard position-plan profile's `2 cells × 16/64` resource limits.
-- The next-stage target covers global land from 57 degrees south to 57 degrees
-  north. It starts the search from `Walker Delta 60°:3528/42/0` at 500 km, but
-  this is a seed, not a selected or accepted constellation. `selectedScenario`
-  remains empty until a real seven-day event-driven exact audit is reviewed.
+- The final engineering design covers global land from 57 degrees south to
+  57 degrees north with `Walker Delta 60°:2990/46/33` at 500 km: 46 planes,
+  65 satellites per plane. The old 3,528-satellite model is a historical Web
+  display comparison. `selectedScenario` remains empty until the seven-day
+  event-driven acceptance report is complete; it no longer controls the
+  engineering satellite-count decision.
 - The old `53°:720/30/1`, mainland-China/Hainan 2,620-L1 catalog and 120-second
   sampling reports are historical comparison data only.
 
@@ -93,10 +95,11 @@ Use a staged validation ladder:
   cells rather than ground positions. An L1 can therefore be served by
   different NCI/PCI values over time.
 - NCI is an opaque 36-bit planning ID, unique within the PLMN; NCGI is globally
-  unique when PLMN identity and NCI are combined. At 3,528 satellites the seed
-  needs 7,056 NCI values. The Web seed registry now allocates and tests all
-  7,056 unique values, but its final size still follows the eventually selected
-  constellation. Do not derive NCI semantics from satellite or beam IDs.
+  unique when PLMN identity and NCI are combined. The 2,990-satellite design
+  needs 5,980 NCI values. The existing Web registry allocates and tests 7,056
+  values only for the historical 3,528-satellite display model; a matching
+  5,980-NCI registry still must be generated. Do not derive NCI semantics from
+  satellite or beam IDs.
 - PCI has only 1,008 values and is not globally unique. Build a conflict graph
   whose nodes are long-lived onboard cells and whose edges mean co-channel and
   simultaneously visible. Reuse PCI only across non-conflicting nodes; never
@@ -137,9 +140,10 @@ Use a staged validation ladder:
   activation epoch are required. Connected UE use HO/CHO; idle UE use
   reselection.
 - All values in this subsection are planning inputs, not current CU-CP runtime
-  behavior. The Web catalog exists, but the orbit view displays a selection seed
-  only. Do not use "passed", "recommended"
-  or "selected" until a real seven-day event-driven exact report is available.
+  behavior. The Web orbit view still displays the historical 3,528-satellite
+  comparison model. The engineering design is 2,990 satellites, but do not
+  describe continuous coverage, N-1, PCI interference or RF execution as
+  passed until the corresponding acceptance evidence exists.
 - The exact audit must capture 45/42-degree crossings, local capacity failures,
   ownership changes with hysteresis/freeze/switching cost, PCI conflict intervals,
   gateway changes, SSB/PRACH deadlines and N-1 scenarios.
@@ -156,7 +160,8 @@ Use a staged validation ladder:
     candidate count 1, peak 209/256, and zero overflow epochs. It remains
     `auditLevel=coarse`, `exact=false`; gaps may exist between samples.
 - `app/global-constellation-audit.json` still records `selectedScenario=null`
-  and exact audit `status=not_run`. Coarse reports cannot set selection.
+  and exact audit `status=not_run`. These fields track formal continuous
+  acceptance; they no longer mean that the engineering satellite count is open.
 - Historical China results such as 720/720 independent snapshots, 1,261,561
   previous-owner differences and one-hop PCI proxy conflicts are not global
   evidence and are not serving handovers or continuous-time RF proof.
@@ -436,10 +441,11 @@ For a more detailed task-to-change lookup, use
   Real RF execution additionally requires a management-provided opaque
   hardware beam handle, a time-tagged vendor/O-RU bank-switch adapter and device
   telemetry. See `docs/ntn_access_calendar_cross_layer_execution.md`.
-  The Web planner baseline identity source is the versioned management-center
-  `app/onboard-cell-identity-registry.json`: 3528 satellites and 7056 explicit
-  opaque 36-bit NCIs. Runtime Walker/ordinal NCI derivation is forbidden;
-  non-baseline sweeps require an explicit matching registry.
+  The currently implemented historical-display identity source is the
+  versioned management-center `app/onboard-cell-identity-registry.json`: 3528
+  satellites and 7056 explicit opaque 36-bit NCIs. Runtime Walker/ordinal NCI
+  derivation is forbidden; the final 2,990-satellite design requires its own
+  explicit matching 5,980-NCI registry.
 - CUCP-037 hardens this boundary without claiming a transport that does not
   exist. RNTI lease ownership keys include `(DU, cell index, PCI, C-RNTI)`,
   because the two stable onboard cells may reuse one PCI. The current DU RNTI
@@ -568,11 +574,13 @@ needs that layer.
   ready, DU applied feedback, and the aligned activation epoch.
 - Do not reuse the historical 120-second China audit as a global ownership
   period, handover count or coverage proof.
-- Do not treat the current 3,528-satellite Web display as a selected design.
-  The 2,990-satellite candidate passed coverage and unique assignment at
-  720 fixed-step samples, with a peak of 87 assigned L1 per satellite, but it
-  remains coarse/exact=false. Selection still requires a seven-day event audit,
-  N-1 checks and the remaining radio/link constraints.
+- The final engineering design uses 2,990 satellites in 46 planes with 65
+  satellites per plane. The current 3,528-satellite Web animation is only a
+  historical display comparison and must not be called the current design.
+- The 2,990-satellite design passed coverage and unique assignment at 720
+  fixed-step samples, with a peak of 87 assigned L1 per satellite. It remains
+  coarse/exact=false: seven-day continuous coverage, N-1 and radio/link checks
+  are pre-deployment acceptance work, not an unresolved satellite-count choice.
 - Do not compare the complete visible count with the 256 assignment limit.
   Visibility inventory remains complete; only the unique actual assignment is
   limited to 256 L1 per satellite and 128 per onboard cell.

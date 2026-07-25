@@ -7,7 +7,7 @@
 - 服务范围是南纬 `57°` 至北纬 `57°` 的全球陆地，不包含海洋和更高纬度。
 - 地面只固定全球 `G` 系列 `position_id`、几何和邻接，不预制地固 NR 小区。
 - 每颗卫星运行两个长期星载 NR 小区；NCI/PCI 属于小区，不属于波位。
-- 轨道搜索从 `Walker Delta 60°:3528/42/0` 开始；该 seed 已在 `t=0` coarse snapshot 失败，同规模 `F=1` 只有不可选择的 coarse 证据，`selectedScenario=null`。
+- 最终工程方案采用 `Walker Delta 60°:2990/46/33`，即 46 个轨道面、每面 65 颗。3,528 颗模型仅保留为历史展示对照；`selectedScenario=null` 表示连续验收记录尚未完成。
 - 每星资源 seed 为 `32 analog / 128 digital`，两个小区各 `16/64`，暂不跨小区借用。
 - 当前离散日历在任意 80 ms 窗口的最差相位仍能保证每小区 128 个 L1、每星 256 个 L1；这是日历硬保证，不是平均/最佳相位上限。PRACH 重访目标是 640 ms。
 - 每个 L1 的完整 `visible inventory` 永不被 128/256、active 或 loaded 上限裁剪。
@@ -22,7 +22,7 @@ flowchart LR
     GRID --> GROUP["中心 + 最多六邻居"]
     GROUP --> G["G###### 信令波位<br/>G######-n 数字位置"]
     G --> VISIBLE["完整 visible inventory"]
-    ORBIT["60°:3528/42/0 搜索 seed"] --> VISIBLE
+    ORBIT["最终方案 60°:2990/46/33"] --> VISIBLE
     VISIBLE --> ASSIGN["容量受限 assignment proposal"]
     ASSIGN --> SPLIT["星上二分到两个长期 NCI/PCI"]
 ```
@@ -51,7 +51,7 @@ ID 不编码经纬度、国家、卫星或 NCI。具体几何保存在目录字�
 
 ## 4. NCI 与 PCI
 
-NCI 是管理中心 registry 分配的 opaque 36-bit planning ID，在 PLMN 内唯一；NCGI 由 PLMN identity 与 NCI 组合后全球唯一。每星两个长期小区各持有一个 NCI。若最终选择 3,528 星，需要 7,056 个 NCI，但最终数量随 `selectedScenario` 变化。NCI 不从卫星短号、`G` 波位 ID 或坐标推导，也不需要 `onboard_cell_index` 或 `SatelliteCellBinding`。
+NCI 是管理中心 registry 分配的 opaque 36-bit planning ID，在 PLMN 内唯一；NCGI 由 PLMN identity 与 NCI 组合后全球唯一。每星两个长期小区各持有一个 NCI。2,990 颗最终方案需要 5,980 个 NCI；现有 3,528 颗展示 registry 不能直接复用。NCI 不从卫星短号、`G` 波位 ID 或坐标推导，也不需要 `onboard_cell_index` 或 `SatelliteCellBinding`。
 
 PCI 只有 1,008 个值，必须复用。规划方法是：
 
@@ -110,9 +110,9 @@ PRACH 重访目标为 640 ms；每个广播 RO 必须有对应上行接收波束
 
 ## 8. 轨道怎样约束波位 ownership
 
-搜索 seed 使用 500 km、`60°:3528/42/0`、`45°/42°`。对每个事件区间至少记录：完整 visible inventory、assigned L1、每星/每 NCI 负载、失败位置、owner 变化、PCI 冲突、SSB/PRACH deadline 和 N-1 状态。
+最终方案使用 500 km、`60°:2990/46/33`、`45°/42°`。对每个事件区间至少记录：完整 visible inventory、assigned L1、每星/每 NCI 负载、失败位置、owner 变化、PCI 冲突、SSB/PRACH deadline 和 N-1 状态。
 
-当前 coarse 结果已经足以排除 `F=0` seed，但还不能选中 `F=1`：
+3,528 颗历史对照的 coarse 结果如下；它们用于说明筛选过程，不再用于决定最终数量：
 
 | 场景 | coarse 结果 | 规划含义 |
 |---|---|---|
@@ -123,6 +123,8 @@ PRACH 重访目标为 640 ms；每个广播 RO 必须有对应上行接收波束
 报告为 [`F=0 snapshot`](../web_replicas/ntn_beam_planner/app/global-constellation-snapshot.json)、[`F=1 snapshot`](../web_replicas/ntn_beam_planner/app/global-constellation-f1-snapshot.json) 和 [`F=1 one-day coarse`](../web_replicas/ntn_beam_planner/app/global-constellation-f1-day-coarse.json)。[`audit-global-constellation.mjs`](../web_replicas/ntn_beam_planner/scripts/audit-global-constellation.mjs) 及 focused CLI tests [`2/2`](../web_replicas/ntn_beam_planner/tests/global-constellation-audit-cli.test.mjs) 已有测试覆盖。
 
 [`global-constellation-audit.json`](../web_replicas/ntn_beam_planner/app/global-constellation-audit.json) 仍明确记录 `selectedScenario=null`、exact audit `status=not_run`。coarse 报告为 `auditLevel=coarse`、`exact=false`，无权写入 selected scenario；不得出现“推荐星座已通过”“全球连续零空窗”或“PCI 已验证”等表述。
+
+2,990 颗最终方案的一天/120 s 报告已在 720/720 个离散时刻完成覆盖与唯一分配，实际负责峰值为 87 L1/星、44 L1/小区，overflow 为 0。该结果支持最终工程决定，但不替代 7 天连续覆盖、N-1、干扰和真实无线验收。
 
 ## 9. 当前完成度
 
@@ -135,6 +137,7 @@ PRACH 重访目标为 640 ms；每个广播 RO 必须有对应上行接收波束
 | 全球目录确定性、land containment、面积与完整性 | 已有测试覆盖 | `catalog:check` 与 focused 目录测试 `6/6` 通过；不是正式运营 GIS 验收 |
 | `60°:3528/42/0` 搜索 seed | 已实现 | 参数与 snapshot 存在；`t=0` 有 23 个空窗，明确不可 selected |
 | 全球 coarse 轨道 audit CLI 与报告 | 已有测试覆盖 | CLI tests `2/2`；F=0 失败，F=1 一天 720/720 仍非连续证明 |
+| 2,990 颗最终星座方案 | 已有离线规划证据 | 46×65 已采用；720/720 离散时刻覆盖与唯一分配完成，连续服务和真实无线仍待验收 |
 | 两个长期星载 NCI/PCI registry 与 PCI proxy 图 | 已有测试覆盖 | Web 生成 7,056 个唯一 36-bit NCI；59,976 条局部 Walker proxy 边用 8 个 PCI 着色且冲突为 0；不是连续可见性或 RF 图 |
 | 完整 visible inventory 与 128/256 容量检查 | 已有测试覆盖 | inventory 不裁剪；F=1 一天 coarse 报告峰值 209/256、超限 epoch 为 0；尚无 7 天事件驱动证明 |
 | Web 80/640 ms deadline 日历 | 已有测试覆盖 | idle L1 SSB、PRACH 与 UL beam 对应关系有 focused tests；不是 PHY/RU 运行证据 |
@@ -147,7 +150,7 @@ PRACH 重访目标为 640 ms；每个广播 RO 必须有对应上行接收波束
 ## 11. 下一步
 
 1. 以已生成的 `G######` / `G######-n` Web 目录为仿真输入，另行评审正式运营 GIS、海岸精确裁剪和版本冻结。
-2. 参数化扫描 Walker 面数、每面星数、倾角、`F`、RAAN 和相位偏置。
+2. 围绕最终 46×65 方案扫描倾角、`F`、RAAN、相位偏置和容量降额，确认设计余量，不重新把卫星数量表述为待选。
 3. 运行至少 7 天事件驱动精确审计，并加入每星容量降额、gateway 和 N-1。
 4. 构建全球星载小区 PCI 冲突图，验证 1,008 个 PCI 的复用。
-5. 报告经评审后才填写 `selectedScenario`，再评审运行态接口。
+5. 7 天验收通过后填写 `selectedScenario` 审计记录，再评审运行态接口。
