@@ -568,9 +568,21 @@ needs that layer.
   ready, DU applied feedback, and the aligned activation epoch.
 - Do not reuse the historical 120-second China audit as a global ownership
   period, handover count or coverage proof.
-- Do not select `60°:3528/42/0`; its saved t=0 coarse snapshot has 23 uncovered
-  L1. Do not call the F=1 one-day 720/720 fixed-step result continuous coverage;
-  it is coarse/exact=false. Selection still requires an exact event audit.
+- Do not treat the current 3,528-satellite Web display as a selected design.
+  The 2,990-satellite candidate passed coverage and unique assignment at
+  720 fixed-step samples, with a peak of 87 assigned L1 per satellite, but it
+  remains coarse/exact=false. Selection still requires a seven-day event audit,
+  N-1 checks and the remaining radio/link constraints.
+- Do not compare the complete visible count with the 256 assignment limit.
+  Visibility inventory remains complete; only the unique actual assignment is
+  limited to 256 L1 per satellite and 128 per onboard cell.
+- Do not claim the current CU-CP schema already carries those two sets. It has
+  one `visible_l1_positions` list and partitions every entry into the two
+  onboard cells. A future private input must preserve the complete inventory
+  separately from the assigned subset before offline ownership can drive the
+  C++ calendar.
+- Do not aggregate PRACH at satellite level. Every assigned L1 needs its own
+  planned PRACH opportunity and corresponding uplink beam intent.
 - Do not assume adding satellites monotonically improves a Walker arrangement;
   scan plane count, slots, inclination, F, RAAN and phase on one frozen mask.
 - Do not claim historical one-hop PCI proxy results prove the global conflict

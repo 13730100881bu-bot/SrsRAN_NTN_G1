@@ -1,6 +1,6 @@
 # ±57°全球陆地卫星轨道搜索与可视化方案
 
-> 本文只定义全球目标的轨道搜索输入和验收方法；轨道传播、星座搜索与全球 ownership 仍属于管理中心/Web 离线规划，不复制进 CU-CP。现有 CU-CP 版本化双小区计划实现只消费本星已审核输入，不改变这里的轨道证据。`Walker Delta 60°:3528/42/0` 只是搜索 seed；在真实 7 天事件驱动精确审计完成前，`selectedScenario` 为空，不存在“已通过”的最终星座。
+> 本文只定义全球目标的轨道搜索输入和验收方法；轨道传播、星座搜索与全球 ownership 仍属于管理中心/Web 离线规划，不复制进 CU-CP。网页当前展示的 42 面、3,528 星只是比较基线，不是定案；46 面×65 星的 2,990 星方案只是较小候选。现有 CU-CP 版本化双小区计划只有一份 L1 集合输入，尚不能同时接收完整可见清单与实际负责子集；本轮结果因此仍停留在离线规划层。当前仍为 `selectedScenario=null`、`exact=false`，不存在“已通过”的最终星座。
 
 配套波位目录、小区身份和容量边界见 [全球陆地星载双小区与波位规划](./ntn_beam_constellation_plan.md)。
 
@@ -24,48 +24,54 @@
 
 ### 2.3 软件边界
 
-管理中心负责星历、全球波位表、NCI registry、PCI 冲突图、assignment proposal、版本和 activation epoch；星载 CU-CP 读取并决策；F1AP 传递；DU/MAC 执行并反馈。Web 只展示搜索 seed 和离线状态，不代表执行层已经应用。
+管理中心负责星历、全球波位表、NCI registry、PCI 冲突图、assignment proposal、版本和 activation epoch；星载 CU-CP 不运行全球选星。目标接口需要同时传递完整可见清单和实际负责子集，但当前 CU-CP 私有 schema 只有 `visible_l1_positions`，会把其中全部 L1 划入两个小区。F1AP、DU/MAC 和 RF 执行层尚未接入本轮双集合结果；Web 只展示搜索 seed 和离线状态。
 
-## 3. 搜索 seed
+## 3. 比较场景（均未定案）
 
-| 参数 | seed 值 | 说明 |
-|---|---:|---|
-| Walker 表达式 | `60°:3528/42/0` | 倾角 60°、总星数 3,528、42 面、`F=0` |
-| 每面卫星 | `84` | `3,528 / 42` |
-| 轨道高度 | `500 km` | 二体圆轨道传播 seed |
-| 相邻面 RAAN | `360° / 42 ≈ 8.571°` | 精确值参与传播，不提前取整 |
-| 面内相位 | `360° / 84 ≈ 4.286°` | 精确值参与传播，不提前取整 |
-| 公共 epoch | 待冻结 | 所有对比场景必须使用同一 epoch |
-| Walker 相位参数 | `F=0` | 仅 seed；后续必须扫描其他 `F` 和偏置 |
-| 新选 / 退出仰角 | `45° / 42°` | 形成 3° ownership 滞回 |
-| 服务 mask | `57°S～57°N` 全球陆地 | Web 目录 36,411 L1；正式运营 GIS 尚未冻结 |
+网页基线和较小候选必须使用同一目录、epoch、传播器和验收字段比较。2,990 星比 3,528 星少 `538` 星，即减少 `15.25%`；这个差值只说明候选规模，不代表已经选型。
+
+| 参数 | 网页展示基线 | 较小候选 | 说明 |
+|---|---:|---:|---|
+| 轨道面数 | `42` | `46` | 都是待比较输入 |
+| 每面卫星 | `84` | `65` | 分别为 `42×84` 和 `46×65` |
+| 卫星总数 | `3,528` | `2,990` | 较小候选少 `538` 星（`15.25%`） |
+| 倾角 | `60°` | `60°` | 仍应继续扫描，不是冻结值 |
+| 轨道高度 | `500 km` | `500 km` | 二体圆轨道传播参数 |
+| Walker 相位参数 | `1` | `33` | 仅保留为技术输入，不作为面向读者的结论名称 |
+| 公共 epoch | 待冻结 | 待冻结 | 所有对比场景必须使用同一 epoch |
+| 新选 / 退出仰角 | `45° / 42°` | `45° / 42°` | 形成 3° ownership 滞回 |
+| 服务 mask | `57°S～57°N` 全球陆地 | 同左 | Web 目录 36,411 L1；正式运营 GIS 尚未冻结 |
 
 500 km 下，`45°` 和 `42°` 的球面覆盖半径约为 `448 km` 和 `494 km`。这些数值只用于几何初筛，不等于链路可用半径。
 
 ### 3.1 卫星与星载小区身份
 
-- 卫星规划短号使用当前 registry 的 `P01-S01`～`P42-S84`；CU-CP 只做 opaque exact-match，短号、轨道面、槽位和 epoch 是独立属性。
+- 当前 42×84 registry 的规划短号为 `P01-S01`～`P42-S84`；2,990 星候选若进入后续评审，必须生成与 46×65 场景精确匹配的新 registry，不能复用或按序号推导现有身份。CU-CP 只做 opaque exact-match，短号、轨道面、槽位和 epoch 是独立属性。
 - 每颗卫星运行两个长期星载 NR 小区。NCI 由中心 registry 分配，在 PLMN 内唯一；NCGI 由 PLMN identity 与 NCI 组合后全球唯一。
-- 若最终仍为 3,528 星，registry 需要 7,056 个 NCI；星座变化时数量随之变化。NCI 不从卫星短号、波位 ID 或坐标推导。
+- 3,528 星基线需要 7,056 个 NCI；2,990 星候选需要 5,980 个 NCI。最终数量跟随评审后选定的星座，NCI 不从卫星短号、波位 ID 或坐标推导。
 - PCI 不是全球唯一。把同时可见且同频的两个星载小区连接为冲突边，对动态时间并集图做可复用规划；PCI 不随每次跳波束访问改变。
 
-## 4. 可见性、候选与容量必须分开
+## 4. 完整可见清单与实际唯一分配必须分开
 
 ```mermaid
 flowchart LR
     ORBIT["500 km Walker 参数空间"] --> EPH["事件驱动轨道传播"]
     MASK["57°S～57°N 全球陆地<br/>36,411个G系列L1"] --> VISIBLE["每个 L1 的完整 visible inventory"]
     EPH --> VISIBLE
-    VISIBLE --> MATCH["容量受限 assignment proposal"]
-    MATCH --> SPLIT["星上二分到两个长期 NCI/PCI"]
+    VISIBLE --> MATCH["每个 L1 选择一个 actual assignment"]
+    MATCH --> SPLIT["按 128/小区、256/星二分到长期 NCI/PCI"]
     SPLIT --> READY["ready / applied / activation gate"]
 ```
 
+这张图表示管理中心的目标流程。当前实现止于 `MATCH` 的离线结果；`SPLIT`
+之后还缺少能够同时保留完整清单和负责子集的 CU-CP 私有输入契约。
+
 1. 新候选在 L1 处达到 `45°` 后进入 `visible inventory`。
 2. 当前 owner 可滞回保持到 `42°`；低于 42° 才退出。
-3. `visible inventory` 保存所有满足几何和外部可用条件的卫星，不受每星 256、每小区 128、active 或 loaded 上限裁剪。
-4. 容量、端口、gateway 和迁移成本只影响 assignment proposal，不得反向删除可见候选。
-5. proposal 不是 serving。只有目标 ready、DU `applied` 且到达对齐 640 ms 的 activation epoch 后，才能提交 actual owner。
+3. `visible inventory` 保存每个 L1 的所有几何可见候选，不受每星 256、每小区 128、active 或 loaded 上限裁剪；它不是“最终选中的卫星清单”。
+4. actual assignment 在完整清单之上为每个 L1 选择且只选择一个负责卫星，再分给该星的两个长期小区。每星 256、每小区 128 只限制这份实际负责的一级波位，不是波束数量，也不得用于裁剪完整可见清单。
+5. 容量、端口、gateway 和迁移成本只影响 assignment proposal，不得反向删除可见候选。几何采样通过也不等于唯一分配已经通过。
+6. proposal 不是 serving。只有目标 ready、DU `applied` 且到达对齐 640 ms 的 activation epoch 后，才能提交 actual owner。
 
 ## 5. 星载双小区与接管
 
@@ -80,23 +86,21 @@ stateDiagram-v2
     released --> [*]
 ```
 
-每星两个长期小区各有 `16 analog / 64 digital`，整星为 `32/128`，暂不互借。当前 Web 日历以 4×2.5 ms sub-visit 得到最差 80 ms 窗口 168 次机会，并将配置容量限制为 128 L1/小区、256 L1/星；128/256 是该离散日历的硬保证，不是 PHY/RU/RF 或协议保证。星上把获授权 L1 二分给两个小区，负载均衡、空间紧凑、连通和 UE sticky 都是优化目标，不是现阶段已证明的硬保证。
+每星两个长期小区各有 `16 analog / 64 digital` 规划资源，整星为 `32/128`，暂不互借。当前 Web 日历以 4×2.5 ms sub-visit 得到最差 80 ms 窗口 168 次机会，并把 actual assignment 的配置上限设为 128 L1/小区、256 L1/星。这里的 128/256 是实际负责 L1 的离散日历/CU-CP 执行包络，不是可见候选数、模拟或数字波束数，也不是 PHY/RU/RF 或协议保证。目标运行流程会把获授权 L1 二分给两个小区，并为每个已分配 L1 安排 SSB 与 PRACH 机会；当前 C++ 输入还无法把负责子集与完整清单分开。负载均衡、空间紧凑、连通和 UE sticky 都是优化目标，不是现阶段已证明的硬保证。
 
 跨星时不迁移 NCI。源、目标分别使用自己的星载 NCI/PCI；同一 L1 在一个 activation epoch 最多一个 primary。目标可以为发现和测量预热，但不能在 ready/applied 前被称为 serving。
 
-## 6. Coarse 证据与 7 天事件驱动精确审计
+## 6. 当前离散证据与精确审计缺口
 
-当前已生成三份 coarse 报告：
+当前针对 46×65、2,990 星候选的证据必须按验证层次分别阅读：
 
-| 场景/范围 | 无 45° 候选 | 最少候选 | 峰值 visible L1/星 | 超过 256 | 结论 |
-|---|---:|---:|---:|---:|---|
-| `F=0` seed，`t=0` | `23` | `0` | `206/256` | `0` 星 | seed 在该 epoch 明确失败，不可 selected |
-| 同规模 `F=1`，`t=0` | `0` | `1` | `207/256` | `0` 星 | 单时刻无空窗，不证明连续性 |
-| 同规模 `F=1`，1 天 / 120 s | `0`（`720/720` 离散 epoch） | `1` | `209/256` | `0` epoch | `auditLevel=coarse`、`exact=false`，采样间仍可能有空洞 |
+| 验证层次 | 采样范围 | 当前结果 | 能证明什么 / 不能证明什么 |
+|---|---:|---|---|
+| 一天完整可见清单 | 每 `120 s`，共 `720` 个采样点 | `coverage=true`，最大未覆盖 L1 为 `0`，最少 entry 候选为 `2`；release-visible 峰值 `254 L1/星`，entry-visible 峰值 `209 L1/星` | 证明 720 个采样点的几何候选完整；可见峰值不是实际负责量，也不证明采样间连续覆盖 |
+| 一天逐点唯一分配 | 同一组 `720` 个采样点 | `assignment=true`、`conclusive=720/720`；实际负责峰值 `87 L1/星`，平衡双小区后的峰值 `44 L1/小区`，overflow 为 `0` | 证明每个采样点都能给每个 L1 唯一分配一个负责方且满足 256/128 上限；不证明采样间连续可分配 |
+| 事件驱动精确审计 | 至少连续 `7` 天 | 尚未完成 | `exact=false`，不能证明全球连续覆盖或支持选型 |
 
-报告见 [`global-constellation-snapshot.json`](../web_replicas/ntn_beam_planner/app/global-constellation-snapshot.json)、[`global-constellation-f1-snapshot.json`](../web_replicas/ntn_beam_planner/app/global-constellation-f1-snapshot.json) 和 [`global-constellation-f1-day-coarse.json`](../web_replicas/ntn_beam_planner/app/global-constellation-f1-day-coarse.json)。生成 CLI 为 [`audit-global-constellation.mjs`](../web_replicas/ntn_beam_planner/scripts/audit-global-constellation.mjs)，focused CLI tests [`2/2`](../web_replicas/ntn_beam_planner/tests/global-constellation-audit-cli.test.mjs) 通过。
-
-这些报告是固定时刻/固定步长 coarse 证据。全球候选仍需至少连续 7 天的事件驱动精确审计：传播器精确定位仰角穿越、容量饱和、owner 释放、gateway 变化和接管窗口，再在事件之间验证不变量。
+这 720 个点仍是固定步长证据。目录内容 hash 已由工具重新计算并与 manifest 绑定，但公共 epoch 和绝对 RAAN 相位尚未冻结，因此结果只对当前模型 `t=0` 有效。全球候选仍需至少连续 7 天的事件驱动精确审计：传播器精确定位仰角穿越、容量饱和、owner 释放、gateway 变化和接管窗口，再在事件之间验证不变量。早期 42×84 场景的一个 phase 参数组合曾在 `t=0` 出现 23 个空窗，只能排除该具体组合，不能据此把 3,528 星规模本身写成通过或失败。
 
 每个搜索场景至少输出：
 
@@ -105,32 +109,33 @@ stateDiagram-v2
 | `zero_visible_interval` | 任一 service L1 是否出现无 45° 候选区间 |
 | `minimum_visible_count` | 完整 visible inventory 的最小候选数 |
 | `assignment_failure_interval` | 有候选但受局部容量约束无法分配的区间 |
-| `assigned_l1_per_satellite` | 是否超过 seed 上界 256 |
-| `assigned_l1_per_nci` | 是否超过 seed 上界 128 |
+| `assigned_l1_per_satellite` | actual assignment 是否超过每星 256；不统计完整可见清单 |
+| `assigned_l1_per_nci` | actual assignment 是否超过每小区 128；不代表波束数量 |
 | `ownership_change_event` | 加入滞回、冻结和切换代价后的真实 proposal 变化 |
 | `pci_conflict_interval` | 同频、同时可见星载小区是否复用同 PCI |
 | `n_minus_one_failure` | 单星/单面失效后的局部服务缺口 |
 | `ssb_deadline_miss` | 80 ms L1 SSB 重访是否失败 |
-| `prach_deadline_miss` | 640 ms PRACH 重访是否失败 |
+| `prach_deadline_miss` | 每个已分配 L1 的 640 ms PRACH 重访是否失败 |
 
 审计必须保存场景参数、代码/数据版本、事件时间、失败 L1、完整候选集合、卫星负载、NCI/PCI 和触发约束。没有这份报告，就不能把 seed 写成“已通过”。
 
 ### 6.1 场景选择规则
 
-- 当前 `selectedScenario=null`，exact audit `status=not_run`。
-- `60°:3528/42/0` 已被 `t=0` 的 23 个空窗明确排除，不能 selected。
-- `60°:3528/42/1` 的一天 coarse 报告仍不能标为 `recommended`、`exact_pass` 或 `selected`。
-- 至少比较面数、每面星数、倾角、`F`、RAAN/相位偏置、每星降额容量和 N-1。
+- 当前 `selectedScenario=null`、`exact=false`；网页 3,528 星基线和 2,990 星候选都未 selected。
+- 2,990 星候选的一天 720 个采样点已同时得到 `coverage=true` 和 `assignment=true`，但仍是有界离散证据，不能标为 `recommended`、`exact_pass` 或 `selected`。
+- 报告中的 720/720 assignment pass 只能表述为“逐采样点唯一分配通过”，不得改写成采样间连续覆盖或连续 ownership 通过。
+- 至少比较面数、每面星数、倾角、Walker 相位参数、RAAN/相位偏置、每星降额容量和 N-1。
 - 搜索结果不保证随卫星总数单调改善；必须用同一 mask、epoch 和事件模型比较。
 - 只有完整 7 天报告满足冻结的验收门限后，评审流程才能填写 `selectedScenario`。
 
 ## 7. Web 展示要求
 
-- 3D 地球显示 42 面、3,528 星和 `57°S～57°N` 服务带，但显著标注“搜索 seed”。
+- 3D 地球可以默认显示 42×84、3,528 星基线和 `57°S～57°N` 服务带，但必须显著标注“网页展示基线，非定案”，并允许切换到 46×65、2,990 星候选。
+- 候选摘要应显示“少 538 星（15.25%）”，同时保留 `selectedScenario=null`、`exact=false`，不能把规模下降渲染成已经选型。
 - 2D 地图使用已生成的 `G######` / `G######-n` Web 目录；正式运营 GIS 冻结仍需单独评审。
 - 轨道、时间、卫星、NCI/PCI、L1/L2、visible inventory 和端口日历共享选择状态。
-- 选择 L1 时先显示完整 visible inventory，再显示容量匹配结果，不能只展示被选中的服务星。
-- 展示 `F=0 snapshot_fail`、`F=1 one-day coarse 720/720` 和 `selectedScenario: empty / pending exact audit`；不得用绿色 PASS 暗示 3,528 星已经连续验收。
+- 选择 L1 时先显示完整 visible inventory，再单独显示 actual assignment；不能只展示被选中的服务星，也不能用 128/256 裁剪候选清单。
+- 分开展示“一天 720/720 个几何采样通过”和“一天 720/720 个逐点 unique assignment 通过”，并同时展示 `exact=false`；不得用绿色 PASS 暗示任何候选已经连续验收。
 - WebGL 不可用时回退到地面轨迹、候选表和审计状态表。
 
 当前 Web 已加载 [`global-land-l1-v1.json`](../web_replicas/ntn_beam_planner/public/data/global-land-l1-v1.json)，生成器与 `--check` 位于 [`generate-global-land-catalog.mjs`](../web_replicas/ntn_beam_planner/scripts/generate-global-land-catalog.mjs)。目录来自本地 Natural Earth 4.1.0 / `world-atlas@2.0.2` 1:50m land，包含 36,411 L1、249,375 有效 L2、33,871 full 和 2,540 edge；cells SHA-256 为 `b39fe9c3ee9a9355b3546036b7f16e0fb858c953f8558cc4295122f2169fbe7a`。
@@ -144,16 +149,20 @@ stateDiagram-v2
 - `规划中`：只有目标、seed 或待审计约束。
 - `已实现`：工作区存在实现或可执行入口，但本项未引用通过的测试。
 - `已有测试覆盖`：存在 focused 测试资产；不等于全球方案已经验收。
-- `已有运行态证据`：有明确范围的日志、pcap 或报告；不得扩大解释。
+- `已有离线规划证据`：管理中心工具生成了可复现报告；它不是 C++ 基站运行、
+  RF 或空口证据。
+- `已有运行态证据`：有明确范围的 C++ 运行日志或 pcap；不得扩大解释。
 
 | 能力 | 状态 | 当前证据边界 |
 |---|---|---|
 | 500 km 二体圆轨道与旧中国 Web 展示 | 已有测试覆盖 | 只覆盖旧参数化模型和历史样例 |
-| `F=0/F=1` coarse CLI 与报告 | 已有测试覆盖 | CLI tests `2/2`；F=0 明确失败，F=1 一天 720/720 仍非连续证明 |
+| 3,528 星网页展示基线 | 已实现 | 只是 Web 比较基线，不是选型结论 |
+| 2,990 星候选一天 unique assignment | 已有离线规划证据 | 目录内容 hash 已重新校验；120 s 的 720/720 离散时刻通过，实际分配峰值 87/星、平衡双小区峰值 44、小区/卫星 overflow 0；公共 epoch 未冻结，不是连续证明或 C++ 运行态证据 |
+| 完整可见清单 + 实际负责子集输入 | 规划中 | 当前 CU-CP 只有一份 `visible_l1_positions` 并全部划入小区；双集合私有契约尚未实现 |
 | 全球目录生成器、asset 与 loader | 已实现 | Web 已加载 36,411 L1 / 249,375 L2；不是 CU-CP 运行态 |
 | 全球目录确定性与几何约束 | 已有测试覆盖 | `catalog:check` 和 focused tests `6/6` 通过；不是正式运营 GIS 验收 |
-| 全球 coarse visible inventory | 已有测试覆盖 | 单 epoch 与一天/120 s 报告已生成；采样间可能有空洞 |
-| 全球 assignment 与 PCI 冲突图 | 规划中 | 算法和验收字段待实现/运行 |
+| 2,990 星一天 coarse visible inventory | 已有离线规划证据 | 120 s 的 720/720 几何采样通过；最少 entry 候选 2，release/entry-visible 峰值 254/209；采样间可能有空洞 |
+| 全球 PCI 冲突图 | 规划中 | 算法和验收字段待实现/运行 |
 | 7 天事件驱动、N-1 与 PHY/RU/RF | 规划中 | 无可引用的真实报告 |
 
 ## 9. 历史中国样例
@@ -163,9 +172,11 @@ stateDiagram-v2
 ## 10. 下一步
 
 1. 保留当前 Web 目录作为可重复仿真输入，另行冻结正式运营 GIS、海岸精确裁剪和国界 guard。
-2. 实现参数化 Walker seed 和事件检测，生成至少 7 天精确报告。
-3. 加入每星 256/每小区 128 的降额扫描、gateway、N-1 和接管代价。
-4. 构建同时可见、同频星载小区冲突图并验证 1,008 个 PCI 的复用可行性。
-5. 报告通过评审后再填写 `selectedScenario`，随后才评审 CU-CP 运行接口。
+2. 保留 2,990 星候选一天 120 s、720 点的几何与唯一分配报告，并把两类指标分开展示。
+3. 冻结公共 epoch 与绝对轨道相位，实现参数化 Walker 事件检测，生成至少 7 天精确报告。
+4. 为 CU-CP 增加最小私有双集合输入：完整可见清单用于审计，实际负责子集用于双小区与日历。
+5. 对 actual assignment 加入 gateway、N-1、接管代价及 256/128 降额敏感性扫描，不裁剪完整可见清单。
+6. 构建同时可见、同频星载小区冲突图并验证 1,008 个 PCI 的复用可行性。
+7. 报告通过评审后再填写 `selectedScenario`，并为选定星座生成匹配的身份 registry 和管理中心下发包；CU-CP 不自行选星座。
 
 本轮不运行 CMake、C++ 编译或 CTest，也不修改任何无线运行行为。

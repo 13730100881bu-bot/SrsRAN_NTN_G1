@@ -1,6 +1,6 @@
 # NTN CU-CP Task Change Index
 
-Last updated: 2026-07-19
+Last updated: 2026-07-25
 
 This file maps the CUCP task chain to the main feature changes and
 representative code areas. It is a compact lookup table for future agents.
@@ -117,6 +117,7 @@ them casually.
 | CUCP-041 | Historical-plan fallback lifecycle convergence. When a future plan was confirmed early, then superseded by a newer checked plan, failure of that newer deployment now returns the historical plan to live-DU verification instead of leaving it hidden until process restart. The recovery target, accepted-version high-water and the complete most recently received candidate inventory survive a state save/load round trip. A rejected lower-version replay may update the read-only “last received input” observation, but it cannot change the accepted high-water or active plan. No public protocol, F1 payload, DU/MAC/PHY/RU/RF, Web/GIS or generated ASN.1 change is involved. | `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.cpp`, `tests/unittests/cu_cp/ntn_mobility/ntn_onboard_position_plan_test.cpp`, this index and agent memory. |
 | CUCP-042 | Exact hidden-fallback expiry. A historical fallback hidden behind an early-confirmed future plan loses fallback eligibility at its own `valid_until`; CU-CP queues one exact `schedule_version`/`calendar_hash` cleanup with reason `historical_fallback_expired` before any same-instant activation. Pending state, version high-water, latest input and partition remain unchanged. The outstanding cleanup survives DU disconnection and restart, while later deployment failure cannot restore the expired plan. State/queue failure remains fail closed. State schema v2 and existing read-only OAM fields are reused; no F1AP, DU, MAC, PHY, RU/RF, Web/GIS or generated ASN.1 change is involved. | `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.*`, `lib/cu_cp/cu_cp_impl.cpp`, `tests/unittests/cu_cp/ntn_mobility/ntn_onboard_position_plan_test.cpp`, `tests/unittests/cu_cp/cu_cp_ntn_mobility_test.cpp`, runtime contract and agent memory. |
 | CUCP-043 | Fail-closed activation and bounded cleanup responsibility. DU prepare/query feedback records evidence but no longer publishes a pending plan as active inside the response path; the activation timer performs the one-time switch and exposes it only after the matching state update is durable. A blocked state store continues processing `valid_until` while suppressing new deployment, recovery confirmation and clear transmission. Uncommitted writes restore the last saved snapshot and apply expiry only; a replacement whose directory durability is uncertain keeps memory aligned with the replaced file, hides live evidence and requires restart reconciliation. State validation bounds historical clears plus active/pending together at 66 identities, preserving the exact cleanup that is created when a valid 64-clear + two-live state expires. Default-off terrestrial behavior is unchanged; no F1AP payload, DU/MAC, PHY, RU/RF, Web/GIS or generated ASN.1 change is involved. | `lib/cu_cp/cu_cp_impl.*`, `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.*`, `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan_state.*`, controller/state/CU-CP restart tests, runtime contract and agent memory. |
+| NTNPLAN-001 | Separates complete L1 visibility from unique service assignment in the offline planner and adds a reproducible sampled constellation comparison with a verified catalog content hash. The current Web baseline remains 3,528 satellites; a 2,990-satellite candidate passed 720 sampled coverage and assignment epochs with an assigned peak of 87 L1/satellite, but remains `exact=false`, unselected and bound only to an unfrozen model `t=0`. The 256/128 limits apply only to actual assignment, and PRACH is planned per assigned L1. Current CU-CP still has one `visible_l1_positions` input and cannot consume the two sets independently. | `utils/ntn/constellation_screen.*`, `utils/ntn/scenarios/global_constellation_screen_v1*`, `docs/ntn_orbit_constellation_plan.md`, `docs/ntn_beam_hopping_access_plan.md`, Web planner source/tests and the separate `gh-pages` deployment. |
 
 ## Current Useful Validation Notes
 
@@ -405,3 +406,45 @@ software-calendar ordering, storage and restart behavior only; it is not proof
 of RF output, antenna steering or over-the-air access. Whole-file rollback or
 deletion still needs a trusted monotonic anchor, and authenticated plan delivery
 remains separate work.
+
+NTNPLAN-001 closeout evidence (2026-07-25):
+
+```bash
+node --test utils/ntn/*.test.mjs
+node utils/ntn/constellation_screen.mjs \
+  --output utils/ntn/scenarios/global_constellation_screen_v1.report.json
+
+cd web_replicas/ntn_beam_planner
+npm run build
+node --import tsx --test tests/*.test.mjs
+npm run lint
+npm run build:pages
+```
+
+The management-center planning utility group passed 121/121. The sampled
+comparison checked the 3,528-satellite display baseline and the 2,990-satellite
+candidate at 720 epochs over one day. Both had zero uncovered L1, conclusive
+assignment at all 720 epochs and no assignment overflow. The smaller candidate
+had at least two entry candidates per L1, a complete release-visible peak of
+254 L1 per satellite, an actual assigned peak of 87 and a balanced two-cell
+peak of 44.
+
+The screen recomputes the catalog cells SHA-256 and binds it to the manifest
+before evaluating a scenario. The public epoch and absolute RAAN phase remain
+unfrozen, so the saved day is relative to the current model `t=0`.
+
+The Web production build succeeded, all 43 Web tests passed and ESLint reported
+no findings. Browser QA confirmed that the page displays visible inventory and
+actual assignment separately, creates calendars only for assigned L1, explains
+PRACH per assigned L1 and locates `P35-S34` correctly. The source branch and
+the separately generated `gh-pages` artifact were pushed without force.
+
+This is fixed-step planning evidence only: `exact=false`,
+`selectedScenario=null`. It does not prove continuous seven-day coverage,
+single-satellite failure tolerance, gateway availability, PCI interference,
+power/link budget, actual handover rate, DU/PHY/RU/RF execution or over-the-air
+PRACH reception. Current CU-CP also cannot carry the complete visible inventory
+and assigned subset independently: its single `visible_l1_positions` input is
+partitioned in full. No C++ runtime, F1AP, DU, MAC, PHY, RU/RF, generated ASN.1
+or terrestrial behavior changed in NTNPLAN-001, so no CMake/CTest or split demo
+was run.
