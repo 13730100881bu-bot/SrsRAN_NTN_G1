@@ -98,6 +98,12 @@ const snapshotAudit = snapshotAuditJson as {
 };
 const smallerScreen = smallerScreenJson as {
   exact: false;
+  engineeringDecision: {
+    status: "final_design_adopted";
+    adoptedSatelliteCount: number;
+    supersededDisplayBaseline: number;
+    acceptancePending: true;
+  };
   scenario: {
     planes: number;
     satellitesPerPlane: number;
@@ -418,15 +424,15 @@ export function GlobalPlanner() {
             <button type="button" key={key} className={view === key ? "active" : ""} onClick={() => setView(key)} aria-pressed={view === key}>{VIEW_COPY[key].nav}</button>
           ))}
         </nav>
-        <div className="audit-chip review"><i />星座规模仍在比较，尚未最终定案</div>
+        <div className="audit-chip decision"><i />最终采用：2,990颗</div>
       </header>
 
       {view !== "access" ? <section className="global-metrics" aria-label="工程结论指标">
-        <article className="metric-recommended"><span>较小候选</span><strong>{smallerScreen.scenario.planes}轨道面 · 每面{smallerScreen.scenario.satellitesPerPlane}星</strong><small>共{smallerScreen.scenario.satelliteCount.toLocaleString("en-US")}颗，比当前展示基线少{baseline.totalSatellites - smallerScreen.scenario.satelliteCount}颗</small></article>
-        <article><span>较小候选检查时刻</span><strong>{smallerScreen.sampling.epochCount} / {smallerScreen.sampling.epochCount}</strong><small>一天内每2分钟检查一次 · 暂未发现覆盖空窗</small></article>
+        <article className="metric-recommended"><span>最终采用方案</span><strong>{smallerScreen.scenario.planes}轨道面 · 每面{smallerScreen.scenario.satellitesPerPlane}星</strong><small>共{smallerScreen.scenario.satelliteCount.toLocaleString("en-US")}颗，比历史展示对照少{baseline.totalSatellites - smallerScreen.scenario.satelliteCount}颗</small></article>
+        <article><span>设计依据检查时刻</span><strong>{smallerScreen.sampling.epochCount} / {smallerScreen.sampling.epochCount}</strong><small>一天内每2分钟检查一次 · 未发现采样时刻覆盖空窗</small></article>
         <article><span>单星可见区域峰值</span><strong>{smallerScreen.summary.maximumVisibleL1PerSatellite}</strong><small>表示卫星能看到多少区域，不是实际服务负载</small></article>
-        <article><span>较小候选实际负责峰值</span><strong>{smallerScreen.summary.maximumAssignedL1PerSatellite} / {SATELLITE_CAPACITY}</strong><small>{smallerScreen.summary.assignmentCheckedEpochs}个检查时刻均完成唯一分配 · 单小区峰值{smallerScreen.summary.maximumBalancedCellLoad}</small></article>
-        <article className="metric-review"><span>长时间连续服务验证</span><strong>待执行</strong><small>仍需连续检查{audit.exactAudit?.durationDays ?? 7}天，较小候选尚未选定</small></article>
+        <article><span>采用方案实际负责峰值</span><strong>{smallerScreen.summary.maximumAssignedL1PerSatellite} / {SATELLITE_CAPACITY}</strong><small>{smallerScreen.summary.assignmentCheckedEpochs}个检查时刻均完成唯一分配 · 单小区峰值{smallerScreen.summary.maximumBalancedCellLoad}</small></article>
+        <article className="metric-review"><span>部署前连续服务验收</span><strong>继续执行</strong><small>连续检查{audit.exactAudit?.durationDays ?? 7}天，并完成故障与真实无线验证</small></article>
       </section> : null}
 
       {view !== "audit" ? <section className="global-toolbar" aria-label="时间与查询控制">
@@ -500,7 +506,7 @@ export function GlobalPlanner() {
       {view === "orbit" ? (
         <section className="global-workspace orbit-workspace">
           <article className="global-stage">
-            <header><div><p>当前工程候选</p><h2>星座运行与单星负载</h2></div><span>{baseline.planes}轨道面 × 每面{baseline.satellitesPerPlane}星 · {baseline.altitudeKm} km圆轨道 · {baseline.inclinationDeg}°倾角</span></header>
+            <header><div><p>3,528颗历史展示对照</p><h2>星座运行与单星负载</h2></div><span>{baseline.planes}轨道面 × 每面{baseline.satellitesPerPlane}星 · {baseline.altitudeKm} km圆轨道 · {baseline.inclinationDeg}°倾角</span></header>
             <GlobalOrbitView
               timeSeconds={timeSeconds}
               selectedSatelliteId={selectedSatelliteId}
@@ -649,18 +655,18 @@ export function GlobalPlanner() {
 
       {view === "audit" ? (
         <section className="decision-console">
-          <header className="decision-hero"><div><span className="decision-label">阶段判断</span><h2>卫星数量有继续减少的空间，但较小方案还不能直接定案</h2><p>新的计算把“卫星看得到多少区域”和“卫星实际负责多少区域”分开。当前容量并不是主要限制，覆盖连续性和卫星交接更值得优先验证。较小候选只通过了一天的离散检查，仍需更长时间和故障场景验证。</p></div><div className="decision-stamp"><span>当前结论</span><b>进入候选复核</b><small>不代表最终选型</small></div></header>
+          <header className="decision-hero"><div><span className="decision-label">最终结论</span><h2>最终方案采用46个轨道面、每面65颗，共2,990颗卫星</h2><p>卫星总数确定为2,990颗，不再以3,528颗为目标规模。一天720个检查时刻均完成覆盖与唯一分配，单星实际负责峰值为87个一级波位。连续服务、单星故障和真实无线测试列入上线前验收。</p></div><div className="decision-stamp"><span>最终采用方案</span><b>2,990颗</b><small>3,528颗仅作历史对照</small></div></header>
           <p className="rejected-line"><b>未采用的初始方案：</b>起始时刻仍有{snapshotAudit.summary.maximumUncoveredL1}个地面区域无法获得服务，因此不再继续使用。</p>
 
-          <section className="conclusion-table"><header><h3>方案现状</h3><span>把已经证明的结果与仍待验证的事项分开说明</span></header><div><table><thead><tr><th>关注事项</th><th>当前判断</th><th>说明</th></tr></thead><tbody><tr><td>是否可以减少卫星数量</td><td><span className="result-pass">可以继续筛选</span></td><td>{smallerScreen.scenario.planes}个轨道面、每面{smallerScreen.scenario.satellitesPerPlane}颗，共{smallerScreen.scenario.satelliteCount.toLocaleString("en-US")}颗的候选已通过一天离散检查；比当前展示基线少{baseline.totalSatellites - smallerScreen.scenario.satelliteCount}颗，但尚未选定</td></tr><tr><td>目标区域在检查时刻是否有卫星可用</td><td><span className="result-pass">离散检查满足</span></td><td>{smallerScreen.sampling.epochCount}/{smallerScreen.sampling.epochCount}个检查时刻未发现空缺；最紧张时每个区域至少有{smallerScreen.summary.minimumCandidateCount}颗候选卫星</td></tr><tr><td>“可见数量”是否等于“实际负载”</td><td><span className="result-review">不是同一概念</span></td><td>单星最多可见{smallerScreen.summary.maximumVisibleL1PerSatellite}个一级波位，只表示几何视野；同一批检查中，唯一分配后的实际负责峰值为{smallerScreen.summary.maximumAssignedL1PerSatellite}个/星</td></tr><tr><td>当前展示时刻的全网分配是否完整</td><td><span className={!assignmentReady ? "result-review" : assignmentSnapshot.unassignedCount === 0 ? "result-pass" : "result-failed"}>{!assignmentReady ? "载入后计算" : assignmentSnapshot.unassignedCount === 0 ? "全部有负责人" : "仍有未分配区域"}</span></td><td>{assignmentReady ? `当前实际分配峰值为${assignmentSnapshot.peakAssigned}个一级波位/星；未分配${assignmentSnapshot.unassignedCount}个` : "浏览器载入波位目录后，在后台完成当前时刻的全网唯一分配"}</td></tr><tr><td>是否已经接入基站程序</td><td><span className="result-review">尚未接通</span></td><td>页面能分别保存完整可见清单和实际负责清单；当前基站程序只能接收一张清单，仍需补充最小输入接口</td></tr><tr><td>终端多久能发现网络</td><td><span className="result-pass">可生成80 ms计划</span></td><td>软件日历为每个已分配一级波位安排SSB机会；“已安排”不等于真实无线信号已经发出</td></tr><tr><td>终端多久能获得接入机会</td><td><span className="result-tight">可生成640 ms计划</span></td><td>PRACH按每个已分配一级波位单独安排；满载时余量较小，仍需真实无线实现验证</td></tr><tr><td>能否长时间连续服务</td><td><span className="result-review">尚待确认</span></td><td>{audit.exactAudit?.durationDays ?? 7}天连续事件检查、单星故障检查以及真实功率和干扰条件尚未完成</td></tr></tbody></table></div></section>
+          <section className="conclusion-table"><header><h3>最终结论与验收边界</h3><span>卫星数量已经确定，上线条件继续验证</span></header><div><table><thead><tr><th>关注事项</th><th>最终结论</th><th>说明</th></tr></thead><tbody><tr><td>采用多少卫星</td><td><span className="result-pass">2,990颗</span></td><td>{smallerScreen.scenario.planes}个轨道面、每面{smallerScreen.scenario.satellitesPerPlane}颗；比历史3,528颗展示对照减少{baseline.totalSatellites - smallerScreen.scenario.satelliteCount}颗，减少15.25%</td></tr><tr><td>设计依据是否满足</td><td><span className="result-pass">720/720满足</span></td><td>一天内{smallerScreen.sampling.epochCount}个检查时刻未发现空缺；最紧张时每个区域至少有{smallerScreen.summary.minimumCandidateCount}颗可用卫星</td></tr><tr><td>“可见数量”是否等于“实际负载”</td><td><span className="result-review">不是同一概念</span></td><td>单星最多可见{smallerScreen.summary.maximumVisibleL1PerSatellite}个一级波位，只表示几何视野；唯一分配后的实际负责峰值为{smallerScreen.summary.maximumAssignedL1PerSatellite}个/星</td></tr><tr><td>当前互动模型</td><td><span className="result-review">3,528颗历史对照</span></td><td>覆盖、负载和日历页面仍使用原3,528颗模型进行交互展示；2,990颗的新身份表与运行输入尚待生成</td></tr><tr><td>是否已经接入基站程序</td><td><span className="result-review">尚未接通</span></td><td>页面能分别保存完整可见清单和实际负责清单；当前基站程序只能接收一张清单，仍需补充最小输入接口</td></tr><tr><td>终端多久能发现网络</td><td><span className="result-pass">可生成80 ms计划</span></td><td>软件日历为每个已分配一级波位安排SSB机会；“已安排”不等于真实无线信号已经发出</td></tr><tr><td>终端多久能获得接入机会</td><td><span className="result-tight">可生成640 ms计划</span></td><td>PRACH按每个已分配一级波位单独安排；满载时余量较小，仍需真实无线实现验证</td></tr><tr><td>上线前还要完成什么</td><td><span className="result-review">三项验收</span></td><td>{audit.exactAudit?.durationDays ?? 7}天连续事件检查、单星故障检查以及真实功率和干扰验证</td></tr></tbody></table></div></section>
 
-          <section className="acceptance-actions"><header><h3>最终定案前还要完成三件事</h3><span>三项都完成后，才能确认全球陆地连续服务能力</span></header><div><article><b>01</b><h4>连续服务检查</h4><p>连续检查7天，确认两个检查时刻之间也不会出现短暂的服务中断。</p></article><article><b>02</b><h4>卫星接续检查</h4><p>确认一颗卫星离开时，下一颗卫星已经准备好接续服务，交接期间不中断。</p></article><article><b>03</b><h4>真实无线环境验证</h4><p>使用真实轨道、信号功率、干扰、地面站和无线设备完成验证。</p></article></div></section>
+          <section className="acceptance-actions"><header><h3>最终方案上线前必须完成三项验收</h3><span>卫星数量已经确定；如验收不满足，再按结果调整设计</span></header><div><article><b>01</b><h4>连续服务检查</h4><p>连续检查7天，确认两个检查时刻之间也不会出现短暂的服务中断。</p></article><article><b>02</b><h4>卫星接续检查</h4><p>确认一颗卫星离开时，下一颗卫星已经准备好接续服务，交接期间不中断。</p></article><article><b>03</b><h4>真实无线环境验证</h4><p>使用真实轨道、信号功率、干扰、地面站和无线设备完成验证。</p></article></div></section>
 
-          <details className="technical-details decision-details"><summary>查看技术依据和使用边界</summary><div className="decision-technical"><p>覆盖目录包含±57°陆地的36,411个一级波位。较小候选来自一天、每{smallerScreen.sampling.stepSeconds}秒检查一次的固定步长计算。结果为粗筛，`exact=false`、`selectedScenario=null`，不能表述为全球连续覆盖已经通过。</p><p>完整可见清单与唯一服务分配是两层数据：前者不能按256裁剪，后者才受单星256、单小区128的当前软件规划上限约束。SSB和PRACH都针对已分配的一级波位生成计划；这些计划不代表PHY、RF、天线或空口已经执行。</p><section className="scenario-table"><header><h3>方案对比记录</h3><span>当前阶段只比较候选，不做最终选型</span></header><div><table><thead><tr><th>方案</th><th>倾角</th><th>轨道面</th><th>每面卫星</th><th>当前状态</th></tr></thead><tbody><tr><td>当前展示基线</td><td>{baseline.inclinationDeg}°</td><td>{baseline.planes}</td><td>{baseline.satellitesPerPlane}</td><td>作为网页运行基线保留，尚未正式验收</td></tr><tr><td>较小候选</td><td>{baseline.inclinationDeg}°</td><td>{smallerScreen.scenario.planes}</td><td>{smallerScreen.scenario.satellitesPerPlane}</td><td>一天固定步长粗筛通过，待7天连续事件与故障场景复核</td></tr>{(audit.scenarios ?? []).filter((scenario) => scenario.id === "global-45-seed-3528").map((scenario, index) => <tr key={scenario?.id ?? index}><td>{scenarioDisplayName(scenario, index)}</td><td>{scenario?.inclinationDeg ?? baseline.inclinationDeg}°</td><td>{scenario?.planes ?? "—"}</td><td>{scenario?.satellitesPerPlane ?? "—"}</td><td>{scenarioEvidenceText(scenario)}</td></tr>)}</tbody></table></div></section></div></details>
+          <details className="technical-details decision-details"><summary>查看技术依据和使用边界</summary><div className="decision-technical"><p>最终工程方案采用2,990颗卫星。覆盖目录包含±57°陆地的36,411个一级波位，现有依据来自一天、每{smallerScreen.sampling.stepSeconds}秒检查一次的计算。底层记录仍为`exact=false`、`selectedScenario=null`，表示连续覆盖正式验收尚未完成，不再表示卫星数量没有结论。</p><p>完整可见清单与唯一服务分配是两层数据：前者不能按256裁剪，后者才受单星256、单小区128的当前软件规划上限约束。SSB和PRACH都针对已分配的一级波位生成计划；这些计划不代表PHY、RF、天线或空口已经执行。</p><section className="scenario-table"><header><h3>方案决策记录</h3><span>最终采用2,990颗，3,528颗仅作历史展示对照</span></header><div><table><thead><tr><th>方案</th><th>倾角</th><th>轨道面</th><th>每面卫星</th><th>当前状态</th></tr></thead><tbody><tr><td>历史展示对照</td><td>{baseline.inclinationDeg}°</td><td>{baseline.planes}</td><td>{baseline.satellitesPerPlane}</td><td>不再作为目标规模；暂用于互动页面</td></tr><tr><td>最终采用方案</td><td>{baseline.inclinationDeg}°</td><td>{smallerScreen.scenario.planes}</td><td>{smallerScreen.scenario.satellitesPerPlane}</td><td>采用2,990颗；进入上线前验收</td></tr>{(audit.scenarios ?? []).filter((scenario) => scenario.id === "global-45-seed-3528").map((scenario, index) => <tr key={scenario?.id ?? index}><td>{scenarioDisplayName(scenario, index)}</td><td>{scenario?.inclinationDeg ?? baseline.inclinationDeg}°</td><td>{scenario?.planes ?? "—"}</td><td>{scenario?.satellitesPerPlane ?? "—"}</td><td>{scenarioEvidenceText(scenario)}</td></tr>)}</tbody></table></div></section></div></details>
         </section>
       ) : null}
 
-      <footer className="global-footer"><span>波位目录 {String(metadata.version ?? "载入中")} · SHA-256 {String(metadata.integrity?.sha256 ?? metadata.contentHash ?? "pending").slice(0, 16)}</span><p>当前展示基线：{baseline.totalSatellites.toLocaleString("en-US")}颗 · 较小粗筛候选：{smallerScreen.scenario.satelliteCount.toLocaleString("en-US")}颗 · 45°进入 / 42°保持 · 最终数量尚未选定</p></footer>
+      <footer className="global-footer"><span>波位目录 {String(metadata.version ?? "载入中")} · SHA-256 {String(metadata.integrity?.sha256 ?? metadata.contentHash ?? "pending").slice(0, 16)}</span><p>最终方案：{smallerScreen.scenario.satelliteCount.toLocaleString("en-US")}颗 · 历史展示对照：{baseline.totalSatellites.toLocaleString("en-US")}颗 · 45°进入 / 42°保持 · 上线前验收继续进行</p></footer>
     </main>
   );
 }

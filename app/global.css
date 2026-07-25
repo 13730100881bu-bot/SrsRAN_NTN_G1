@@ -10,6 +10,8 @@
 .global-header nav button.active { color: #fff; background: #29434d; box-shadow: inset 0 -2px var(--focus); }
 .audit-chip { justify-self: end; display: flex; align-items: center; gap: 8px; padding: 8px 11px; border: 1px solid #6f6248; color: #f2dfba; background: #322d22; font-size: 11px; white-space: nowrap; }
 .audit-chip i { width: 7px; height: 7px; border-radius: 50%; background: var(--focus); box-shadow: 0 0 0 4px #ffb14a22; }
+.audit-chip.decision { border-color: #3c8b70; color: #d8f4e8; background: #173c34; }
+.audit-chip.decision i { background: var(--green); box-shadow: 0 0 0 4px #4fc39b22; }
 
 .global-metrics { display: grid; grid-template-columns: repeat(4, 1fr); padding: 0 24px; border-bottom: 1px solid var(--line); background: #e8ebe6; }
 .global-metrics article { min-width: 0; min-height: 92px; padding: 14px 16px; display: grid; align-content: center; border-left: 1px solid #d0d5d1; }

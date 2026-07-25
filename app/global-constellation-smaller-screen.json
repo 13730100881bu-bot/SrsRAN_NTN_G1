@@ -4,6 +4,12 @@
   "exact": false,
   "selectionEligible": false,
   "selectedScenario": null,
+  "engineeringDecision": {
+    "status": "final_design_adopted",
+    "adoptedSatelliteCount": 2990,
+    "supersededDisplayBaseline": 3528,
+    "acceptancePending": true
+  },
   "scenario": {
     "altitudeKm": 500,
     "inclinationDeg": 60,
@@ -32,7 +38,7 @@
   },
   "limitations": [
     "Fixed-step sampling is not continuous coverage proof.",
-    "The candidate is not selected and still requires a seven-day event-driven audit.",
+    "The final engineering design uses 2,990 satellites, while formal continuous-coverage acceptance still requires a seven-day event-driven audit.",
     "The 120-second step is too coarse to measure real handover counts.",
     "Gateway, N-1, PCI time conflicts, power, interference and RF execution are not included."
   ]

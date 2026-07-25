@@ -25,7 +25,7 @@ const CHINA_GEO_OUTLINE: [number, number][] = [
 const CONSTELLATION_AUDIT_SCENARIOS = [
   { key: "originalBaseline", eyebrow: "原容量基线", note: "保留为容量缺口对照" },
   { key: "minimumFeasible", eyebrow: "最小可行对照", note: "仅表示本轮采样刚好通过" },
-  { key: "recommended", eyebrow: "当前工程候选", note: "比最小可行对照多 72 星，不等同 N-1 冗余" },
+  { key: "recommended", eyebrow: "历史中国样例采用方案", note: "比最小可行对照多 72 星，不等同 N-1 冗余" },
 ] as const;
 
 function formatClock(seconds: number) {
