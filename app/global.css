@@ -170,7 +170,7 @@
 .access-journey span { margin-top: 9px; font-size: 12px; font-weight: 650; }
 .access-journey small { margin-top: 5px; color: #a9c0c6; font-size: 10px; line-height: 1.45; }
 
-.beam-animation-panel { margin: 0 16px 16px; overflow: hidden; color: #edf7f4; background: #0b2630; border: 1px solid #36515a; }
+.beam-animation-panel { width: calc(100% - 32px); max-width: 1380px; margin: 0 auto 16px; overflow: hidden; color: #edf7f4; background: #0b2630; border: 1px solid #36515a; }
 .beam-animation-panel > header { padding: 18px 20px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 24px; border-bottom: 1px solid #36515a; }
 .beam-animation-panel > header > div:first-child > span { color: #7ed6ee; font-size: 10px; font-weight: 700; letter-spacing: .08em; }
 .beam-animation-panel h3 { margin: 5px 0 0; font-size: 19px; font-weight: 650; }
@@ -187,7 +187,7 @@
 .beam-animation-facts small { grid-column: 1 / -1; margin-top: 3px; color: #90adb3; font-size: 9px; }
 .beam-animation-explanation { margin: 0; padding: 10px 18px; color: #a9c4c9; background: #09252e; border-bottom: 1px solid #36515a; font-size: 10px; line-height: 1.55; }
 .beam-animation-explanation b { margin-right: 7px; color: #f0f8f6; }
-.beam-animation-map { min-height: 500px; overflow: hidden; display: grid; grid-template-rows: auto minmax(0, 1fr); background: #071c25; }
+.beam-animation-map { height: clamp(560px, 52vw, 720px); min-height: 560px; overflow: hidden; display: grid; grid-template-rows: auto minmax(0, 1fr); background: #071c25; }
 .beam-animation-canvas { position: relative; min-height: 0; overflow: hidden; }
 .beam-animation-canvas canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .beam-animation-orbit-note { min-height: 42px; padding: 7px 12px; box-sizing: border-box; display: flex; align-items: baseline; justify-content: center; gap: 9px; color: #dcebed; background: #071c25; border-bottom: 1px solid rgba(126, 214, 238, .2); pointer-events: none; }
@@ -329,7 +329,7 @@
   .beam-animation-panel > header { grid-template-columns: 1fr; gap: 12px; }
   .beam-animation-summary { min-width: 0; justify-items: start; text-align: left; }
   .beam-animation-facts article { padding: 10px 12px; }
-  .beam-animation-map { min-height: 430px; }
+  .beam-animation-map { height: 480px; min-height: 430px; }
   .beam-animation-controls { grid-template-columns: auto 1fr; }
   .beam-animation-controls > label { grid-column: 1 / -1; grid-row: 1; }
   .beam-animation-speed { justify-content: flex-end; }
@@ -366,11 +366,12 @@
   .map-legend { right: 8px; left: 8px; }
   .decision-hero h2 { font-size: 20px; }
   .access-guide, .access-cell-overview, .beam-animation-panel { margin: 10px; }
+  .beam-animation-panel { width: auto; }
   .beam-animation-panel > header { padding: 14px; }
   .beam-animation-facts { grid-template-columns: 1fr; }
   .beam-animation-facts article { grid-template-columns: 1fr auto; border-right: 0; border-bottom: 1px solid rgba(126, 214, 238, .14); }
   .beam-animation-facts article:last-child { border-bottom: 0; }
-  .beam-animation-map { min-height: 370px; }
+  .beam-animation-map { height: 420px; min-height: 370px; }
   .beam-animation-legend { right: 8px; bottom: 8px; left: 8px; justify-content: center; }
   .beam-animation-controls { grid-template-columns: 1fr; gap: 9px; }
   .beam-animation-controls > label { grid-column: auto; grid-row: auto; grid-template-columns: 1fr 70px; }

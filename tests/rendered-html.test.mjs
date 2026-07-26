@@ -168,6 +168,8 @@ test("audit evidence remains separate from the final engineering decision", asyn
   assert.match(css, /\.global-workspace \{[^}]*grid-template-columns:\s*1fr/);
   assert.match(css, /\.calendar-grid \{[^}]*grid-template-columns:\s*repeat\(2,\s*1fr\)/);
   assert.match(css, /\.access-answer-grid \{[^}]*grid-template-columns:\s*repeat\(2,\s*1fr\)/);
+  assert.match(css, /\.beam-animation-panel \{[^}]*width:\s*calc\(100%\s*-\s*32px\)[^}]*max-width:\s*1380px[^}]*margin:\s*0 auto 16px/);
+  assert.match(css, /\.beam-animation-map \{[^}]*height:\s*clamp\(560px,\s*52vw,\s*720px\)[^}]*min-height:\s*560px/);
   assert.match(css, /\.beam-animation-map \{[^}]*min-height:\s*430px/);
   assert.match(css, /\.beam-animation-map \{[^}]*display:\s*grid[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\)/);
   assert.match(css, /\.beam-animation-canvas \{[^}]*position:\s*relative[^}]*min-height:\s*0/);
