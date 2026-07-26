@@ -108,6 +108,7 @@ test("audit evidence remains separate from the final engineering decision", asyn
   assert.match(planner, /aria-live="polite"/);
   assert.match(planner, /可省略前导零，也可以按 Enter 查找/);
   assert.match(planner, /view !== "access" \? <section className="global-metrics"/);
+  assert.doesNotMatch(planner, /部署前连续服务验收|metric-review/);
   assert.match(planner, /view !== "audit" && view !== "access"/);
   assert.match(planner, /<details className="technical-details/);
   assert.doesNotMatch(planner, /<details[^>]*\sopen(?:=|>)/);

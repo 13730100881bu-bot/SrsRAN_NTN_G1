@@ -404,7 +404,6 @@ export function GlobalPlanner() {
         <article><span>设计依据检查时刻</span><strong>{smallerScreen.sampling.epochCount} / {smallerScreen.sampling.epochCount}</strong><small>一天内每2分钟检查一次 · 未发现采样时刻覆盖空窗</small></article>
         <article><span>单星可见区域峰值</span><strong>{smallerScreen.summary.maximumVisibleL1PerSatellite}</strong><small>表示卫星能看到多少区域，不是实际服务负载</small></article>
         <article><span>采用方案实际负责峰值</span><strong>{smallerScreen.summary.maximumAssignedL1PerSatellite} / {SATELLITE_CAPACITY}</strong><small>{smallerScreen.summary.assignmentCheckedEpochs}个检查时刻均完成唯一分配 · 单小区峰值{smallerScreen.summary.maximumBalancedCellLoad}</small></article>
-        <article className="metric-review"><span>部署前连续服务验收</span><strong>继续执行</strong><small>连续检查{audit.exactAudit?.durationDays ?? 7}天，并完成故障与真实无线验证</small></article>
       </section> : null}
 
       {view !== "audit" ? <section className="global-toolbar" aria-label="时间与查询控制">
