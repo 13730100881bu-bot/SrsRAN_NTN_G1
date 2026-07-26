@@ -124,11 +124,15 @@ test("audit evidence remains separate from the final engineering decision", asyn
   assert.match(globalMap, /addEventListener\("wheel", handleWheel, \{ passive: false \}\)/);
   assert.match(globalMap, /createGlobalMapProjection/);
   assert.match(globalMap, /一级波位六边形边界/);
-  assert.match(globalMap, /每个六边形代表一个一级波位/);
+  assert.match(globalMap, /相邻一级波位合并显示/);
+  assert.match(globalMap, /继续放大后会自动展开为单个六边形/);
   assert.match(globalMap, /createGlobalPositionHexagon/);
+  assert.match(globalMap, /createGlobalMapPyramid/);
+  assert.match(globalMap, /selectGlobalMapRenderPlan/);
   assert.match(globalMap, /drawHexagonLayer/);
   assert.match(globalMap, /baseLayerRef/);
-  assert.match(globalMap, /Per-second visibility changes only repaint the overlays/);
+  assert.match(globalMap, /requestAnimationFrame\(draw\)/);
+  assert.doesNotMatch(globalMap, /mapGeometry\.allIndexes/);
   assert.match(globalMap, /getComputedStyle\(parent\)\.minHeight/);
   assert.doesNotMatch(globalMap, /fillRect\(point\[0\] - 0\.5/);
   assert.match(hexagonModel, /HEXAGON_BEARINGS_DEG = \[0, 60, 120, 180, 240, 300\]/);

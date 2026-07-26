@@ -7,9 +7,16 @@ import {
   DEFAULT_GLOBAL_MAP_VIEW,
   GLOBAL_MAP_MAX_ZOOM,
   GLOBAL_MAP_MIN_ZOOM,
+  globalMapViewBounds,
   zoomGlobalMapViewAt,
   type GlobalMapView,
 } from "./global-map-view";
+import {
+  createGlobalMapPyramid,
+  selectGlobalMapRenderPlan,
+  type GlobalMapCluster,
+  type GlobalMapRenderPlan,
+} from "./global-map-pyramid";
 import {
   createGlobalPositionHexagon,
   DEFAULT_GLOBAL_POSITION_SPACING_KM,
@@ -36,7 +43,16 @@ type BaseMapLayerCache = {
   mapView: GlobalMapView;
   land: GeoPermissibleObjects | null;
   geometry: object;
+  renderPlan: GlobalMapRenderPlan;
 };
+
+type MapRenderSummary = Readonly<{
+  mode: GlobalMapRenderPlan["mode"];
+  drawItemCount: number;
+  representedCellCount: number;
+}>;
+
+const MAX_CACHED_POSITION_HEXAGONS = 8192;
 
 type GlobalCoverageMapProps = {
   cells: readonly GlobalMapCell[];
@@ -69,19 +85,22 @@ export function GlobalCoverageMap({
   const [land, setLand] = useState<GeoPermissibleObjects | null>(null);
   const [landError, setLandError] = useState("");
   const [mapView, setMapView] = useState<GlobalMapView>(DEFAULT_GLOBAL_MAP_VIEW);
+  const [renderSummary, setRenderSummary] = useState<MapRenderSummary>({
+    mode: "overview",
+    drawItemCount: 0,
+    representedCellCount: cells.length,
+  });
   const mapGeometry = useMemo(() => {
     const spacingKm = Number.isFinite(positionSpacingKm) && positionSpacingKm > 0
       ? positionSpacingKm
       : DEFAULT_GLOBAL_POSITION_SPACING_KM;
     const cellIndexById = new Map<string, number>();
-    const hexagons = cells.map((cell, index) => {
-      cellIndexById.set(cell.id, index);
-      return createGlobalPositionHexagon(cell.lat, cell.lon, spacingKm);
-    });
+    cells.forEach((cell, index) => cellIndexById.set(cell.id, index));
     return {
       cellIndexById,
-      hexagons,
-      allIndexes: cells.map((_, index) => index),
+      pyramid: createGlobalMapPyramid(cells),
+      hexagonCache: new Map<number, ReturnType<typeof createGlobalPositionHexagon>>(),
+      spacingKm,
       selectionRadiusDeg: globalPositionHexagonRadiusKm(spacingKm) / EARTH_MEAN_RADIUS_KM * 180 / Math.PI,
     };
   }, [cells, positionSpacingKm]);
@@ -91,16 +110,7 @@ export function GlobalCoverageMap({
       return index === undefined ? [] : [index];
     })
   ), [mapGeometry.cellIndexById, visibleCells]);
-  const candidateIndexes = useMemo(() => {
-    if (candidateCounts.length !== cells.length) return { gaps: [] as number[], single: [] as number[] };
-    const gaps: number[] = [];
-    const single: number[] = [];
-    candidateCounts.forEach((count, index) => {
-      if (count === 0) gaps.push(index);
-      else if (count === 1) single.push(index);
-    });
-    return { gaps, single };
-  }, [candidateCounts, cells.length]);
+  const visibleIndexSet = useMemo(() => new Set(visibleIndexes), [visibleIndexes]);
 
   useEffect(() => {
     let cancelled = false;
@@ -167,6 +177,48 @@ export function GlobalCoverageMap({
 
       const projection = createGlobalMapProjection(width, height, mapView);
       const path = geoPath(projection, context);
+      const renderBounds = globalMapViewBounds(width, height, mapView);
+      const renderPlan = selectGlobalMapRenderPlan(
+        mapGeometry.pyramid,
+        mapView.zoom,
+        renderBounds,
+        Math.max(1, mapGeometry.selectionRadiusDeg * 2),
+      );
+      const hexagonForIndex = (index: number) => {
+        const cachedHexagon = mapGeometry.hexagonCache.get(index);
+        if (cachedHexagon) return cachedHexagon;
+        const cell = cells[index];
+        const hexagon = createGlobalPositionHexagon(cell.lat, cell.lon, mapGeometry.spacingKm);
+        mapGeometry.hexagonCache.set(index, hexagon);
+        if (mapGeometry.hexagonCache.size > MAX_CACHED_POSITION_HEXAGONS) {
+          const oldestIndex = mapGeometry.hexagonCache.keys().next().value;
+          if (oldestIndex !== undefined) mapGeometry.hexagonCache.delete(oldestIndex);
+        }
+        return hexagon;
+      };
+      const traceClusterShapes = (
+        drawContext: CanvasRenderingContext2D,
+        clusters: readonly GlobalMapCluster[],
+        mode: "overview" | "regional",
+      ) => {
+        for (const cluster of clusters) {
+          const point = projection([
+            Math.min(renderBounds.maxLon, Math.max(renderBounds.minLon, cluster.centerLon)),
+            Math.min(renderBounds.maxLat, Math.max(renderBounds.minLat, cluster.centerLat)),
+          ]);
+          if (!point) continue;
+          const maximumRadius = mode === "overview" ? 7 : 5.5;
+          const radius = Math.min(maximumRadius, 1.8 + Math.sqrt(cluster.cellIndexes.length) * 0.62);
+          for (let corner = 0; corner < 6; corner += 1) {
+            const angle = Math.PI / 6 + corner * Math.PI / 3;
+            const x = point[0] + Math.cos(angle) * radius;
+            const y = point[1] + Math.sin(angle) * radius;
+            if (corner === 0) drawContext.moveTo(x, y);
+            else drawContext.lineTo(x, y);
+          }
+          drawContext.closePath();
+        }
+      };
       const cached = baseLayerRef.current;
       const cacheMatches = cached
         && cached.width === width
@@ -234,19 +286,6 @@ export function GlobalCoverageMap({
           baseContext.stroke();
         }
 
-        // The frozen catalog is rendered once for each map view and retained as
-        // a base layer. Per-second visibility changes only repaint the overlays.
-        const boundaryWidth = mapView.zoom >= 4 ? 0.8 : mapView.zoom >= 2 ? 0.55 : 0.35;
-        baseContext.beginPath();
-        for (const index of mapGeometry.allIndexes) basePath(mapGeometry.hexagons[index]);
-        baseContext.fillStyle = "rgba(8, 44, 53, 0.22)";
-        baseContext.fill();
-        baseContext.strokeStyle = mapView.zoom >= 2
-          ? "rgba(235, 244, 240, 0.55)"
-          : "rgba(235, 244, 240, 0.34)";
-        baseContext.lineWidth = boundaryWidth;
-        baseContext.stroke();
-
         baseLayerRef.current = {
           canvas: baseCanvas,
           width,
@@ -255,10 +294,24 @@ export function GlobalCoverageMap({
           mapView: { ...mapView },
           land,
           geometry: mapGeometry,
+          renderPlan,
         };
       }
 
       context.drawImage(baseLayerRef.current!.canvas, 0, 0, width, height);
+      const activeRenderPlan = baseLayerRef.current!.renderPlan;
+      setRenderSummary((current) => {
+        const next = {
+          mode: activeRenderPlan.mode,
+          drawItemCount: activeRenderPlan.drawItemCount,
+          representedCellCount: activeRenderPlan.representedCellCount,
+        };
+        return current.mode === next.mode
+          && current.drawItemCount === next.drawItemCount
+          && current.representedCellCount === next.representedCellCount
+          ? current
+          : next;
+      });
 
       const drawHexagonLayer = (
         indexes: readonly number[],
@@ -268,7 +321,22 @@ export function GlobalCoverageMap({
       ) => {
         if (indexes.length === 0) return;
         context.beginPath();
-        for (const index of indexes) path(mapGeometry.hexagons[index]);
+        for (const index of indexes) path(hexagonForIndex(index));
+        context.fillStyle = fillStyle;
+        context.fill();
+        context.strokeStyle = strokeStyle;
+        context.lineWidth = lineWidth;
+        context.stroke();
+      };
+      const drawClusterLayer = (
+        clusters: readonly GlobalMapCluster[],
+        fillStyle: string,
+        strokeStyle: string,
+        lineWidth: number,
+      ) => {
+        if (clusters.length === 0 || activeRenderPlan.mode === "detail") return;
+        context.beginPath();
+        traceClusterShapes(context, clusters, activeRenderPlan.mode);
         context.fillStyle = fillStyle;
         context.fill();
         context.strokeStyle = strokeStyle;
@@ -277,9 +345,63 @@ export function GlobalCoverageMap({
       };
 
       const boundaryWidth = mapView.zoom >= 4 ? 0.8 : mapView.zoom >= 2 ? 0.55 : 0.35;
-      drawHexagonLayer(candidateIndexes.single, "rgba(229, 164, 79, 0.58)", "#f2be77", boundaryWidth + 0.15);
-      drawHexagonLayer(candidateIndexes.gaps, "rgba(232, 95, 79, 0.7)", "#ff8d7f", boundaryWidth + 0.2);
-      drawHexagonLayer(visibleIndexes, "rgba(75, 199, 238, 0.52)", "#84e0f8", boundaryWidth + 0.35);
+      if (activeRenderPlan.mode === "detail") {
+        const neutralIndexes: number[] = [];
+        const gapIndexes: number[] = [];
+        const singleIndexes: number[] = [];
+        const visibleInView: number[] = [];
+        for (const index of activeRenderPlan.cellIndexes) {
+          if (candidateCounts.length === cells.length) {
+            const count = candidateCounts[index];
+            if (count === 0) gapIndexes.push(index);
+            else if (count === 1) singleIndexes.push(index);
+            else neutralIndexes.push(index);
+          } else neutralIndexes.push(index);
+          if (visibleIndexSet.has(index)) visibleInView.push(index);
+        }
+        drawHexagonLayer(
+          neutralIndexes,
+          "rgba(8, 44, 53, 0.22)",
+          mapView.zoom >= 2 ? "rgba(235, 244, 240, 0.55)" : "rgba(235, 244, 240, 0.34)",
+          boundaryWidth,
+        );
+        drawHexagonLayer(singleIndexes, "rgba(229, 164, 79, 0.58)", "#f2be77", boundaryWidth + 0.15);
+        drawHexagonLayer(gapIndexes, "rgba(232, 95, 79, 0.7)", "#ff8d7f", boundaryWidth + 0.2);
+        drawHexagonLayer(visibleInView, "rgba(75, 199, 238, 0.52)", "#84e0f8", boundaryWidth + 0.35);
+      } else {
+        const neutralClusters: GlobalMapCluster[] = [];
+        const gapClusters: GlobalMapCluster[] = [];
+        const singleClusters: GlobalMapCluster[] = [];
+        const visibleClusters: GlobalMapCluster[] = [];
+        for (const cluster of activeRenderPlan.clusters) {
+          let gaps = 0;
+          let singles = 0;
+          let isVisible = false;
+          for (const index of cluster.cellIndexes) {
+            if (candidateCounts.length === cells.length) {
+              const count = candidateCounts[index];
+              if (count === 0) gaps += 1;
+              else if (count === 1) singles += 1;
+            }
+            if (visibleIndexSet.has(index)) isVisible = true;
+          }
+          if (gaps > 0) {
+            gapClusters.push(cluster);
+          } else if (singles > 0) {
+            singleClusters.push(cluster);
+          } else neutralClusters.push(cluster);
+          if (isVisible) visibleClusters.push(cluster);
+        }
+        drawClusterLayer(
+          neutralClusters,
+          "rgba(8, 44, 53, 0.44)",
+          mapView.zoom >= 2 ? "rgba(235, 244, 240, 0.55)" : "rgba(235, 244, 240, 0.34)",
+          boundaryWidth,
+        );
+        drawClusterLayer(singleClusters, "rgba(229, 164, 79, 0.58)", "#f2be77", boundaryWidth + 0.15);
+        drawClusterLayer(gapClusters, "rgba(232, 95, 79, 0.68)", "#ff8d7f", boundaryWidth + 0.2);
+        drawClusterLayer(visibleClusters, "rgba(75, 199, 238, 0.58)", "#84e0f8", boundaryWidth + 0.35);
+      }
 
       const drawFootprint = (radius: number, stroke: string, dashed: boolean) => {
         context.beginPath();
@@ -310,11 +432,30 @@ export function GlobalCoverageMap({
       }
     };
 
-    const observer = new ResizeObserver(draw);
+    let animationFrame = 0;
+    const scheduleDraw = () => {
+      window.cancelAnimationFrame(animationFrame);
+      animationFrame = window.requestAnimationFrame(draw);
+    };
+    const observer = new ResizeObserver(scheduleDraw);
     observer.observe(parent);
-    draw();
-    return () => observer.disconnect();
-  }, [candidateIndexes, entryAngularRadiusDeg, holdAngularRadiusDeg, land, mapGeometry, mapView, satellite, selectedCellId, visibleIndexes]);
+    scheduleDraw();
+    return () => {
+      observer.disconnect();
+      window.cancelAnimationFrame(animationFrame);
+    };
+  }, [
+    candidateCounts,
+    cells,
+    entryAngularRadiusDeg,
+    holdAngularRadiusDeg,
+    land,
+    mapGeometry,
+    mapView,
+    satellite,
+    selectedCellId,
+    visibleIndexSet,
+  ]);
 
   const changeZoom = (requestedZoom: number) => {
     const canvas = canvasRef.current;
@@ -362,6 +503,18 @@ export function GlobalCoverageMap({
         aria-label={`全球陆地一级波位六边形地图；${satellite.id} 当前几何可见 ${visibleCells.length} 个一级波位；支持滚轮缩放和点击选择`}
       />
       {landError ? <p className="map-error">陆地边界加载失败：{landError}</p> : null}
+      <div className="map-render-status" aria-live="polite">
+        <strong>
+          {renderSummary.mode === "overview"
+            ? "全球概览"
+            : renderSummary.mode === "regional" ? "区域概览" : "波位明细"}
+        </strong>
+        <span>
+          {renderSummary.mode === "detail"
+            ? `当前显示 ${renderSummary.drawItemCount.toLocaleString("en-US")} 个一级波位`
+            : `当前显示 ${renderSummary.drawItemCount.toLocaleString("en-US")} 个合并区域 · 包含 ${renderSummary.representedCellCount.toLocaleString("en-US")} 个一级波位`}
+        </span>
+      </div>
       <div className="map-zoom-panel">
         <span>滚轮缩放 · 点击选择一级波位</span>
         <div aria-label="地图缩放控制">
@@ -372,12 +525,16 @@ export function GlobalCoverageMap({
         </div>
       </div>
       <div className="map-legend" aria-label="地图图例">
-        <span><i className="position" />一级波位六边形边界</span>
+        <span><i className="position" />{renderSummary.mode === "detail" ? "一级波位六边形边界" : "相邻一级波位合并显示"}</span>
         <span><i className="entry" />≥45° 可新接入</span>
         <span><i className="hold" />42°～45° 仅保持</span>
         <span><i className="visible" />所选卫星可见一级波位</span>
         <span><i className="gap" />当前时刻无≥45°候选</span>
-        <small>每个六边形代表一个一级波位；沿海按中心是否位于陆地保留。</small>
+        <small>
+          {renderSummary.mode === "detail"
+            ? "当前只绘制视野内的一级波位六边形；沿海按中心是否位于陆地保留。"
+            : "当前合并显示相邻一级波位，继续放大后会自动展开为单个六边形。"}
+        </small>
       </div>
     </div>
   );

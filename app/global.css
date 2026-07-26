@@ -88,6 +88,9 @@
 .global-map-canvas canvas, .global-orbit-canvas canvas { display: block; width: 100%; height: 100%; }
 .global-map-canvas canvas { cursor: crosshair; touch-action: manipulation; }
 .global-orbit-canvas canvas { cursor: grab; }
+.map-render-status { position: absolute; top: 10px; left: 10px; display: grid; gap: 3px; max-width: min(330px, calc(100% - 250px)); padding: 7px 9px; color: #e9f3f1; background: #081d24e8; border-left: 3px solid #70cfee; pointer-events: none; }
+.map-render-status strong { font-size: 11px; }
+.map-render-status span { color: #b9cdd0; font-size: 9px; line-height: 1.35; }
 .map-zoom-panel { position: absolute; top: 10px; right: 10px; display: grid; justify-items: end; gap: 5px; color: #e9f3f1; }
 .map-zoom-panel > span { padding: 5px 8px; background: #081d24e8; font-size: 10px; }
 .map-zoom-panel > div { display: flex; align-items: center; overflow: hidden; border: 1px solid #4b6971; background: #081d24ed; }
@@ -105,7 +108,7 @@
 .map-legend i.visible { background: #4bc7ee; }
 .map-legend i.gap { background: #e85f4f; }
 .map-legend small { flex-basis: 100%; color: #aebfc2; line-height: 1.4; }
-.map-error { position: absolute; top: 10px; left: 10px; margin: 0; color: #fff; background: #a74734; padding: 6px 8px; font-size: 10px; }
+.map-error { position: absolute; top: 62px; left: 10px; margin: 0; color: #fff; background: #a74734; padding: 6px 8px; font-size: 10px; }
 .orbit-overlay { position: absolute; left: 12px; top: 12px; padding: 8px 10px; display: grid; color: #e9f3f1; background: #081d24e8; pointer-events: none; }
 .orbit-overlay span { color: #70cfee; font: 650 10px ui-monospace, monospace; }
 .orbit-overlay b { margin-top: 4px; font: 650 15px ui-monospace, monospace; }
@@ -351,6 +354,7 @@
   .global-map-canvas, .global-orbit-canvas, .orbit-fallback { min-height: 350px; }
   .map-zoom-panel { top: 8px; right: 8px; }
   .map-zoom-panel > span { display: none; }
+  .map-render-status { top: 8px; left: 8px; max-width: calc(100% - 205px); }
   .map-legend { right: 8px; left: 8px; }
   .decision-hero h2 { font-size: 20px; }
   .access-guide, .access-cell-overview, .beam-animation-panel { margin: 10px; }

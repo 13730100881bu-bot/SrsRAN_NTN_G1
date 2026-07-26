@@ -6,6 +6,7 @@ import {
   DEFAULT_GLOBAL_MAP_VIEW,
   GLOBAL_MAP_MAX_ZOOM,
   GLOBAL_MAP_MIN_ZOOM,
+  globalMapViewBounds,
   zoomGlobalMapViewAt,
 } from "../app/global-map-view.ts";
 
@@ -59,4 +60,21 @@ test("map center stays inside the earth after zoom and resize", () => {
     closeTo(center[0], width / 2);
     closeTo(center[1], height / 2);
   }
+});
+
+test("full-earth bounds include catalog positions at both date-line edges", () => {
+  assert.deepEqual(
+    globalMapViewBounds(1200, 600, DEFAULT_GLOBAL_MAP_VIEW),
+    { minLon: -180, maxLon: 180, minLat: -90, maxLat: 90 },
+  );
+
+  const closeView = globalMapViewBounds(
+    1200,
+    600,
+    { zoom: 4, centerLon: 120, centerLat: 20 },
+  );
+  assert.ok(closeView.minLon > -180);
+  assert.ok(closeView.maxLon <= 180);
+  assert.ok(closeView.minLat > -90);
+  assert.ok(closeView.maxLat < 90);
 });

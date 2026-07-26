@@ -1,4 +1,5 @@
 import { geoEquirectangular } from "d3-geo";
+import type { GlobalMapBounds } from "./global-map-pyramid";
 
 export type GlobalMapView = Readonly<{
   zoom: number;
@@ -44,6 +45,23 @@ export function createGlobalMapProjection(width: number, height: number, view: G
     .scale(globalMapScale(width, height, constrained.zoom))
     .center([constrained.centerLon, constrained.centerLat])
     .precision(0.2);
+}
+
+export function globalMapViewBounds(
+  width: number,
+  height: number,
+  view: GlobalMapView,
+): GlobalMapBounds {
+  const constrained = constrainGlobalMapView(view, width, height);
+  const scale = globalMapScale(width, height, constrained.zoom);
+  const halfLongitude = width * 90 / (Math.PI * scale);
+  const halfLatitude = height * 90 / (Math.PI * scale);
+  return {
+    minLon: Math.max(-180, constrained.centerLon - halfLongitude),
+    maxLon: Math.min(180, constrained.centerLon + halfLongitude),
+    minLat: Math.max(-90, constrained.centerLat - halfLatitude),
+    maxLat: Math.min(90, constrained.centerLat + halfLatitude),
+  };
 }
 
 export function zoomGlobalMapViewAt(
