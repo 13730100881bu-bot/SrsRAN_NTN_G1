@@ -28,6 +28,7 @@
 /run_artifacts/ntn_planning/**/plans/
 /run_artifacts/ntn_planning/**/slab-journal/
 /run_artifacts/ntn_planning/**/streaming-assignment-journal/
+/tools/gis_remote_service_site/run/
 
 # Test UE credentials stay local even when they use synthetic values.
 /run_artifacts/srsran_runtime_capture/ue_20_official.conf
