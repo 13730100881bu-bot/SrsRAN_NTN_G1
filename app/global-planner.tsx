@@ -40,6 +40,7 @@ type CatalogMetadata = {
   generation?: {
     equalAreaGrid?: boolean;
     l1NominalSpacingKm?: number;
+    targetCellAreaKm2?: number;
     maximumRelativeAreaDeviationPct?: number;
   };
   [key: string]: unknown;
@@ -384,8 +385,12 @@ export function GlobalPlanner() {
     && assignmentReady
     && assignmentSnapshot.unassignedCount === 0
     && largestOnboardCell <= CELL_CAPACITY;
-  const ssbOpportunityHeadroom = BASELINE_L1_CAPACITY.guaranteedDownlinkVisits - CELL_CAPACITY;
   const catalogName = catalogDisplayName(metadata.version);
+  const positionSpacingKm = Number(metadata.generation?.l1NominalSpacingKm ?? 60);
+  const positionCornerToCornerKm = positionSpacingKm * 2 / Math.sqrt(3);
+  const positionAreaKm2 = Number(
+    metadata.generation?.targetCellAreaKm2 ?? Math.sqrt(3) / 2 * positionSpacingKm ** 2,
+  );
 
   return (
     <main className="global-shell">
@@ -402,7 +407,7 @@ export function GlobalPlanner() {
       {view !== "access" ? <section className="global-metrics" aria-label="工程结论指标">
         <article className="metric-recommended"><span>最终采用方案</span><strong>{smallerScreen.scenario.planes}轨道面 · 每面{smallerScreen.scenario.satellitesPerPlane}星</strong><small>共{smallerScreen.scenario.satelliteCount.toLocaleString("en-US")}颗 · 服务±57°全球陆地</small></article>
         <article><span>设计依据检查时刻</span><strong>{smallerScreen.sampling.epochCount} / {smallerScreen.sampling.epochCount}</strong><small>一天内每2分钟检查一次 · 未发现采样时刻覆盖空窗</small></article>
-        <article><span>单星可见区域峰值</span><strong>{smallerScreen.summary.maximumVisibleL1PerSatellite}</strong><small>表示卫星能看到多少区域，不是实际服务负载</small></article>
+        <article><span>单星可见区域峰值</span><strong>{smallerScreen.summary.maximumVisibleL1PerSatellite}</strong><small>相邻区域中心约{Math.round(positionSpacingKm)} km · 可见数量与实际负责数量分开计算</small></article>
         <article><span>采用方案实际负责峰值</span><strong>{smallerScreen.summary.maximumAssignedL1PerSatellite} / {SATELLITE_CAPACITY}</strong><small>{smallerScreen.summary.assignmentCheckedEpochs}个检查时刻均完成唯一分配 · 单小区峰值{smallerScreen.summary.maximumBalancedCellLoad}</small></article>
       </section> : null}
 
@@ -446,7 +451,7 @@ export function GlobalPlanner() {
       {view === "coverage" ? (
         <section className="global-workspace coverage-workspace">
           <article className="global-stage">
-            <header><div><p>45°接入 · 42°保持</p><h2>全球陆地覆盖状态</h2></div><span>{catalog.length.toLocaleString("en-US")}个一级波位 · {Number(metadata.counts?.l2 ?? 0).toLocaleString("en-US")}个二级波位 · {catalogName}</span></header>
+            <header><div><p>45°接入 · 42°保持</p><h2>全球陆地覆盖状态</h2></div><span>{catalog.length.toLocaleString("en-US")}个一级波位 · 相邻中心约{Math.round(positionSpacingKm)} km / 每格约{Math.round(positionAreaKm2).toLocaleString("en-US")} km² · {catalogName}</span></header>
             <GlobalCoverageMap
               cells={catalog}
               visibleCells={analysis.cells}
@@ -455,14 +460,14 @@ export function GlobalPlanner() {
               satellite={analysisSatellite}
               entryAngularRadiusDeg={entryRadiusKm / EARTH_RADIUS_KM * 180 / Math.PI}
               holdAngularRadiusDeg={holdRadiusKm / EARTH_RADIUS_KM * 180 / Math.PI}
-              positionSpacingKm={Number(metadata.generation?.l1NominalSpacingKm ?? 60)}
+              positionSpacingKm={positionSpacingKm}
               landUrl={LAND_TOPOLOGY_URL}
               onSelectCell={setSelectedCellId}
             />
           </article>
           <aside className="global-inspector">
             <header><p>已选一级波位</p><h2>{selectedCell?.id ?? "目录载入中"}</h2><span className={`position-status ${entryCandidates.length > 0 ? "is-pass" : "is-failure"}`}>{entryCandidates.length > 0 ? "当前可接入" : "当前不可接入"}</span></header>
-            {selectedCell ? <dl><div><dt>地面坐标</dt><dd>{selectedCell.lat.toFixed(4)}°, {selectedCell.lon.toFixed(4)}°</dd></div><div><dt>有效二级波位</dt><dd>{enabledChildren(selectedCell.childMask)} / 7</dd></div><div><dt>45°以上候选卫星</dt><dd>{selectedGlobalCandidateCount}颗</dd></div><div><dt>最佳候选</dt><dd>{bestEntryCandidate ? `${bestEntryCandidate.id} · ${bestEntryCandidate.elevation.toFixed(1)}°` : "无"}</dd></div><div><dt>所选卫星</dt><dd>{selectedIsVisible ? "可覆盖该波位" : "未达到45°"}</dd></div><div><dt>当前全局空窗</dt><dd className={uncoveredCount > 0 ? "is-failure" : ""}>{uncoveredCount}个一级波位</dd></div></dl> : null}
+            {selectedCell ? <dl><div><dt>地面坐标</dt><dd>{selectedCell.lat.toFixed(4)}°, {selectedCell.lon.toFixed(4)}°</dd></div><div><dt>区域尺度</dt><dd>相邻中心约{Math.round(positionSpacingKm)} km · 六边形对角约{Math.round(positionCornerToCornerKm)} km</dd></div><div><dt>区域面积</dt><dd>每格约{Math.round(positionAreaKm2).toLocaleString("en-US")} km²</dd></div><div><dt>有效二级波位</dt><dd>{enabledChildren(selectedCell.childMask)} / 7</dd></div><div><dt>45°以上候选卫星</dt><dd>{selectedGlobalCandidateCount}颗</dd></div><div><dt>最佳候选</dt><dd>{bestEntryCandidate ? `${bestEntryCandidate.id} · ${bestEntryCandidate.elevation.toFixed(1)}°` : "无"}</dd></div><div><dt>所选卫星</dt><dd>{selectedIsVisible ? "可覆盖该波位" : "未达到45°"}</dd></div><div><dt>当前全局空窗</dt><dd className={uncoveredCount > 0 ? "is-failure" : ""}>{uncoveredCount}个一级波位</dd></div></dl> : null}
             <button type="button" className="candidate-button" disabled={entryCandidates.length === 0} onClick={selectBestCandidate}>选用仰角最高的候选卫星</button>
             <section className="candidate-list">
               <h3>候选卫星（按仰角列前8颗）</h3>
@@ -523,14 +528,15 @@ export function GlobalPlanner() {
               <span>先看这里</span>
               <h3 id="access-guide-title">日历就是卫星轮流照向不同地面区域的时间安排</h3>
               <p>卫星先保存完整的可见区域清单；全网完成唯一分配后，只有这颗卫星实际负责的区域才进入两个星载小区和接入日历。</p>
+              <p><b>两个时间怎么理解：</b>80 ms管终端先找到网络，640 ms管终端找到网络后发起上行接入。一个640 ms周期包含8轮80 ms发现安排，两个数字都是最长等待时间。</p>
               <p><b>当前边界：</b>页面已经能分开计算这两张清单，但基站程序目前只能接收一张；所以下面的日历仍是规划演示，不能直接下发运行。</p>
             </div>
             <ol className="access-journey">
               <li><b>1</b><span>保留可见清单</span><small>当前能看到{analysis.visibleCount}个一级波位</small></li>
               <li><b>2</b><span>确认实际责任</span><small>本星负责{assignmentSnapshot.selectedAssignedCount}个一级波位</small></li>
               <li><b>3</b><span>分给两个小区</span><small>{assignmentSnapshot.selectedAssignedByCell[0]}个 / {assignmentSnapshot.selectedAssignedByCell[1]}个</small></li>
-              <li><b>4</b><span>安排网络发现</span><small>每个已分配一级波位80 ms内有一次计划机会</small></li>
-              <li><b>5</b><span>安排上行接入</span><small>每个已分配一级波位640 ms内有一次PRACH机会</small></li>
+              <li><b>4</b><span>安排网络发现</span><small>每个已分配一级波位80 ms内广播一次发现信号（SSB）</small></li>
+              <li><b>5</b><span>安排上行接入</span><small>每个已分配一级波位640 ms内安排一次接入机会（PRACH）</small></li>
             </ol>
           </section>
 
@@ -543,7 +549,7 @@ export function GlobalPlanner() {
               selectedCellIdentities?.[1]?.nci ?? "unassigned-cell-b",
             ]}
             landUrl={LAND_TOPOLOGY_URL}
-            positionSpacingKm={Number(metadata.generation?.l1NominalSpacingKm ?? 60)}
+            positionSpacingKm={positionSpacingKm}
           />
 
           <section className="access-answer-grid" aria-label="跳波束日历核心结论">
@@ -551,7 +557,7 @@ export function GlobalPlanner() {
               <span>实际任务是否超过上限</span>
               <b>{assignmentReady ? `${assignmentSnapshot.selectedAssignedCount} / ${SATELLITE_CAPACITY}` : "计算中"}</b>
               <strong>{!assignmentReady ? "正在完成全网唯一分配" : assignmentSnapshot.unassignedCount > 0 ? "全网仍有区域没有负责人" : "实际负责数量在规划范围内"}</strong>
-              <p>256是当前软件规划中单星最多负责的一级波位数，不是卫星能形成的波束数量，也不是可见清单的裁剪线。</p>
+              <p>256来自两个稳定小区各负责128个一级波位。卫星可同时形成多路波束；这里统计的是可轮转服务的地面区域数。</p>
             </article>
             <article className={largestOnboardCell > CELL_CAPACITY ? "is-failure" : "is-pass"}>
               <span>两个小区是否超限</span>
@@ -560,16 +566,16 @@ export function GlobalPlanner() {
               <p>每个稳定星载小区在本阶段最多负责128个一级波位；小区身份不会随波位改变。</p>
             </article>
             <article className="is-pass">
-              <span>一级波位多久获得一次网络发现机会</span>
-              <b>计划间隔≤80 ms</b>
-              <strong>下行发现时段可排</strong>
-              <p>当前最忙小区安排{largestOnboardCell}项；按满载128项计算仍保留{ssbOpportunityHeadroom}次计划机会。真实信号仍需无线验证。</p>
+              <span>终端多久遇到一次网络发现信号</span>
+              <b>最长等待≤80 ms</b>
+              <strong>每个一级波位每轮各安排一次</strong>
+              <p>640 ms包含8轮这样的80 ms安排；8表示重复8轮，不是只能服务8个波位。满载256个波位时，每轮安排256次SSB。</p>
             </article>
             <article className="is-tight">
-              <span>一级波位多久获得一次PRACH机会</span>
-              <b>计划间隔≤640 ms</b>
-              <strong>按每个已分配一级波位单独安排</strong>
-              <p>满载时每小区128个一级波位对应128次机会；PRACH不是按整颗卫星合并计算，真实接收仍需后续无线验证。</p>
+              <span>终端多久获得一次上行接入机会</span>
+              <b>最长等待≤640 ms</b>
+              <strong>每个一级波位单独安排PRACH</strong>
+              <p>一个640 ms完整周期内，每个已分配一级波位各有一次PRACH机会；网络发现信号在同一周期内重复8轮。</p>
             </article>
           </section>
 
@@ -634,7 +640,7 @@ export function GlobalPlanner() {
             <div><table><thead><tr><th>一级波位编号</th><th>当前用途</th><th>仰角</th><th>45°可见区间</th><th>仰角时间线</th><th>距星下点</th><th>纬度</th><th>经度</th></tr></thead><tbody>{analysis.cells.map((cell) => { const bank = assignmentBankById.get(cell.id); return <tr key={cell.id}><td>{cell.id}</td><td>{bank === undefined ? "可见候选 · 由其他卫星负责" : `本星负责 · 小区${bank === 0 ? "A" : "B"}`}</td><td>{cell.elevationDeg?.toFixed(1) ?? "—"}°</td><td>{cell.visibleFromSeconds ?? "—"}…{cell.visibleUntilSeconds ?? "—"} s</td><td>{cell.elevationTimeline?.map((sample) => `${sample.offsetSeconds}:${sample.elevationDeg.toFixed(1)}°`).join(" / ") ?? "—"}</td><td>{cell.distanceKm.toFixed(1)} km</td><td>{cell.lat.toFixed(4)}°</td><td>{cell.lon.toFixed(4)}°</td></tr>; })}</tbody></table></div>
           </details>
 
-          <details className="technical-details access-technical"><summary>这项结论还不代表什么</summary><p>当前页面证明的是离线规划能够排出接入日历。完整可见清单和实际负责清单还不能同时送入基站程序；真实广播、终端接入检测、功率、天线和射频切换也仍需在后续无线链路中验证。“已安排”不等于信号已经从天线发出。</p></details>
+          <details className="technical-details access-technical"><summary>当前实现范围</summary><p>当前页面已经完成离线接入日历、完整可见清单和实际负责清单的计算。下一步由基站输入接口同时接收两张清单，并由无线设备按日历核对广播、终端接入检测、功率、天线和射频切换。</p></details>
         </section>
       ) : null}
 
@@ -642,11 +648,55 @@ export function GlobalPlanner() {
         <section className="decision-console">
           <header className="decision-hero"><div><span className="decision-label">最终结论</span><h2>最终方案采用46个轨道面、每面65颗，共2,990颗卫星</h2><p>卫星总数确定为2,990颗。一天720个检查时刻均完成覆盖与唯一分配，单星实际负责峰值为87个一级波位。连续服务、单星故障和真实无线测试列入上线前验收。</p></div><div className="decision-stamp"><span>最终采用方案</span><b>2,990颗</b><small>46个轨道面 × 每面65颗</small></div></header>
 
-          <section className="conclusion-table"><header><h3>最终结论与验收边界</h3><span>卫星数量已经确定，上线条件继续验证</span></header><div><table><thead><tr><th>关注事项</th><th>最终结论</th><th>说明</th></tr></thead><tbody><tr><td>采用多少卫星</td><td><span className="result-pass">2,990颗</span></td><td>{smallerScreen.scenario.planes}个轨道面、每面{smallerScreen.scenario.satellitesPerPlane}颗，轨道高度{smallerScreen.scenario.altitudeKm} km，倾角{smallerScreen.scenario.inclinationDeg}°</td></tr><tr><td>设计依据是否满足</td><td><span className="result-pass">720/720满足</span></td><td>一天内{smallerScreen.sampling.epochCount}个检查时刻未发现空缺；最紧张时每个区域至少有{smallerScreen.summary.minimumCandidateCount}颗可用卫星</td></tr><tr><td>“可见数量”是否等于“实际负载”</td><td><span className="result-review">不是同一概念</span></td><td>单星最多可见{smallerScreen.summary.maximumVisibleL1PerSatellite}个一级波位，只表示几何视野；唯一分配后的实际负责峰值为{smallerScreen.summary.maximumAssignedL1PerSatellite}个/星</td></tr><tr><td>是否已经接入基站程序</td><td><span className="result-review">尚未接通</span></td><td>页面能分别保存完整可见清单和实际负责清单；当前基站程序只能接收一张清单，仍需补充最小输入接口</td></tr><tr><td>终端多久能发现网络</td><td><span className="result-pass">可生成80 ms计划</span></td><td>软件日历为每个已分配一级波位安排SSB机会；“已安排”不等于真实无线信号已经发出</td></tr><tr><td>终端多久能获得接入机会</td><td><span className="result-tight">可生成640 ms计划</span></td><td>PRACH按每个已分配一级波位单独安排；满载时余量较小，仍需真实无线实现验证</td></tr><tr><td>上线前还要完成什么</td><td><span className="result-review">三项验收</span></td><td>{audit.exactAudit?.durationDays ?? 7}天连续事件检查、单星故障检查以及真实功率和干扰验证</td></tr></tbody></table></div></section>
+          <section className="conclusion-table">
+            <header><h3>最终结论与验收边界</h3><span>卫星数量已经确定，上线条件继续验证</span></header>
+            <div>
+              <table>
+                <thead><tr><th>关注事项</th><th>最终结论</th><th>说明</th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td>采用多少卫星</td>
+                    <td><span className="result-pass">2,990颗</span></td>
+                    <td>{smallerScreen.scenario.planes}个轨道面、每面{smallerScreen.scenario.satellitesPerPlane}颗，轨道高度{smallerScreen.scenario.altitudeKm} km。{smallerScreen.scenario.inclinationDeg}°倾角表示轨道平面相对赤道的倾斜程度，卫星地面轨迹最北、最南约到{smallerScreen.scenario.inclinationDeg}°纬度；本方案服务±57°陆地，天线指向由无线设备另行控制。</td>
+                  </tr>
+                  <tr>
+                    <td>设计依据是否满足</td>
+                    <td><span className="result-pass">720/720满足</span></td>
+                    <td>一天内{smallerScreen.sampling.epochCount}个检查时刻未发现空缺；最紧张时每个区域至少有{smallerScreen.summary.minimumCandidateCount}颗可用卫星</td>
+                  </tr>
+                  <tr>
+                    <td>“可见数量”是否等于“实际负载”</td>
+                    <td><span className="result-review">分别计算</span></td>
+                    <td>单星最多可见{smallerScreen.summary.maximumVisibleL1PerSatellite}个一级波位，表示几何视野；每个波位相邻中心约{Math.round(positionSpacingKm)} km、面积约{Math.round(positionAreaKm2).toLocaleString("en-US")} km²。唯一分配后的实际负责峰值为{smallerScreen.summary.maximumAssignedL1PerSatellite}个/星。</td>
+                  </tr>
+                  <tr>
+                    <td>是否已经接入基站程序</td>
+                    <td><span className="result-review">尚未接通</span></td>
+                    <td>页面能分别保存完整可见清单和实际负责清单；当前基站程序只能接收一张清单，仍需补充最小输入接口</td>
+                  </tr>
+                  <tr>
+                    <td>终端多久能发现网络</td>
+                    <td><span className="result-pass">最长80 ms一次</span></td>
+                    <td>每个已分配一级波位在80 ms内各安排一次网络发现信号（SSB）；满载256个波位时，每轮安排256次。</td>
+                  </tr>
+                  <tr>
+                    <td>终端多久能获得接入机会</td>
+                    <td><span className="result-tight">最长640 ms一次</span></td>
+                    <td>每个已分配一级波位在640 ms内各安排一次上行接入机会（PRACH）；一个周期包含8轮80 ms网络发现安排。</td>
+                  </tr>
+                  <tr>
+                    <td>上线前还要完成什么</td>
+                    <td><span className="result-review">三项验收</span></td>
+                    <td>{audit.exactAudit?.durationDays ?? 7}天连续事件检查、单星故障检查以及真实功率和干扰验证</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
 
           <section className="acceptance-actions"><header><h3>最终方案上线前必须完成三项验收</h3><span>卫星数量已经确定；如验收不满足，再按结果调整设计</span></header><div><article><b>01</b><h4>连续服务检查</h4><p>连续检查7天，确认两个检查时刻之间也不会出现短暂的服务中断。</p></article><article><b>02</b><h4>卫星接续检查</h4><p>确认一颗卫星离开时，下一颗卫星已经准备好接续服务，交接期间不中断。</p></article><article><b>03</b><h4>真实无线环境验证</h4><p>使用真实轨道、信号功率、干扰、地面站和无线设备完成验证。</p></article></div></section>
 
-          <details className="technical-details decision-details"><summary>查看技术依据和使用边界</summary><div className="decision-technical"><p>最终工程方案采用2,990颗卫星。覆盖目录包含±57°陆地的36,411个一级波位，现有依据来自一天、每{smallerScreen.sampling.stepSeconds}秒检查一次的计算。底层记录中的`exact=false`、`selectedScenario=null`用于标记连续覆盖正式验收进度。</p><p>完整可见清单与唯一服务分配是两层数据：前者不能按256裁剪，后者才受单星256、单小区128的当前软件规划上限约束。SSB和PRACH都针对已分配的一级波位生成计划；这些计划不代表PHY、RF、天线或空口已经执行。</p><section className="scenario-table"><header><h3>最终方案参数</h3><span>2,990颗卫星进入上线前验收</span></header><div><table><thead><tr><th>倾角</th><th>轨道高度</th><th>轨道面</th><th>每面卫星</th><th>卫星总数</th></tr></thead><tbody><tr><td>{smallerScreen.scenario.inclinationDeg}°</td><td>{smallerScreen.scenario.altitudeKm} km</td><td>{smallerScreen.scenario.planes}</td><td>{smallerScreen.scenario.satellitesPerPlane}</td><td>{smallerScreen.scenario.satelliteCount.toLocaleString("en-US")}</td></tr></tbody></table></div></section></div></details>
+          <details className="technical-details decision-details"><summary>查看技术依据和使用边界</summary><div className="decision-technical"><p>最终工程方案采用2,990颗卫星。覆盖目录包含±57°陆地的36,411个一级波位，现有依据来自一天、每{smallerScreen.sampling.stepSeconds}秒检查一次的计算。底层记录中的`exact=false`、`selectedScenario=null`用于标记连续覆盖正式验收进度。</p><p>完整可见清单与唯一服务分配是两层数据：前者不能按256裁剪，后者受单星256、单小区128的当前软件规划上限约束。SSB和PRACH针对已分配的一级波位生成软件日历；无线设备接入后，PHY、RF、天线和空口将按同一日历完成执行核对。</p><section className="scenario-table"><header><h3>最终方案参数</h3><span>2,990颗卫星进入上线前验收</span></header><div><table><thead><tr><th>倾角</th><th>轨道高度</th><th>轨道面</th><th>每面卫星</th><th>卫星总数</th></tr></thead><tbody><tr><td>{smallerScreen.scenario.inclinationDeg}°</td><td>{smallerScreen.scenario.altitudeKm} km</td><td>{smallerScreen.scenario.planes}</td><td>{smallerScreen.scenario.satellitesPerPlane}</td><td>{smallerScreen.scenario.satelliteCount.toLocaleString("en-US")}</td></tr></tbody></table></div></section></div></details>
         </section>
       ) : null}
 

@@ -61,6 +61,8 @@ test("global land catalog records its local Natural Earth source and honest gene
   assert.equal(metadata.source.packageVersion, "2.0.2");
   assert.equal(metadata.source.publicPath, "/data/land-50m.json");
   assert.equal(metadata.generation.l2NominalRadiusKm, 15);
+  assert.equal(metadata.generation.l1NominalSpacingKm, 60);
+  assert.equal(Math.round(metadata.generation.targetCellAreaKm2 / 10) * 10, 3120);
   assert.equal(metadata.generation.exactCoastlineClipping, false);
   assert.equal(metadata.generation.equalAreaGrid, true);
   assert.equal(metadata.generation.exactRegularSphericalHexagons, false);

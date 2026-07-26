@@ -282,34 +282,57 @@ export function BeamHoppingAnimation({
     <figure className="beam-animation-panel" aria-labelledby="beam-animation-title">
       <header>
         <div>
-          <span>动态演示</span>
-          <h3 id="beam-animation-title">卫星如何轮流照向不同的一级波位</h3>
-          <p>地图自动放大到这颗卫星实际负责的区域。六边形是一级波位；亮起的一组表示当前时段计划照向的位置，随后会切换到下一组。</p>
+          <span>80 ms 轮转动画</span>
+          <h3 id="beam-animation-title">80 ms内，这颗卫星如何分批广播网络发现信号</h3>
+          <p>淡色六边形是本星负责的全部一级波位，亮色六边形是当前 2.5 ms 正在广播的一批。80 ms 内，全部波位都会依次获得一次网络发现信号。</p>
         </div>
         <div className="beam-animation-summary">
           <span>{timeLabel}</span>
           <b>{activeBankLabel}</b>
-          <small>本时段亮起 {activeCells.length} 个 · 本星共 {cells.length} 个一级波位</small>
+          <small>第 {frameIndex + 1} / {frames.length || 32} 批 · 第 {activeSlotIndex + 1} / 8 个 10 ms 时间段</small>
         </div>
       </header>
+
+      <div className="beam-animation-facts" aria-label="动画读图说明">
+        <article>
+          <span>本星负责</span>
+          <b>{cells.length}个</b>
+          <small>小区A {mapGeometry.indexesByBank[0].length}个 · 小区B {mapGeometry.indexesByBank[1].length}个</small>
+        </article>
+        <article>
+          <span>当前 2.5 ms</span>
+          <b>{activeCells.length}个</b>
+          <small>亮色区域同时广播</small>
+        </article>
+        <article>
+          <span>完成一轮</span>
+          <b>80 ms</b>
+          <small>全部波位各安排一次</small>
+        </article>
+      </div>
+
+      <p className="beam-animation-explanation">
+        <b>为什么亮色波位不一定挨着？</b>
+        当前软件按波位编号和可用波束分批，同一批无需相邻；日历会直接切换目标，无需沿地图逐格移动。淡色范围中的空隙通常是海面，或由附近其他卫星负责。
+      </p>
 
       <div className={`beam-animation-map ${playing ? "is-playing" : ""}`}>
         <div className="beam-animation-orbit-note" aria-hidden="true">
           <b>{satellite.id}</b>
-          <span>波束指向下方亮起区域</span>
+          <span>当前 2.5 ms 波束指向地图中的亮色区域</span>
         </div>
         <div className="beam-animation-canvas">
           <canvas
             ref={canvasRef}
             role="img"
-            aria-label={`${satellite.id}一级波位跳变地图；${timeLabel}；${activeBankLabel}计划照向${activeCells.length}个一级波位`}
+            aria-label={`${satellite.id}一级波位轮转地图；本星负责${cells.length}个一级波位；${timeLabel}；${activeBankLabel}正在广播${activeCells.length}个一级波位`}
           />
           {cells.length === 0 ? <p className="beam-animation-empty">正在等待本星的一级波位分配结果</p> : null}
           {landError ? <p className="map-error">陆地边界加载失败：{landError}</p> : null}
           <div className="beam-animation-legend" aria-label="跳波束图例">
-            <span><i className="cell-a" />星载小区 A</span>
-            <span><i className="cell-b" />星载小区 B</span>
-            <span><i className="active-beam" />当前亮起</span>
+            <span><i className="cell-a" />本星负责 · 小区 A</span>
+            <span><i className="cell-b" />本星负责 · 小区 B</span>
+            <span><i className="active-beam" />当前 2.5 ms 正在广播</span>
           </div>
         </div>
       </div>
@@ -325,7 +348,7 @@ export function BeamHoppingAnimation({
           {playing ? "暂停动画" : "播放动画"}
         </button>
         <label>
-          <span>80 ms 轮转位置</span>
+          <span>当前在 80 ms 一轮中的位置</span>
           <input
             type="range"
             min="0"
@@ -364,7 +387,7 @@ export function BeamHoppingAnimation({
         ))}
       </div>
       <figcaption className="beam-animation-boundary">
-        本图播放软件日历中的 80 ms 下行发现安排。它用于说明“哪些一级波位在何时亮起”，不表示天线、波束成形或真实无线发射已经执行。
+        一轮包含 8 个 10 ms 时间段，每个时间段再分成 4 个 2.5 ms 批次。动画展示软件日历的照射顺序；无线设备接入后，将按同一日历核对天线和空口的实际发射。
       </figcaption>
     </figure>
   );
