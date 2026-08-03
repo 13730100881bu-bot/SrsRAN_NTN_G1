@@ -14,27 +14,54 @@ request.
 In the independent onboard position-plan profile, `candidate_inventory` means
 the complete visible `G######` L1 list received from the management center. It
 is retained before schedule-capacity checks and is never truncated by the
-128-per-cell or 256-per-satellite execution envelope.
+128-per-cell or 256-per-satellite execution envelope. A visible position is not
+necessarily assigned to this satellite.
 
 ## versioned_position_plan
 
-One satellite's management-center input. Schema v2 contains an exact-keyed
+One satellite's management-center input. Schema v3 contains an exact-keyed
 planning context (`planning_run_id`, catalog id/hash, identity-registry
 version/hash and access-profile id/hash), `satellite_id`, catalog/schedule
 versions, canonical content hash, validity, activation epoch, exactly two
-explicit stable onboard NCI/PCI identities, and the complete visible L1 list.
-Each L1 also carries the frozen 7-bit `child_mask`; this stage validates and
-stores it without creating digital-service runtime state. NCI is opaque and is
-not derived from satellite id, coordinates, position id or cell ordinal.
+explicit stable onboard NCI/PCI identities, the complete visible L1 list in
+`visible_l1_positions`, and the subset actually served by this satellite in
+`assigned_l1_position_ids`. Each visible L1 carries the frozen 7-bit
+`child_mask`; this stage validates and stores it without creating
+digital-service runtime state. Every assigned id must occur exactly once in the
+visible list. NCI is opaque and is not derived from satellite id, coordinates,
+position id or cell ordinal.
+
+Schema v3 capacity checks, two-cell partitioning and SSB/PRACH calendar
+generation use only `assigned_l1_position_ids`. The complete visible list may
+contain more than 256 entries and remains intact. A plan with 257 visible and
+at most 256 assigned positions is valid; 257 assigned positions are rejected as
+`schedule_overflow` without trimming the received observation.
+
+The schema-v3 canonical hash covers both collections after deterministic
+sorting. Exact-key parsing rejects missing or unknown fields, duplicate ids,
+and an assignment outside the visible list. The management-center exporter
+writes both collections into one plan. Its assignment sidecar is compatibility
+information only and is not CU-CP assignment authority.
 
 Schema v1 is accepted only for dry-run. DU execution rejects v1 because it is
-not bound to the complete planning context.
+not bound to the complete planning context. Schema v2 remains accepted and,
+like v1, is normalized to `assigned = visible` so existing plans keep their old
+meaning.
+
+## assigned_l1_position_ids
+
+The exact `G######` subset that the current plan authorizes this satellite to
+serve. It is the only collection subject to the configured 128-per-cell and
+256-per-satellite limits and the only collection passed to partitioning and
+access-calendar generation. It must not be reconstructed by trimming or ranking
+the complete visible inventory onboard.
 
 ## onboard_cell_position_set
 
 One of the satellite's two stable NR logical cells plus the `G######` L1 ids
-assigned to it for one plan version. Every candidate L1 appears exactly once.
-The two NCI values are distinct; PCI may be reused.
+assigned to it for one plan version. Every authorized L1 appears in exactly one
+of the two sets; visible but unassigned L1s appear in neither. The two NCI
+values are distinct; PCI may be reused.
 
 ## access_calendar_intent
 
@@ -193,15 +220,17 @@ Dry-run mode does not require it. The file is atomically replaced and records:
 - calendar cleanup tasks that still need confirmation; and
 - a read-only summary of the latest successfully parsed management-center
   input: catalog/schedule version, content hash, activation epoch and the
-  complete candidate inventory. This is not a byte-for-byte copy of the source
-  JSON and is never deployment authority.
+  complete visible inventory plus the assigned-id subset. This is not a
+  byte-for-byte copy of the source JSON and is never deployment authority.
 
-State schema v2 adds that received observation. It may describe a rejected
-257-position overflow input whose version is above the accepted high-water; it
-does not become partition, identity, activation or DU-application authority.
-Cleanup and repeated restart must preserve it without truncation. State schema
-v1 remains readable and may reconstruct its observation from the newest stored
-active/pending snapshot. An explicit v2 `received_plan:null` stays empty.
+State schema v3 stores both collections explicitly. State schemas v1 and v2
+remain readable and are normalized to `assigned = visible`; all subsequent
+writes use schema v3. A received observation may contain more than 256 visible
+positions. It may also describe a rejected 257-assigned-position overflow whose
+version is above the accepted high-water; it does not become partition,
+identity, activation or DU-application authority. Cleanup and repeated restart
+must preserve both collections without truncation. An explicit
+`received_plan:null` stays empty.
 
 The saved deployment state is history, not live evidence. At restart CU-CP
 rechecks the schema, hashes, planning context, satellite and cell identities,
@@ -261,7 +290,7 @@ decided, CU-CP permanently removes it from fallback eligibility at that deadline
 and queues one exact (`schedule_version`, `calendar_hash`) cleanup task with
 reason `historical_fallback_expired`. This deadline is processed before a
 same-instant pending-plan activation. A DU disconnection delays transmission,
-not creation of the cleanup obligation; state schema v2 preserves the pending
+not creation of the cleanup obligation; state schema v3 preserves the pending
 plan and outstanding cleanup across restart. A later update failure cannot
 restore the expired fallback. Queue or state-write failure remains fail closed
 and must not expose the old plan as usable. This is software-calendar cleanup,
@@ -271,9 +300,10 @@ The read-only `ntn_state` view exposes whether a state file is configured and
 required, its schema/generation/hash, the last save result and error, whether
 writes are blocked, the catalog/schedule high-water marks, and recovery
 stage/detail. It also exposes the active calendar hash and cleanup queue head
-version/hash/reason. These fields describe CU-CP storage and DU software
-reconciliation; they are not RF telemetry. With the onboard NTN profile
-disabled, none of this changes the terrestrial path.
+version/hash/reason. Visible and assigned L1 counts are reported separately,
+followed by the two per-cell assigned counts. These fields describe CU-CP
+storage and DU software reconciliation; they are not RF telemetry. With the
+onboard NTN profile disabled, none of this changes the terrestrial path.
 
 This file is a recovery aid, not a trust anchor. Its own high-water marks live
 inside the same file, so replacing the entire file with an older valid copy or

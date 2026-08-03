@@ -41,9 +41,9 @@ not_sent -> preparing -> ready -> applied
 
 `du_prepare_horizon_ms`、`du_prepare_guard_ms` 和 `du_apply_timeout_ms` 是可配置软件时限，不是协议常量。CU-CP 只在 plain-SFN 可无歧义映射的 prepare horizon 内下发；guard 前未 armed，或 activation 后 apply timeout 内未两侧 applied，都会回滚。prepare/query/clear 使用独立异步 lane，丢失的 F1 response 不会阻塞 clear。
 
-执行模式只接受 schema v2 输入，并要求独立 `state_file`。v2 把 catalog、identity registry 和 access profile 的 ID/hash 纳入计划上下文和 `content_hash`；旧 schema v1 只允许 dry-run。当前 satellite registry 使用 `Pxx-Syy`，例如 `P01-S01`，CU-CP 不再接受旧文档样例 `P01-S001`。
+执行模式接受 schema v2 和 v3 输入，并要求独立 `state_file`。两者都把 catalog、identity registry 和 access profile 的 ID/hash 纳入计划上下文和 `content_hash`；v3 还原子携带完整 `visible_l1_positions` 和实际负责的 `assigned_l1_position_ids`，hash 同时覆盖两份集合。schema v1/v2 按 `assigned=visible` 兼容，v1 仍只允许 dry-run。当前 satellite registry 使用 `Pxx-Syy`，例如 `P01-S01`，CU-CP 不再接受旧文档样例 `P01-S001`。
 
-开启 DU execution 时，启动校验还会提前约束当前实现包络：最多 256 个 L1、最多 2560 个 intent，并保证一个 PRACH cycle 在最密的 NR numerology `mu=4` 下不超过 scheduler gate 的 16384 slots。该限制只作用于执行 profile；关闭 DU execution 时，管理中心下发的完整 candidate inventory 仍可保留 257 个及以上 L1，再由计划状态明确报告 `schedule_overflow`，不会在输入层裁剪。
+开启 DU execution 时，启动校验还会提前约束当前实现包络：最多 256 个实际负责 L1、最多 2560 个 intent，并保证一个 PRACH cycle 在最密的 NR numerology `mu=4` 下不超过 scheduler gate 的 16384 slots。完整可见清单不受 256 条容量限制：257 个 visible 加不超过 256 个 assigned 可以接收并完整保存；257 个 assigned 明确返回 `schedule_overflow`，新计划不进入部署。
 
 ## 私有 F1AP contract
 
@@ -56,13 +56,13 @@ not_sent -> preparing -> ready -> applied
 - `clear`：撤销 superseded、超时或被 CU-CP 拒绝的 deployment；
 - result 回显 catalog/schedule version、source/calendar hash、activation slot 和每小区 accepted intent 数。
 
-decoder 限制两个小区、最多 256 个唯一 `G######`、最多 2560 个 intent，并验证长度、时间、enum、direction/purpose/port 组合和 64-bit 时间范围。两个 NCI 必须不同；两个 PCI 可以按规划复用。
+decoder 限制两个小区、最多 256 个已分配的唯一 `G######`、最多 2560 个 intent，并验证长度、时间、enum、direction/purpose/port 组合和 64-bit 时间范围。完整可见清单留在 CU-CP 计划与恢复状态中，不进入这个下发 payload。两个 NCI 必须不同；两个 PCI 可以按规划复用。
 
 ## DU/MAC/scheduler 行为
 
 CU-CP 直接扫描 DU served-cell inventory，以 `(NCI, PCI, DU cell index)` 唯一解析两个星载小区，不使用 legacy beam-to-NCI repository。当前原子 envelope 要求两个小区属于同一 DU；跨 DU 会明确拒绝 `cross_du_calendar_not_supported`。
 
-DU 在一次 MAC 调用前验证两个 cell 都存在、active 且 NCI/PCI 匹配。MAC 把微秒窗口编译成 cell numerology 的 slot mask，再为两个 cell prepare；任一 cell 失败会持久保存 partial-cleanup record，持续 clear 已 prepare 的另一 cell，并在 cleanup 完成前拒绝新 prepare。旧 active plan 不变。零 visible L1 是合法的显式 deny-all calendar，不会退化为 terrestrial allow-all。
+DU 在一次 MAC 调用前验证两个 cell 都存在、active 且 NCI/PCI 匹配。MAC 把微秒窗口编译成 cell numerology 的 slot mask，再为两个 cell prepare；任一 cell 失败会持久保存 partial-cleanup record，持续 clear 已 prepare 的另一 cell，并在 cleanup 完成前拒绝新 prepare。旧 active plan 不变。零 assigned L1 是合法的显式 deny-all calendar；即使仍有可见但未负责的 L1，也不会退化为 terrestrial allow-all。
 
 微秒 intent 到 scheduler slot request 的转换位于私有纯编译器 `mac_ntn_access_calendar_compiler.h`，production 与 focused test 共用同一实现。它精确校验 wall-clock/slot 映射、validity/cycle/window 对齐、direction/purpose、范围和整数溢出，并只合并完全相同窗口的 purpose mask；不做四舍五入。
 
@@ -81,7 +81,7 @@ MAC 的 wall-clock/slot mapper 使用纳秒精度；`mu=4` 的 62.5 microsecond 
 
 ## 重启、重连和清理
 
-`state_file` 原子保存 accepted version high-water、active/pending 计划、双小区划分、source/calendar hash、启用时间、历史软件下发状态和仍需确认的清理任务。状态 schema v2 还独立保存最新成功解析输入的只读摘要：catalog/schedule version、content hash、activation epoch 和完整 candidate inventory。它不是原始 JSON 的逐字段副本。被 `schedule_overflow` 拒绝的 257 条 L1 可以高于 accepted high-water，但不会成为 active/pending 或 DU 下发权威；清理旧计划和再次重启后仍保留 257 条。
+`state_file` 原子保存 accepted version high-water、active/pending 计划、双小区划分、source/calendar hash、启用时间、历史软件下发状态和仍需确认的清理任务。状态 schema v3 还独立保存最新成功解析输入的只读摘要：catalog/schedule version、content hash、activation epoch、完整可见清单和实际负责 ID。它不是原始 JSON 的逐字段副本。读取状态 schema v1/v2 时按旧语义归一化为 `assigned=visible`，后续新写入统一使用 schema v3。257 个 visible 加不超过 256 个 assigned 可正常恢复；被 `schedule_overflow` 拒绝的 257 个 assigned 也保持完整只读观测，不会成为 active/pending 或 DU 下发权威。
 
 启动时，历史 `applied` 只表示上次进程看到的软件状态。CU-CP 会隐藏它，并查询 live DU 的同一 version/hash；只有两个小区的完整 matching result 才恢复 `active/applied`。
 
@@ -129,15 +129,16 @@ CUCP-037 在 CU-CP 私有 position-plan controller 中增加了无副作用审�
 
 相关的 C-RNTI lease key 已改为 `(DU, DU cell index, PCI, C-RNTI)`。这允许两个长期星载小区按规划复用 PCI，但当前 DU RNTI table 仍按 C-RNTI 扁平索引，所以同一 DU 的两个 cell 不能复用同一个 C-RNTI 值；不同 DU 可以复用。CUCP-038 进一步要求 generation 与完整 ACK 集合原子匹配，未知 ACK 只用原 generation 修复，普通 in-flight pool 不叠加新 generation；ICS 后释放模拟接入归属和 `control_only`/L2 规则不变。
 
-## 管理中心 Web producer
+## 管理中心 plan producer
 
-`web_replicas/ntn_beam_planner` 增加 candidate/test-only plan exporter：
+`utils/ntn/constellation_plan_export.mjs` 和 replay exporter 输出 candidate/test-only schema v3 计划：
 
-- 输出完整 visible L1 inventory，257 个也不裁剪；
+- 在同一份 plan 中输出完整 `visible_l1_positions` 和 `assigned_l1_position_ids`，前者不按 256 条裁剪；
+- schema v3 使用 exact-key，canonical SHA-256 同时覆盖两份排序后的集合，并与 C++ `compute_ntn_position_plan_content_hash()` 共享 golden vector；
+- `assignment_sidecar` 仅保留规划端 bank 等兼容明细，CU-CP 不依赖它确定负责集合；
 - baseline 使用版本化管理中心 registry `app/onboard-cell-identity-registry.json`（`mc-ntn-onboard-cell-registry-v1`），显式保存 3528 星/7056 cell 的 opaque NCI、PCI 和 bank；运行时已删除 `centralNci`/ordinal 派生路径；
 - 每星必须恰好两 cell、全局 NCI 唯一且在 36-bit 范围内；PCI 保留管理中心输入并允许复用，只做 topology conflict audit，不在 Web 运行时重算；
 - 非 baseline Walker audit 必须显式提供匹配的 registry 文件，缺失、额外或错误 identity fail closed；
-- canonical SHA-256 与 C++ `compute_ntn_position_plan_content_hash()` 共享 golden vector；
 - 不导出 Web preview calendar，F1AP 只承载 CU-CP audited calendar；
 - 不接入 GIS runtime，也不把 coarse/exact=false 结果表述为全球连续覆盖。
 

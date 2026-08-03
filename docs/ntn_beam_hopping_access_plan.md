@@ -1,6 +1,6 @@
 # NTN 全球“跳波束”与初始接入设计
 
-> 跳波束是星载再生 gNB 按版本化日历，在实际分配给本星的全球地固 L1 之间周期切换模拟波束：模拟波束承载 SSB/PBCH、SIB1/SIB19、Paging 和初始接入窗口，数字波束按业务需求照射 L2。离线规划已经把“完整可见清单”和“实际负责结果”分开；现有 CU-CP 私有输入仍只有一份 `visible_l1_positions`，并会把其中全部 L1 划入两个小区，因此尚不能同时接收这两份集合。当前代码已实现 CU-CP 版本化双小区计划、完整 inventory、日历 dry-run、原子激活，以及默认关闭的 DU/MAC SSB/PRACH 软件 gate；双集合输入、真实 `position_id`/`port_id` 指向和 PHY/RU/RF 执行仍未实现。
+> 跳波束是星载再生 gNB 按版本化日历，在实际分配给本星的全球地固 L1 之间周期切换模拟波束：模拟波束承载 SSB/PBCH、SIB1/SIB19、Paging 和初始接入窗口，数字波束按业务需求照射 L2。schema v3 已把完整可见清单 `visible_l1_positions` 和实际负责子集 `assigned_l1_position_ids` 放进同一份计划；CU-CP 完整保存前者，只用后者划分两个长期小区并生成 SSB/PRACH 日历。当前代码也保留日历 dry-run、原子激活和默认关闭的软件 gate；真实 `position_id`/`port_id` 指向及 PHY/RU/RF 执行不在本阶段。
 
 ## 1. 一句话定义
 
@@ -11,7 +11,7 @@
 - 即使没有 UE，active L1 也必须按 80 ms 目标重访 SSB。
 - L2 只有存在 PDU/DRB 需求且 DU 已返回 `applied` 时才进入数字服务。
 - 每个 L1 的完整 `visible inventory` 不受 active、loaded、每小区 128 或每星 256 上限裁剪。
-- 管理中心离线 actual assignment 在完整清单上为每个 L1 选择且只选择一个负责卫星；128/小区、256/星只约束实际负责的 L1，不是波束数量。该结果尚未通过独立字段接入 CU-CP。
+- 管理中心离线 actual assignment 在完整清单上为每个 L1 选择且只选择一个负责卫星；128/小区、256/星只约束实际负责的 L1，不是波束数量。该结果通过 schema v3 的独立字段进入 CU-CP。
 - PRACH 按每个已分配 L1 安排；某卫星仅在清单中“可见”该 L1，不等于该卫星应为它安排 PRACH。
 
 ## 2. 全球与轨道 seed
@@ -52,7 +52,7 @@
 4. 80 ms 包含 4 次该小区的 occasion；任意起始相位的最差 DL port-occasion 和为 42。
 5. 最差窗口因此有 `42 × 4 = 168` 次访问机会；actual assignment 的配置容量取 `min(168,128)=128` 个 L1/小区，两小区合计 256。
 
-因此 128/256 是当前离散日历模型和 CU-CP 执行包络允许实际负责的 L1 数，不是平均值、最佳相位、可见候选数或物理波束数。离线规划必须完整保存 visible inventory，再由唯一分配计算本星实际负责的子集；每个已分配 L1 都要获得 SSB 与 PRACH 机会。现有 CU-CP 尚未实现“双集合”输入，它仍会对 `visible_l1_positions` 中的全部 L1 做容量校验和双小区划分，因此不能把负责子集冒充为完整清单，也不能声称这一离线结果已经进入 C++ 运行态。这个保证仍依赖 2.5 ms retarget 和抽象端口模型；guard、功率、带宽、SIB、Paging、RAR、PRACH 与实际射频指向必须由 PHY/RU/RF 复核。它不是 3GPP 或载荷硬件常量。
+因此 128/256 是当前离散日历模型和 CU-CP 执行包络允许实际负责的 L1 数，不是平均值、最佳相位、可见候选数或物理波束数。离线规划完整保存 visible inventory，再由唯一分配计算本星实际负责的子集；schema v3 把两者一并交给 CU-CP。容量判断、双小区划分和日历只处理 `assigned_l1_position_ids`，每个已分配 L1 都要获得 SSB 与 PRACH 机会。257 个可见 L1 加不超过 256 个负责 L1 可以接收；257 个负责 L1 明确返回 `schedule_overflow`。这个保证仍依赖 2.5 ms retarget 和抽象端口模型；guard、功率、带宽、SIB、Paging、RAR、PRACH 与实际射频指向必须由 PHY/RU/RF 复核。它不是 3GPP 或载荷硬件常量。
 
 ### 4.2 日历条目
 
@@ -73,11 +73,11 @@ BeamScheduleEntry
   state             // proposed / ready / applied / active / released
 ```
 
-目标契约是：管理中心生成星历、全球波位表、完整 visible inventory、与之分离的 unique assignment proposal、NCI registry、PCI 规划、版本和 activation epoch；星载 CU-CP 不运行全球选星算法，只校验本星输入并把实际负责的 L1 划给两个长期小区。当前 C++ schema 只有 `visible_l1_positions`，无法同时表达完整清单与负责子集，这一私有输入契约仍待扩展；在此之前，网页的唯一分配和 PRACH 日历只是离线规划结果。
+管理中心生成星历、全球波位表、完整 visible inventory、unique assignment proposal、NCI registry、PCI 规划、版本和 activation epoch；schema v3 exporter 将本星的完整 `visible_l1_positions` 与 `assigned_l1_position_ids` 原子写入一份计划。星载 CU-CP 不运行全球选星算法，只校验输入并把实际负责的 L1 划给两个长期小区。兼容 assignment sidecar 可继续携带规划端 bank 明细，但 CU-CP 的负责集合以 schema v3 计划为准。
 
 ## 5. 一个 L1 的跳波束接入时序
 
-下面是目标时序，不表示双集合输入和真实波束控制已经接通：
+下面的管理中心到 CU-CP 输入和软件日历阶段已经具备；F1AP 之后的真实波束控制仍按图中的层次边界处理：
 
 ```mermaid
 sequenceDiagram
@@ -220,8 +220,8 @@ C++ 基站运行日志、pcap 或空口证据。
 | 全球目录一致性 | 已有测试覆盖 | `catalog:check` 与 focused 目录测试 `6/6` 通过；`exactRegularSphericalHexagons=false`、`exactCoastlineClipping=false` |
 | actual assignment 128/256 日历包络 | 已有测试覆盖 | 最差 80 ms 日历 168 次机会、配置取 128 assigned L1/小区；不是波束数或 PHY/RU/RF 证明 |
 | 2,990 颗最终方案的一天 coarse 报告 | 已有离线规划证据 | 已采用为最终工程方案；目录内容 hash 已重新校验，120 s 的 coverage 与 unique assignment 均为 720/720，actual 峰值 87/星、44/小区、overflow 0；公共 epoch 尚未冻结，仍非连续证明，也不是 C++ 运行态证据 |
-| 完整可见清单 + 实际负责子集输入 | 规划中 | 当前 CU-CP 只有 `visible_l1_positions` 且会全部划入小区；双集合私有契约尚未实现 |
-| CU-CP 双小区版本化计划与日历 dry-run | 已有测试覆盖 | 保留完整 inventory、确定性划分、80/640 ms 审计、257 L1 显式 overflow、activation epoch 原子切换；不是全球覆盖证明 |
+| 完整可见清单 + 实际负责子集输入 | 已有测试覆盖 | schema v3 同时保存两份集合；exact-key 和 content hash 覆盖二者，负责 ID 必须来自完整可见清单；v1/v2 按 `assigned=visible` 兼容 |
+| CU-CP 双小区版本化计划与日历 dry-run | 已有测试覆盖 | 仅对 assigned 做确定性划分和 80/640 ms 审计；257 visible + 不超过 256 assigned 可接收，257 assigned 明确 `schedule_overflow`；activation epoch 原子切换 |
 | DU/MAC SSB/PRACH 软件 gate | 已有测试覆盖 | `applied` 仅表示匹配 version/hash/intents 的软件 snapshot；不含 position/port 或 RF evidence |
 | Initial UL active-plan audit | 已有测试覆盖 | 私有纯函数验证完整 sideband 测试输入；生产 F1AP transport、可信 provenance 与 RF evidence 均未实现 |
 | DU/MAC RNTI resource audit | 已有 focused 测试覆盖 | codec v2 区分 RNTI/UE-slot 完整性；ACK 原子校验、同 generation repair、真实 lease ledger 和可恢复 audit conflict 已闭环；resource-manager 39/39、RNTI manager 23/23 通过，UE-slot 域仍 incomplete；不是 endurance、RAR/PRACH/RF 证据 |
@@ -245,9 +245,9 @@ C++ 基站运行日志、pcap 或空口证据。
 
 1. 以已生成的 36,411 L1 / 249,375 L2 Web 目录做仿真输入，另行冻结正式运营 GIS 与精确海岸裁剪。
 2. 以 46×65、2,990 颗作为最终工程方案继续验证；3,528 颗仅保留为历史网页展示对照。
-3. 为 CU-CP 增加最小私有双集合契约：完整可见清单用于审计，实际负责子集用于两个小区和日历；不得用一个字段冒充两者。
+3. 用 2,990 颗最终方案匹配的身份 registry 生成正式 schema v3 下发包，并在部署流程中保持可见清单与负责子集同版本启用。
 4. 对 actual assignment 的 128/256 做 guard、功率、带宽、公共信令和 PRACH 降额，不裁剪完整可见清单。
 5. 冻结公共 epoch，运行至少 7 天事件驱动、gateway 和 N-1 审计。
 6. 生成全球 PCI 冲突图；7 天验收通过后填写 `selectedScenario` 审计记录。
 
-`80/640 ms`、20 ms occasion、2.5 ms sub-visit、`16/64`、`n10` 和 `48/8/8` 都是规划参数。128/256 只限定 actual assignment 中每小区/每星实际负责的 L1，是当前离散日历模型和 CU-CP 执行包络，不是波束数或协议常量。srsRAN 当前已实现单集合的管理中心版本化输入、两个稳定星载 NCI/PCI、输入集合的双小区划分与软件日历 gate；尚未实现完整可见清单与负责子集的双集合输入、全球连续覆盖证明、可信 Initial UL position sideband、模拟端口到硬件句柄映射或真实 PHY/RU/RF 跳变，因此这些能力仍不能标为 C++ 或 RF 运行态证据。
+`80/640 ms`、20 ms occasion、2.5 ms sub-visit、`16/64`、`n10` 和 `48/8/8` 都是规划参数。128/256 只限定 actual assignment 中每小区/每星实际负责的 L1，是当前离散日历模型和 CU-CP 执行包络，不是波束数或协议常量。srsRAN 已实现 schema v3 双集合输入、两个稳定星载 NCI/PCI、负责子集的双小区划分、软件日历、持久化恢复和分开展示的只读状态；全球连续覆盖、可信 Initial UL position sideband、模拟端口到硬件句柄映射和真实 PHY/RU/RF 跳变仍属于后续工作。

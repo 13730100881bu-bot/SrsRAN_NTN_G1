@@ -1,6 +1,6 @@
 # NTN 星载双小区版本化波位计划
 
-本文说明管理中心如何把一颗卫星的完整可见 L1 波位表交给星载 CU-CP，以及 CU-CP 如何校验、划分、审计、等待启用、处理 DU 断开和重启恢复。
+本文说明管理中心如何把一颗卫星的完整可见 L1 波位表和实际负责子集交给星载 CU-CP，以及 CU-CP 如何校验、划分、审计、等待启用、处理 DU 断开和重启恢复。
 
 这是一条默认关闭的独立 NTN 路径。关闭时，不读取计划文件、不创建恢复文件、不查询或清理 DU 日历，terrestrial 行为保持原样。
 
@@ -9,25 +9,31 @@
 - 每颗卫星长期拥有两个 NR logical cell；两个小区各自有稳定的 36-bit opaque NCI 和 PCI。
 - NCI/PCI 属于星载小区，不属于地面波位；CU-CP 不从卫星编号、坐标或波位编号推导 NCI。
 - 地面 L1 使用 `G######`，表示周期访问的信令波位；L2 是其子级数字业务位置。
-- 管理中心负责全球目录、轨道传播、可见性、星座搜索和身份 registry；CU-CP 只处理本星收到的完整输入。
-- CU-CP 将所有 L1 确定性地分给两个长期小区，生成 SSB/PRACH 接入日历，并在配置允许时请求 DU/MAC 安装软件日历。
+- 管理中心负责全球目录、轨道传播、可见性、星座搜索和身份 registry；CU-CP 只处理本星收到的版本化输入。
+- `visible_l1_positions` 保存管理中心下发的完整本星可见一级波位，允许超过 256 条，不按接入容量裁剪。
+- `assigned_l1_position_ids` 是本星在该版本中实际负责的子集，必须全部来自完整可见清单。
+- CU-CP 只把实际负责子集确定性地分给两个长期小区，并为这些一级波位生成 SSB/PRACH 接入日历。
 - `applied` 只表示匹配的软件 SSB/PRACH gate 已安装，不表示天线、波束成形、PHY、RU 或 RF 已执行。
 
 ```text
-管理中心完整输入
+管理中心版本化输入
         |
-        v
-格式/身份/版本/时间/hash 校验
+        +---- visible_l1_positions：完整可见清单，原样保留
         |
-        v
-两个长期小区的确定性划分
-        |
-        v
-640 ms 接入日历生成与审计
-        |
-        +---- dry-run：只观察，不下发
-        |
-        +---- execution：DU 静态机会预检 -> 软件 gate -> 到点切换
+        +---- assigned_l1_position_ids：实际负责子集
+                         |
+                         v
+              格式/身份/版本/时间/hash 校验
+                         |
+                         v
+              两个长期小区的确定性划分
+                         |
+                         v
+              640 ms 接入日历生成与审计
+                         |
+                         +---- dry-run：只观察，不下发
+                         |
+                         +---- execution：DU 静态机会预检 -> 软件 gate -> 到点切换
 ```
 
 ## 2. 两种运行模式
@@ -37,7 +43,7 @@
 `enabled: true` 且 `du_execution_enabled: false`：
 
 - 读取并严格校验计划；
-- 保存完整候选输入；
+- 保存完整可见清单和实际负责子集；
 - 生成双小区划分和接入日历；
 - 输出审计结果；
 - 不向 DU/MAC 下发，不创建执行证据。
@@ -48,7 +54,7 @@
 
 `du_execution_enabled: true`：
 
-- 只接受 schema v2；
+- 接受 schema v2 和 v3；v2 按“全部可见即全部负责”的旧语义处理；
 - 要求配置独立 `state_file`；
 - 要求本地 catalog、identity registry 和 access profile 与计划完全匹配；
 - 先核对 DU 的两个 NCI/PCI 和静态 SSB/PRACH opportunity；
@@ -100,11 +106,11 @@ ntn_onboard_position_plan:
 
 容量和时序值属于可配置 access profile，不是协议常量。两个小区的配置顺序没有身份含义；实现按 NCI 排序确定日历 parity。两个 NCI 必须不同，PCI 可以按冲突规划复用。
 
-## 4. 管理中心 schema v2
+## 4. 管理中心 schema v3
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "planning_run_id": "global-audit-2026-07-18T00:00:00Z",
   "catalog": {
     "id": "global-land-l1-v1",
@@ -135,12 +141,28 @@ ntn_onboard_position_plan:
       "latitude_deg": 10.0,
       "longitude_deg": 20.0,
       "child_mask": 127
+    },
+    {
+      "position_id": "G000002",
+      "latitude_deg": 10.2,
+      "longitude_deg": 20.3,
+      "child_mask": 127
     }
-  ]
+  ],
+  "assigned_l1_position_ids": ["G000001"]
 }
 ```
 
-解析采用 exact-key：缺字段、未知字段、错误类型、重复 L1、非法 `child_mask` 或非法时间都会拒绝。`child_mask` 是 7-bit L2 目录关系；当前阶段只校验和保存，不把它直接变成数字业务运行态。
+schema v3 把两份集合放在同一份原子计划中：
+
+- `visible_l1_positions` 是本星在该时段的完整可见一级波位，保留 ID、坐标和 `child_mask`；
+- `assigned_l1_position_ids` 是本星实际负责的 ID 子集，每个 ID 必须在完整清单中出现；
+- 只有实际负责子集进入双小区划分、容量判断和 SSB/PRACH 日历；
+- 管理中心 exporter 直接输出这份 schema v3 计划，旧 assignment sidecar 只保留规划端兼容信息，不再是 CU-CP 的负责集合来源。
+
+解析采用 exact-key：缺字段、未知字段、错误类型、重复可见 ID、重复负责 ID、负责 ID 不在可见清单中、非法 `child_mask` 或非法时间都会拒绝。`child_mask` 是 7-bit L2 目录关系；当前阶段只校验和保存，不把它直接变成数字业务运行态。
+
+schema v1/v2 继续可读，并统一解释为 `assigned = visible`。v1 仍只允许 dry-run；v2 可以按原有规划上下文规则执行，已有计划文件不需要立即迁移。
 
 执行模式还会核对：
 
@@ -153,31 +175,32 @@ ntn_onboard_position_plan:
 
 ## 5. Content hash
 
-`content_hash` 不是原始 JSON 文件字节的 hash。它对规范化后的逻辑内容计算 SHA-256，包含：
+`content_hash` 不是原始 JSON 文件字节的 hash。它对规范化后的逻辑内容计算 SHA-256。schema v3 包含：
 
-- schema v2 的 `planning_run_id` 以及 `catalog`、`identity_registry`、`access_profile` 对象中的规范逻辑值；
+- `planning_run_id` 以及 `catalog`、`identity_registry`、`access_profile` 对象中的规范逻辑值；
 - satellite、catalog/schedule version 和三个时间字段；
 - 按 `(nci,pci)` 排序的两个星载小区；
-- 按 `position_id` 排序的全部 L1，包括坐标和 `child_mask`。
+- 按 `position_id` 排序的全部可见 L1，包括坐标和 `child_mask`；
+- 单独排序的全部 `assigned_l1_position_ids`。
 
-输出格式为 `sha256:<hex>`。管理中心 producer 应与 C++ `compute_ntn_position_plan_content_hash()` 使用同一 golden vector。
+所以只要可见清单或实际负责子集任一发生变化，hash 都会变化。输出格式为 `sha256:<hex>`；管理中心 Node producer 与 C++ `compute_ntn_position_plan_content_hash()` 使用同一 golden vector。schema v1/v2 保持原有 canonical hash 规则，不把兼容归一化生成的负责集合重复写入旧 hash。
 
-## 6. 完整候选输入与 257 条规则
+## 6. 完整可见清单、实际负责子集与 257 条规则
 
-CU-CP 在容量判断前先保存完整 `visible_l1_positions`。因此：
+CU-CP 在容量判断前先保存完整 `visible_l1_positions`，容量只检查 `assigned_l1_position_ids`。因此：
 
-- 256 条可以进入双小区日历审计；
-- 257 条仍完整保存 257 条；
-- 257 条返回 `schedule_overflow`，不激活、不截断、不改变旧 active plan；
+- 257 条可见、实际负责不超过 256 条时，完整保存 257 条并正常进入后续处理；
+- 257 条实际负责时返回 `schedule_overflow`，可见清单仍不被裁剪，新计划不激活且旧 active plan 不变；
+- 每小区 128、每星 256 只约束实际负责子集，不约束几何可见数量；
 - 最新输入的只读观测可以高于 accepted version high-water，但不会成为部署权威。
 
-执行模式的状态文件 schema v2 独立保存这份最新观测。即使旧计划随后被清理并再次重启，257 条也不会退回成旧 active plan 的较小 inventory。schema v1 状态文件仍可读取；只有 v1 会从其 active/pending snapshot 补出旧式观测，v2 的 `received_plan:null` 明确表示没有观测。
+执行模式的状态文件 schema v3 独立保存最新观测中的完整可见清单和实际负责 ID。重启后两者不会混为一份。状态文件 schema v1/v2 仍可读取，读取时按旧语义归一化为 `assigned = visible`；新写入统一使用 schema v3。`received_plan:null` 仍明确表示没有可恢复的最新输入。
 
 ## 7. 两个小区如何划分
 
-划分保持以下规则：
+CU-CP 只划分 `assigned_l1_position_ids` 指向的一级波位。划分保持以下规则：
 
-- 每个 L1 恰好出现一次；
+- 每个实际负责的 L1 恰好出现一次；仅可见但未负责的 L1 不进入任一小区；
 - 相同输入得到相同结果；
 - 首次划分优先保持空间紧凑和两边数量平衡；
 - 更新优先保持已有 L1 的所属小区，只为容量和平衡移动必要的最少位置；
@@ -235,7 +258,9 @@ not_sent -> preparing -> ready -> applied
 - active/pending plan、完整双小区划分和 hash；
 - activation/validity 和最近的软件下发状态；
 - 尚待确认的精确 cleanup obligation；
-- 最新成功解析输入的独立只读摘要：catalog/schedule version、content hash、activation epoch 和完整 candidate inventory；它不是原始 JSON 的逐字段副本。
+- 最新成功解析输入的独立只读摘要：catalog/schedule version、content hash、activation epoch、完整可见清单和实际负责 ID；它不是原始 JSON 的逐字段副本。
+
+状态文件当前写入 schema v3，并显式保存这两份集合。读取 schema v1/v2 时，CU-CP 按旧语义补出 `assigned = visible`，随后仍执行相同的身份、hash、有效期和恢复检查。
 
 启动时会重新校验状态和规划上下文。历史 `applied` 不会直接恢复成当前证据；CU-CP 必须向 live DU 查询同一 version/hash 和两个小区的完整结果。
 
@@ -265,7 +290,7 @@ cleanup queue 记录精确 schedule version、calendar hash 和原因。DU 确�
 
 - satellite、schema/profile 和 identity authority；
 - received、active、pending 的 catalog/schedule version 和 hash；
-- 完整 candidate 数量、两个小区的 L1 数量和容量；
+- 完整 visible 数量、assigned 数量、两个小区的 L1 数量和容量；
 - SSB/PRACH/UL beam intent 数量和最大间隔；
 - DU 静态机会 expected/matched 结果；
 - active calendar hash；
@@ -277,6 +302,7 @@ cleanup queue 记录精确 schedule version、calendar hash 和原因。DU 确�
 
 ## 12. 兼容与证据边界
 
+- schema v3 只收敛管理中心输入、CU-CP 处理、恢复和只读观测，没有修改 F1AP、DU、MAC、PHY、RU/RF、Web/GIS 或 generated ASN.1。
 - 旧 `find_ntn_beam_id_by_nci`、beam-derived TAC/TAI/NGAP/Paging 和 per-beam NCI 路径继续作为默认关闭 profile 之外的兼容实现。
 - 新 L1 目录不永久保存 NCI/PCI，也不注入 legacy beam table。
 - 原始 PRACH detection 仍属于 PHY/DU/MAC；CU-CP 只管理计划、资源授权和可用 metadata 的 Initial UL 审计。
@@ -291,6 +317,8 @@ cleanup queue 记录精确 schedule version、calendar hash 和原因。DU 确�
 - `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan_state.*`
 - `lib/cu_cp/cu_cp_impl.*`
 - `apps/units/o_cu_cp/cu_cp/cu_cp_cmdline_commands.h`
+- `utils/ntn/versioned_position_plan_v3.mjs`
+- `utils/ntn/constellation_plan_export.mjs`
 
 主要测试：
 

@@ -490,6 +490,15 @@ For a more detailed task-to-change lookup, use
   cannot expose a new active plan or freeze expiry, and the bounded recovery
   state reserves room for exact cleanup of both saved live plans. These are
   software-control guarantees, not RF execution evidence.
+- CUCP-044 adds the management-center dual-set contract. Schema v3 carries the
+  complete `visible_l1_positions` inventory and the independent
+  `assigned_l1_position_ids` subset in one hash-bound plan. Only the assigned
+  subset is partitioned across the two stable onboard cells and scheduled; the
+  visible inventory is retained even above 256. State schema v3 persists both
+  sets and reads schema v1/v2 with their historical `assigned=visible`
+  semantics. Read-only status reports visible and assigned counts separately.
+  The Node exporter and C++ use one fixed canonical hash vector. This changes
+  no F1AP, DU, MAC, PHY, RU/RF or generated ASN.1 interface.
 
 ## Protocol References
 
@@ -584,11 +593,12 @@ needs that layer.
 - Do not compare the complete visible count with the 256 assignment limit.
   Visibility inventory remains complete; only the unique actual assignment is
   limited to 256 L1 per satellite and 128 per onboard cell.
-- Do not claim the current CU-CP schema already carries those two sets. It has
-  one `visible_l1_positions` list and partitions every entry into the two
-  onboard cells. A future private input must preserve the complete inventory
-  separately from the assigned subset before offline ownership can drive the
-  C++ calendar.
+- Use schema v3 whenever management-center visibility and service ownership
+  differ. It carries `visible_l1_positions` and `assigned_l1_position_ids`
+  independently; only the latter enters the two-cell partition and calendar.
+  Schema v1/v2 intentionally keep their historical `assigned=visible`
+  behavior and must not be used to encode a larger visibility inventory with a
+  smaller service subset.
 - Do not aggregate PRACH at satellite level. Every assigned L1 needs its own
   planned PRACH opportunity and corresponding uplink beam intent.
 - Do not assume adding satellites monotonically improves a Walker arrangement;

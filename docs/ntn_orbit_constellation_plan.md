@@ -1,6 +1,6 @@
 # ±57°全球陆地卫星轨道搜索与可视化方案
 
-> 最终工程方案采用 46 个轨道面、每面 65 颗，共 2,990 颗卫星；网页中的 42 面、3,528 颗仅作为历史展示对照。轨道传播、星座搜索与全球 ownership 仍属于管理中心/Web 离线规划，不复制进 CU-CP。现有 CU-CP 版本化双小区计划只有一份 L1 集合输入，尚不能同时接收完整可见清单与实际负责子集。`selectedScenario=null`、`exact=false` 继续表示 7 天连续覆盖、故障和真实无线验收尚未完成，不再表示卫星数量没有结论。
+> 最终工程方案采用 46 个轨道面、每面 65 颗，共 2,990 颗卫星；网页中的 42 面、3,528 颗仅作为历史展示对照。轨道传播、星座搜索与全球 ownership 仍属于管理中心/Web 离线规划，不复制进 CU-CP。管理中心 exporter 与 CU-CP 已通过 schema v3 同时传递完整可见清单和实际负责子集。`selectedScenario=null`、`exact=false` 继续表示 7 天连续覆盖、故障和真实无线验收尚未完成，不再表示卫星数量没有结论。
 
 配套波位目录、小区身份和容量边界见 [全球陆地星载双小区与波位规划](./ntn_beam_constellation_plan.md)。
 
@@ -24,7 +24,7 @@
 
 ### 2.3 软件边界
 
-管理中心负责星历、全球波位表、NCI registry、PCI 冲突图、assignment proposal、版本和 activation epoch；星载 CU-CP 不运行全球选星。目标接口需要同时传递完整可见清单和实际负责子集，但当前 CU-CP 私有 schema 只有 `visible_l1_positions`，会把其中全部 L1 划入两个小区。F1AP、DU/MAC 和 RF 执行层尚未接入本轮双集合结果；Web 只展示搜索 seed 和离线状态。
+管理中心负责星历、全球波位表、NCI registry、PCI 冲突图、assignment proposal、版本和 activation epoch；星载 CU-CP 不运行全球选星。schema v3 使用 `visible_l1_positions` 传递本星完整可见清单，使用 `assigned_l1_position_ids` 传递实际负责子集。CU-CP 完整保存前者，只把后者划入两个长期小区并生成接入日历。本轮没有修改 F1AP、DU、MAC、PHY、RU/RF 或 generated ASN.1；Web 仍只展示搜索和离线规划状态。
 
 ## 3. 最终方案与历史展示对照
 
@@ -63,8 +63,8 @@ flowchart LR
     SPLIT --> READY["ready / applied / activation gate"]
 ```
 
-这张图表示管理中心的目标流程。当前实现止于 `MATCH` 的离线结果；`SPLIT`
-之后还缺少能够同时保留完整清单和负责子集的 CU-CP 私有输入契约。
+这张图表示管理中心与星载 CU-CP 的职责分工。管理中心 exporter 已将 `VISIBLE`
+与 `MATCH` 的结果原子写入 schema v3；CU-CP 保存完整可见清单，并从实际负责子集开始执行 `SPLIT`、日历检查和启用控制。
 
 1. 新候选在 L1 处达到 `45°` 后进入 `visible inventory`。
 2. 当前 owner 可滞回保持到 `42°`；低于 42° 才退出。
@@ -86,7 +86,7 @@ stateDiagram-v2
     released --> [*]
 ```
 
-每星两个长期小区各有 `16 analog / 64 digital` 规划资源，整星为 `32/128`，暂不互借。当前 Web 日历以 4×2.5 ms sub-visit 得到最差 80 ms 窗口 168 次机会，并把 actual assignment 的配置上限设为 128 L1/小区、256 L1/星。这里的 128/256 是实际负责 L1 的离散日历/CU-CP 执行包络，不是可见候选数、模拟或数字波束数，也不是 PHY/RU/RF 或协议保证。目标运行流程会把获授权 L1 二分给两个小区，并为每个已分配 L1 安排 SSB 与 PRACH 机会；当前 C++ 输入还无法把负责子集与完整清单分开。负载均衡、空间紧凑、连通和 UE sticky 都是优化目标，不是现阶段已证明的硬保证。
+每星两个长期小区各有 `16 analog / 64 digital` 规划资源，整星为 `32/128`，暂不互借。当前 Web 日历以 4×2.5 ms sub-visit 得到最差 80 ms 窗口 168 次机会，并把 actual assignment 的配置上限设为 128 L1/小区、256 L1/星。这里的 128/256 是实际负责 L1 的离散日历/CU-CP 执行包络，不是可见候选数、模拟或数字波束数，也不是 PHY/RU/RF 或协议保证。CU-CP 已将 schema v3 的负责子集二分给两个长期小区，并为每个已分配 L1 安排 SSB 与 PRACH 机会；完整可见清单可以超过 256 条且保持不变。负载均衡、空间紧凑、连通和 UE sticky 是划分优化目标，不是全球连续覆盖结论。
 
 跨星时不迁移 NCI。源、目标分别使用自己的星载 NCI/PCI；同一 L1 在一个 activation epoch 最多一个 primary。目标可以为发现和测量预热，但不能在 ready/applied 前被称为 serving。
 
@@ -159,7 +159,7 @@ stateDiagram-v2
 | 500 km 二体圆轨道与旧中国 Web 展示 | 已有测试覆盖 | 只覆盖旧参数化模型和历史样例 |
 | 3,528 颗历史展示对照 | 已实现 | 只用于现有 Web 互动展示，不再作为目标规模 |
 | 2,990 颗最终方案的一天 unique assignment | 已有离线规划证据 | 已采用为最终工程方案；目录内容 hash 已重新校验，120 s 的 720/720 离散时刻通过，实际分配峰值 87/星、平衡双小区峰值 44、小区/卫星 overflow 0；公共 epoch 未冻结，不是连续证明或 C++ 运行态证据 |
-| 完整可见清单 + 实际负责子集输入 | 规划中 | 当前 CU-CP 只有一份 `visible_l1_positions` 并全部划入小区；双集合私有契约尚未实现 |
+| 完整可见清单 + 实际负责子集输入 | 已有测试覆盖 | schema v3 原子携带 `visible_l1_positions` 与 `assigned_l1_position_ids`；CU-CP 只对负责子集执行 256/128 容量检查、双小区划分和日历，v1/v2 按 `assigned=visible` 兼容 |
 | 全球目录生成器、asset 与 loader | 已实现 | Web 已加载 36,411 L1 / 249,375 L2；不是 CU-CP 运行态 |
 | 全球目录确定性与几何约束 | 已有测试覆盖 | `catalog:check` 和 focused tests `6/6` 通过；不是正式运营 GIS 验收 |
 | 2,990 星一天 coarse visible inventory | 已有离线规划证据 | 120 s 的 720/720 几何采样通过；最少 entry 候选 2，release/entry-visible 峰值 254/209；采样间可能有空洞 |
@@ -175,9 +175,9 @@ stateDiagram-v2
 1. 保留当前 Web 目录作为可重复仿真输入，另行冻结正式运营 GIS、海岸精确裁剪和国界 guard。
 2. 保留 2,990 颗最终方案一天 120 s、720 点的几何与唯一分配报告，并把两类指标分开展示。
 3. 冻结公共 epoch 与绝对轨道相位，实现参数化 Walker 事件检测，生成至少 7 天精确报告。
-4. 为 CU-CP 增加最小私有双集合输入：完整可见清单用于审计，实际负责子集用于双小区与日历。
+4. 使用 2,990 颗最终方案匹配的身份 registry 生成正式 schema v3 下发包，并保持可见清单、负责子集、版本和启用时刻一致。
 5. 对 actual assignment 加入 gateway、N-1、接管代价及 256/128 降额敏感性扫描，不裁剪完整可见清单。
 6. 构建同时可见、同频星载小区冲突图并验证 1,008 个 PCI 的复用可行性。
-7. 为 2,990 颗最终方案生成匹配的身份 registry 和管理中心下发包；7 天验收通过后更新 `selectedScenario` 审计记录。CU-CP 不自行选择星座。
+7. 7 天验收通过后更新 `selectedScenario` 审计记录；CU-CP 不自行选择星座。
 
-本轮不运行 CMake、C++ 编译或 CTest，也不修改任何无线运行行为。
+schema v3 的收敛限于管理中心计划输入、CU-CP 处理、恢复和只读状态，不修改 F1AP、DU、MAC、PHY、RU/RF、Web/GIS 或 generated ASN.1。软件日历仍不等于真实天线和空口执行。
