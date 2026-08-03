@@ -106,6 +106,38 @@ bool is_valid_satellite_id(const std::string& value)
          std::isdigit(static_cast<unsigned char>(value[5])) && std::isdigit(static_cast<unsigned char>(value[6]));
 }
 
+std::vector<std::string> effective_assigned_l1_ids(const ntn_versioned_position_plan& plan)
+{
+  if (plan.schema_version >= 3) {
+    return plan.assigned_l1_position_ids;
+  }
+
+  std::vector<std::string> result;
+  result.reserve(plan.visible_l1_positions.size());
+  for (const ntn_l1_position& position : plan.visible_l1_positions) {
+    result.push_back(position.position_id);
+  }
+  return result;
+}
+
+std::vector<ntn_l1_position> select_assigned_l1_positions(const ntn_versioned_position_plan& plan)
+{
+  if (plan.schema_version < 3) {
+    return plan.visible_l1_positions;
+  }
+
+  const std::set<std::string> assigned_ids(plan.assigned_l1_position_ids.begin(),
+                                            plan.assigned_l1_position_ids.end());
+  std::vector<ntn_l1_position> result;
+  result.reserve(assigned_ids.size());
+  for (const ntn_l1_position& position : plan.visible_l1_positions) {
+    if (assigned_ids.count(position.position_id) != 0) {
+      result.push_back(position);
+    }
+  }
+  return result;
+}
+
 bool is_sha256_digest(const std::string& value)
 {
   const std::string normalized = normalize_hash(value);
@@ -163,6 +195,14 @@ expected<int64_t, std::string> parse_json_int64(const nlohmann::json& value, con
     return static_cast<int64_t>(parsed);
   }
   return value.get<int64_t>();
+}
+
+expected<std::string, std::string> parse_json_string(const nlohmann::json& value, const std::string& context)
+{
+  if (!value.is_string()) {
+    return make_unexpected(fmt::format("{} must be a string", context));
+  }
+  return value.get<std::string>();
 }
 
 bool cell_identity_less(const ntn_onboard_cell_identity& lhs, const ntn_onboard_cell_identity& rhs)
@@ -537,6 +577,10 @@ const char* srsran::srs_cu_cp::to_string(ntn_position_plan_reject_reason reason)
       return "invalid_l1_id";
     case ntn_position_plan_reject_reason::duplicate_l1_id:
       return "duplicate_l1_id";
+    case ntn_position_plan_reject_reason::duplicate_assigned_l1_id:
+      return "duplicate_assigned_l1_id";
+    case ntn_position_plan_reject_reason::assigned_l1_not_visible:
+      return "assigned_l1_not_visible";
     case ntn_position_plan_reject_reason::invalid_child_mask:
       return "invalid_child_mask";
     case ntn_position_plan_reject_reason::invalid_l1_position:
@@ -709,13 +753,13 @@ ntn_position_plan_reject_reason ntn_onboard_position_plan_controller::validate_p
   if (!cfg.enabled) {
     return ntn_position_plan_reject_reason::feature_disabled;
   }
-  if (plan.schema_version != 1 && plan.schema_version != 2) {
+  if (plan.schema_version != 1 && plan.schema_version != 2 && plan.schema_version != 3) {
     return ntn_position_plan_reject_reason::unsupported_schema;
   }
   if (plan.schema_version == 1 && cfg.require_external_apply) {
     return ntn_position_plan_reject_reason::unbound_planning_context;
   }
-  if (plan.schema_version == 2) {
+  if (plan.schema_version >= 2) {
     const bool context_is_complete = !plan.planning_run_id.empty() && !plan.catalog_id.empty() &&
                                      is_sha256_digest(plan.catalog_hash) && !plan.identity_registry_version.empty() &&
                                      is_sha256_digest(plan.identity_registry_hash) && !plan.access_profile_id.empty() &&
@@ -785,7 +829,7 @@ ntn_position_plan_reject_reason ntn_onboard_position_plan_controller::validate_p
     if (!l1_ids.insert(position.position_id).second) {
       return ntn_position_plan_reject_reason::duplicate_l1_id;
     }
-    if ((plan.schema_version == 2 && (position.child_mask == 0 || position.child_mask > 0x7fU)) ||
+    if ((plan.schema_version >= 2 && (position.child_mask == 0 || position.child_mask > 0x7fU)) ||
         (plan.schema_version == 1 && position.child_mask != 0)) {
       return ntn_position_plan_reject_reason::invalid_child_mask;
     }
@@ -796,7 +840,21 @@ ntn_position_plan_reject_reason ntn_onboard_position_plan_controller::validate_p
     }
   }
 
-  const size_t position_count = plan.visible_l1_positions.size();
+  const std::vector<std::string> assigned_ids = effective_assigned_l1_ids(plan);
+  std::set<std::string>          unique_assigned_ids;
+  for (const std::string& position_id : assigned_ids) {
+    if (!is_valid_l1_id(position_id)) {
+      return ntn_position_plan_reject_reason::invalid_l1_id;
+    }
+    if (!unique_assigned_ids.insert(position_id).second) {
+      return ntn_position_plan_reject_reason::duplicate_assigned_l1_id;
+    }
+    if (l1_ids.count(position_id) == 0) {
+      return ntn_position_plan_reject_reason::assigned_l1_not_visible;
+    }
+  }
+
+  const size_t position_count = assigned_ids.size();
   if (position_count > cfg.max_l1_positions_per_satellite ||
       (position_count + 1) / 2 > cfg.max_l1_positions_per_cell) {
     return ntn_position_plan_reject_reason::schedule_overflow;
@@ -1406,10 +1464,8 @@ expected<ntn_activated_position_plan, std::string> ntn_onboard_position_plan_con
     }
   }
 
-  std::set<std::string> expected_ids;
-  for (const ntn_l1_position& position : source.visible_l1_positions) {
-    expected_ids.insert(position.position_id);
-  }
+  const std::vector<std::string> effective_ids = effective_assigned_l1_ids(source);
+  const std::set<std::string>    expected_ids(effective_ids.begin(), effective_ids.end());
   std::set<std::string> assigned_ids;
   for (const ntn_onboard_cell_position_set& cell : normalized) {
     for (const std::string& position_id : cell.assigned_l1_ids) {
@@ -1419,7 +1475,7 @@ expected<ntn_activated_position_plan, std::string> ntn_onboard_position_plan_con
     }
   }
   if (assigned_ids != expected_ids) {
-    return make_unexpected(std::string{"persisted assignment omits visible L1 positions"});
+    return make_unexpected(std::string{"persisted assignment omits assigned L1 positions"});
   }
 
   ntn_activated_position_plan rebuilt;
@@ -1553,6 +1609,7 @@ ntn_onboard_position_plan_controller::restore_persistent_state(const ntn_onboard
   last_received_hash.clear();
   last_received_activation = {};
   last_candidate_inventory.clear();
+  last_assigned_l1_position_ids.clear();
   const ntn_onboard_position_plan_state_snapshot* latest_snapshot =
       state.pending.has_value() &&
               (!state.active.has_value() ||
@@ -1566,6 +1623,12 @@ ntn_onboard_position_plan_controller::restore_persistent_state(const ntn_onboard
     last_received_hash         = state.received_plan->content_hash;
     last_received_activation   = state.received_plan->activation_epoch;
     last_candidate_inventory   = state.received_plan->candidate_inventory;
+    last_assigned_l1_position_ids = state.received_plan->assigned_l1_position_ids;
+    if (state.schema_version < 3 && last_assigned_l1_position_ids.empty()) {
+      for (const ntn_l1_position& position : last_candidate_inventory) {
+        last_assigned_l1_position_ids.push_back(position.position_id);
+      }
+    }
   } else if (state.schema_version == 1 && latest_snapshot != nullptr) {
     received_plan_present      = true;
     last_received_catalog      = latest_snapshot->source.catalog_version;
@@ -1573,6 +1636,7 @@ ntn_onboard_position_plan_controller::restore_persistent_state(const ntn_onboard
     last_received_hash         = latest_snapshot->source.content_hash;
     last_received_activation   = latest_snapshot->source.activation_epoch;
     last_candidate_inventory = latest_snapshot->source.visible_l1_positions;
+    last_assigned_l1_position_ids = effective_assigned_l1_ids(latest_snapshot->source);
   }
   active.reset();
   pending.reset();
@@ -1646,7 +1710,8 @@ ntn_onboard_position_plan_controller::make_persistent_state(uint64_t generation)
                                                                           last_received_schedule,
                                                                           last_received_hash,
                                                                           last_received_activation,
-                                                                          last_candidate_inventory};
+                                                                          last_candidate_inventory,
+                                                                          last_assigned_l1_position_ids};
   }
   const auto to_snapshot                            = [](const ntn_activated_position_plan& plan) {
     return ntn_onboard_position_plan_state_snapshot{plan.source, plan.cell_positions, plan.calendar_hash};
@@ -1853,6 +1918,7 @@ ntn_position_plan_submit_result ntn_onboard_position_plan_controller::submit(
   current_stage              = cfg.enabled ? ntn_position_plan_stage::received : ntn_position_plan_stage::disabled;
   received_plan_present      = true;
   last_candidate_inventory   = plan.visible_l1_positions;
+  last_assigned_l1_position_ids = effective_assigned_l1_ids(plan);
   last_received_catalog      = plan.catalog_version;
   last_received_schedule     = plan.schedule_version;
   last_received_hash         = plan.content_hash;
@@ -1865,7 +1931,7 @@ ntn_position_plan_submit_result ntn_onboard_position_plan_controller::submit(
 
   ntn_activated_position_plan candidate;
   candidate.source         = plan;
-  candidate.cell_positions = partition_positions(plan.visible_l1_positions);
+  candidate.cell_positions = partition_positions(select_assigned_l1_positions(plan));
   candidate.access_calendar = build_access_calendar(plan.schedule_version, candidate.cell_positions);
   candidate.calendar_audit  = audit_access_calendar(plan.schedule_version,
                                                     candidate.cell_positions,
@@ -2120,8 +2186,8 @@ std::string srsran::srs_cu_cp::compute_ntn_position_plan_content_hash(const ntn_
 {
   std::ostringstream canonical;
   canonical.imbue(std::locale::classic());
-  if (plan.schema_version == 2) {
-    canonical << "schema_version=2\n";
+  if (plan.schema_version >= 2) {
+    canonical << "schema_version=" << plan.schema_version << '\n';
     canonical << "planning_run_id=" << plan.planning_run_id << '\n';
     canonical << "catalog=" << plan.catalog_id << ',' << normalize_hash(plan.catalog_hash) << '\n';
     canonical << "identity_registry=" << plan.identity_registry_version << ','
@@ -2153,10 +2219,18 @@ std::string srsran::srs_cu_cp::compute_ntn_position_plan_content_hash(const ntn_
   canonical << std::setprecision(std::numeric_limits<double>::max_digits10);
   for (const ntn_l1_position& position : positions) {
     canonical << "l1=" << position.position_id << ',' << position.latitude_deg << ',' << position.longitude_deg;
-    if (plan.schema_version == 2) {
+    if (plan.schema_version >= 2) {
       canonical << ',' << static_cast<unsigned>(position.child_mask);
     }
     canonical << '\n';
+  }
+
+  if (plan.schema_version >= 3) {
+    std::vector<std::string> assigned_ids = plan.assigned_l1_position_ids;
+    std::sort(assigned_ids.begin(), assigned_ids.end());
+    for (const std::string& position_id : assigned_ids) {
+      canonical << "assigned_l1=" << position_id << '\n';
+    }
   }
 
   return sha256_with_prefix(canonical.str());
@@ -2211,7 +2285,7 @@ srsran::srs_cu_cp::parse_ntn_position_plan_json(const std::string& json_text)
       }
       result.schema_version = static_cast<unsigned>(schema_version.value());
     }
-    if (result.schema_version != 1 && result.schema_version != 2) {
+    if (result.schema_version != 1 && result.schema_version != 2 && result.schema_version != 3) {
       return make_unexpected(fmt::format("unsupported schema_version {}", result.schema_version));
     }
 
@@ -2229,7 +2303,7 @@ srsran::srs_cu_cp::parse_ntn_position_plan_json(const std::string& json_text)
                                               "onboard_cells",
                                               "visible_l1_positions"},
                                              {"schema_version"});
-    } else {
+    } else if (result.schema_version == 2) {
       key_error = validate_exact_object_keys(root,
                                              "root",
                                              {"schema_version",
@@ -2246,12 +2320,30 @@ srsran::srs_cu_cp::parse_ntn_position_plan_json(const std::string& json_text)
                                               "activation_epoch_unix_ms",
                                               "onboard_cells",
                                               "visible_l1_positions"});
+    } else {
+      key_error = validate_exact_object_keys(root,
+                                             "root",
+                                             {"schema_version",
+                                              "planning_run_id",
+                                              "catalog",
+                                              "identity_registry",
+                                              "access_profile",
+                                              "satellite_id",
+                                              "catalog_version",
+                                              "schedule_version",
+                                              "content_hash",
+                                              "valid_from_unix_ms",
+                                              "valid_until_unix_ms",
+                                              "activation_epoch_unix_ms",
+                                              "onboard_cells",
+                                              "visible_l1_positions",
+                                              "assigned_l1_position_ids"});
     }
     if (key_error.has_value()) {
       return make_unexpected(std::move(key_error.value()));
     }
 
-    if (result.schema_version == 2) {
+    if (result.schema_version >= 2) {
       const nlohmann::json& catalog  = root.at("catalog");
       const nlohmann::json& registry = root.at("identity_registry");
       const nlohmann::json& profile  = root.at("access_profile");
@@ -2332,7 +2424,7 @@ srsran::srs_cu_cp::parse_ntn_position_plan_json(const std::string& json_text)
     for (size_t i = 0; i != positions.size(); ++i) {
       const std::string context = fmt::format("visible_l1_positions[{}]", i);
       const auto        error =
-          result.schema_version == 2
+          result.schema_version >= 2
               ? validate_exact_object_keys(
                     positions[i], context.c_str(), {"position_id", "latitude_deg", "longitude_deg", "child_mask"})
               : validate_exact_object_keys(
@@ -2344,7 +2436,7 @@ srsran::srs_cu_cp::parse_ntn_position_plan_json(const std::string& json_text)
       position.position_id  = positions[i].at("position_id").get<std::string>();
       position.latitude_deg = positions[i].at("latitude_deg").get<double>();
       position.longitude_deg = positions[i].at("longitude_deg").get<double>();
-      if (result.schema_version == 2) {
+      if (result.schema_version >= 2) {
         auto child_mask = parse_json_uint64(positions[i].at("child_mask"), fmt::format("{}.child_mask", context));
         if (!child_mask.has_value()) {
           return make_unexpected(child_mask.error());
@@ -2355,6 +2447,25 @@ srsran::srs_cu_cp::parse_ntn_position_plan_json(const std::string& json_text)
         position.child_mask = static_cast<uint8_t>(child_mask.value());
       }
       result.visible_l1_positions.push_back(std::move(position));
+    }
+    if (result.schema_version >= 3) {
+      const nlohmann::json& assigned_ids = root.at("assigned_l1_position_ids");
+      if (!assigned_ids.is_array()) {
+        return make_unexpected(std::string{"assigned_l1_position_ids must be an array"});
+      }
+      result.assigned_l1_position_ids.reserve(assigned_ids.size());
+      for (size_t i = 0; i != assigned_ids.size(); ++i) {
+        auto position_id = parse_json_string(assigned_ids[i], fmt::format("assigned_l1_position_ids[{}]", i));
+        if (!position_id.has_value()) {
+          return make_unexpected(position_id.error());
+        }
+        result.assigned_l1_position_ids.push_back(std::move(position_id.value()));
+      }
+    } else {
+      result.assigned_l1_position_ids.reserve(result.visible_l1_positions.size());
+      for (const ntn_l1_position& position : result.visible_l1_positions) {
+        result.assigned_l1_position_ids.push_back(position.position_id);
+      }
     }
     return result;
   } catch (const std::exception& error) {

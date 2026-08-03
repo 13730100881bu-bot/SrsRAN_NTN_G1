@@ -6,7 +6,7 @@ import {
   ConstellationReplayPlanExportError,
   exportDryRunSatellitePlanFromReplay
 } from './constellation_replay_plan_export.mjs';
-import {ACCESS_PROFILE_V1, ACCESS_PROFILE_V1_HASH, validatePlanV2} from './versioned_position_plan_v2.mjs';
+import {ACCESS_PROFILE_V1, ACCESS_PROFILE_V1_HASH, validatePlanV3} from './versioned_position_plan_v3.mjs';
 
 const HASH_A = `sha256:${'a'.repeat(64)}`;
 const HASH_B = `sha256:${'b'.repeat(64)}`;
@@ -160,6 +160,7 @@ test('257 visible positions stay complete while 256 assignments use the two regi
   });
 
   assert.equal(exported.plan.visible_l1_positions.length, 257);
+  assert.equal(exported.plan.assigned_l1_position_ids.length, 256);
   assert.equal(exported.assignment_sidecar.assigned_l1_positions.length, 256);
   assert.deepEqual(exported.assignment_sidecar.visible_but_not_assigned_position_ids, ['G000257']);
   assert.deepEqual(exported.assignment_sidecar.onboard_cells, [
@@ -168,7 +169,7 @@ test('257 visible positions stay complete while 256 assignments use the two regi
   ]);
   assert.equal(exported.assignment_sidecar.assigned_l1_positions.filter(({cell_bank}) => cell_bank === 0).length, 128);
   assert.equal(exported.assignment_sidecar.assigned_l1_positions.filter(({cell_bank}) => cell_bank === 1).length, 128);
-  assert.equal(validatePlanV2(exported.plan).contentHash, exported.plan.content_hash);
+  assert.equal(validatePlanV3(exported.plan).contentHash, exported.plan.content_hash);
   assert.equal(exported.plan_validation.content_hash, exported.plan.content_hash);
 });
 

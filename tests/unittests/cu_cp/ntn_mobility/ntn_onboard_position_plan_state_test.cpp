@@ -102,14 +102,45 @@ make_plan(uint64_t catalog_version, uint64_t schedule_version, std::vector<ntn_l
   return plan;
 }
 
+ntn_versioned_position_plan make_schema_v3_plan(uint64_t                     catalog_version,
+                                                uint64_t                     schedule_version,
+                                                std::vector<ntn_l1_position> positions,
+                                                std::vector<std::string>     assigned_ids)
+{
+  ntn_versioned_position_plan plan = make_plan(catalog_version, schedule_version, std::move(positions));
+  plan.schema_version              = 3;
+  plan.assigned_l1_position_ids    = std::move(assigned_ids);
+  plan.content_hash                = compute_ntn_position_plan_content_hash(plan);
+  return plan;
+}
+
+std::vector<ntn_l1_position> make_positions(unsigned count)
+{
+  std::vector<ntn_l1_position> positions;
+  positions.reserve(count);
+  for (unsigned i = 0; i != count; ++i) {
+    positions.push_back(
+        {fmt::format("G{:06}", i + 1), 10.0 + static_cast<double>(i / 32) * 0.01, 20.0 + (i % 32) * 0.01, 0x7f});
+  }
+  return positions;
+}
+
 ntn_onboard_position_plan_state_snapshot make_snapshot(ntn_versioned_position_plan plan)
 {
   ntn_onboard_position_plan_state_snapshot snapshot;
   snapshot.source                     = std::move(plan);
   snapshot.cell_positions[0].identity = {first_nci, 101};
   snapshot.cell_positions[1].identity = {second_nci, 101};
-  for (size_t i = 0; i != snapshot.source.visible_l1_positions.size(); ++i) {
-    snapshot.cell_positions[i % 2].assigned_l1_ids.push_back(snapshot.source.visible_l1_positions[i].position_id);
+  std::vector<std::string> assigned_ids = snapshot.source.assigned_l1_position_ids;
+  if (snapshot.source.schema_version < 3) {
+    assigned_ids.clear();
+    assigned_ids.reserve(snapshot.source.visible_l1_positions.size());
+    for (const ntn_l1_position& position : snapshot.source.visible_l1_positions) {
+      assigned_ids.push_back(position.position_id);
+    }
+  }
+  for (size_t i = 0; i != assigned_ids.size(); ++i) {
+    snapshot.cell_positions[i % 2].assigned_l1_ids.push_back(assigned_ids[i]);
   }
   snapshot.calendar_hash = compute_ntn_access_calendar_hash(snapshot.source.schedule_version, {});
   return snapshot;
@@ -210,6 +241,86 @@ TEST(ntn_onboard_position_plan_state, atomic_store_round_trips_complete_recovery
   EXPECT_EQ(recovered.recorded_deployment_stage, ntn_position_plan_deployment_stage::applied);
   EXPECT_EQ(recovered.recorded_deployment_schedule_version, 20U);
   EXPECT_TRUE(recovered.du_reconciliation_required);
+}
+
+TEST(ntn_onboard_position_plan_state, schema_v3_round_trips_complete_visibility_and_assigned_subset)
+{
+  const std::filesystem::path path = make_state_path("schema-v3-dual-set");
+  temporary_state_guard       guard(path);
+  auto                        state = make_state();
+
+  std::vector<ntn_l1_position> positions = make_positions(300);
+  std::vector<std::string>     assigned_ids;
+  assigned_ids.reserve(60);
+  for (unsigned i = 0; i != 60; ++i) {
+    assigned_ids.push_back(positions[i * 4].position_id);
+  }
+  const ntn_versioned_position_plan plan =
+      make_schema_v3_plan(10, 20, std::move(positions), std::move(assigned_ids));
+  state.active           = make_snapshot(plan);
+  state.pending.reset();
+  state.sticky_partition = state.active->cell_positions;
+  state.received_plan    = ntn_onboard_position_plan_received_observation{plan.catalog_version,
+                                                                           plan.schedule_version,
+                                                                           plan.content_hash,
+                                                                           plan.activation_epoch,
+                                                                           plan.visible_l1_positions,
+                                                                           plan.assigned_l1_position_ids};
+  state.recorded_deployment_schedule_version = plan.schedule_version;
+  state.recorded_deployment_calendar_hash    = state.active->calendar_hash;
+
+  auto stored = store_ntn_onboard_position_plan_state_atomic(path.string(), state);
+  ASSERT_TRUE(stored.has_value()) << stored.error();
+  auto loaded = load_ntn_onboard_position_plan_state(path.string());
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  ASSERT_TRUE(loaded->has_value());
+  const auto& recovered = loaded->value();
+
+  EXPECT_EQ(recovered.schema_version, 3U);
+  ASSERT_TRUE(recovered.active.has_value());
+  EXPECT_EQ(recovered.active->source.visible_l1_positions.size(), 300U);
+  EXPECT_EQ(recovered.active->source.assigned_l1_position_ids, plan.assigned_l1_position_ids);
+  const size_t recovered_partition_size = recovered.active->cell_positions[0].assigned_l1_ids.size() +
+                                          recovered.active->cell_positions[1].assigned_l1_ids.size();
+  EXPECT_EQ(recovered_partition_size, plan.assigned_l1_position_ids.size());
+  ASSERT_TRUE(recovered.received_plan.has_value());
+  EXPECT_EQ(recovered.received_plan->candidate_inventory.size(), 300U);
+  EXPECT_EQ(recovered.received_plan->assigned_l1_position_ids, plan.assigned_l1_position_ids);
+}
+
+TEST(ntn_onboard_position_plan_state, schema_v2_load_migrates_implicit_assignment_to_the_visible_inventory)
+{
+  const std::filesystem::path path = make_state_path("schema-v2-migration");
+  temporary_state_guard       guard(path);
+  auto                        state = make_state();
+  state.schema_version              = 2;
+  ASSERT_TRUE(state.received_plan.has_value());
+  state.received_plan->assigned_l1_position_ids.clear();
+
+  auto stored = store_ntn_onboard_position_plan_state_atomic(path.string(), state);
+  ASSERT_TRUE(stored.has_value()) << stored.error();
+  const nlohmann::json persisted = nlohmann::json::parse(read_file(path));
+  EXPECT_EQ(persisted.at("state_schema_version"), 2U);
+  EXPECT_FALSE(persisted.at("received_plan").contains("assigned_l1_position_ids"));
+
+  auto loaded = load_ntn_onboard_position_plan_state(path.string());
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  ASSERT_TRUE(loaded->has_value());
+  const auto& recovered = loaded->value();
+  EXPECT_EQ(recovered.schema_version, 2U);
+  ASSERT_TRUE(recovered.active.has_value());
+  ASSERT_TRUE(recovered.pending.has_value());
+  EXPECT_EQ(recovered.active->source.assigned_l1_position_ids.size(),
+            recovered.active->source.visible_l1_positions.size());
+  EXPECT_EQ(recovered.pending->source.assigned_l1_position_ids.size(),
+            recovered.pending->source.visible_l1_positions.size());
+  ASSERT_TRUE(recovered.received_plan.has_value());
+  EXPECT_EQ(recovered.received_plan->assigned_l1_position_ids.size(),
+            recovered.received_plan->candidate_inventory.size());
+  for (size_t i = 0; i != recovered.received_plan->candidate_inventory.size(); ++i) {
+    EXPECT_EQ(recovered.received_plan->assigned_l1_position_ids[i],
+              recovered.received_plan->candidate_inventory[i].position_id);
+  }
 }
 
 TEST(ntn_onboard_position_plan_state, schema_v1_without_received_observation_remains_readable)

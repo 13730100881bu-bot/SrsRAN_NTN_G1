@@ -75,6 +75,7 @@ struct ntn_onboard_position_plan_received_observation {
   std::string                           content_hash;
   std::chrono::system_clock::time_point activation_epoch{};
   std::vector<ntn_l1_position>          candidate_inventory;
+  std::vector<std::string>              assigned_l1_position_ids;
 };
 
 /// Private recovery record for the onboard position-plan controller.
@@ -82,7 +83,7 @@ struct ntn_onboard_position_plan_received_observation {
 /// recorded_deployment_stage is historical information only. In particular, a persisted value of applied is not live
 /// DU evidence after restart. Consumers must reconcile with the DU before exposing active/applied state.
 struct ntn_onboard_position_plan_persistent_state {
-  static constexpr unsigned current_schema_version = 2;
+  static constexpr unsigned current_schema_version = 3;
 
   unsigned    schema_version = current_schema_version;
   uint64_t    generation     = 0;

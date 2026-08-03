@@ -95,6 +95,55 @@ ntn_versioned_position_plan make_plan(unsigned count,
   return plan;
 }
 
+ntn_versioned_position_plan make_schema_v3_plan(unsigned visible_count,
+                                                unsigned assigned_count,
+                                                uint64_t schedule_version = 1,
+                                                int64_t activation_ms = 1920,
+                                                uint64_t catalog_version = 1)
+{
+  ntn_versioned_position_plan plan = make_plan(visible_count, schedule_version, activation_ms, catalog_version);
+  plan.schema_version              = 3;
+  const unsigned bounded_assigned_count = std::min(visible_count, assigned_count);
+  plan.assigned_l1_position_ids.reserve(bounded_assigned_count);
+  for (unsigned i = 0; i != bounded_assigned_count; ++i) {
+    plan.assigned_l1_position_ids.push_back(plan.visible_l1_positions[i].position_id);
+  }
+  plan.content_hash = compute_ntn_position_plan_content_hash(plan);
+  return plan;
+}
+
+nlohmann::json encode_management_plan_json(const ntn_versioned_position_plan& plan)
+{
+  nlohmann::json root;
+  root["schema_version"]    = plan.schema_version;
+  root["planning_run_id"]   = plan.planning_run_id;
+  root["catalog"]           = {{"id", plan.catalog_id}, {"sha256", plan.catalog_hash}};
+  root["identity_registry"] = {{"version", plan.identity_registry_version},
+                               {"sha256", plan.identity_registry_hash}};
+  root["access_profile"]    = {{"id", plan.access_profile_id}, {"sha256", plan.access_profile_hash}};
+  root["satellite_id"]             = plan.satellite_id;
+  root["catalog_version"]          = plan.catalog_version;
+  root["schedule_version"]         = plan.schedule_version;
+  root["content_hash"]             = plan.content_hash;
+  root["valid_from_unix_ms"]       = 640;
+  root["valid_until_unix_ms"]      = 64000;
+  root["activation_epoch_unix_ms"] =
+      std::chrono::duration_cast<std::chrono::milliseconds>(plan.activation_epoch.time_since_epoch()).count();
+  for (const auto& cell : plan.onboard_cells) {
+    root["onboard_cells"].push_back({{"nci", cell.nci.value()}, {"pci", cell.pci}});
+  }
+  for (const auto& position : plan.visible_l1_positions) {
+    root["visible_l1_positions"].push_back({{"position_id", position.position_id},
+                                            {"latitude_deg", position.latitude_deg},
+                                            {"longitude_deg", position.longitude_deg},
+                                            {"child_mask", position.child_mask}});
+  }
+  if (plan.schema_version >= 3) {
+    root["assigned_l1_position_ids"] = plan.assigned_l1_position_ids;
+  }
+  return root;
+}
+
 std::map<std::string, unsigned> make_owner_map(const ntn_activated_position_plan& plan)
 {
   std::map<std::string, unsigned> owners;
@@ -175,6 +224,23 @@ TEST(ntn_onboard_position_plan, empty_visible_inventory_produces_a_checked_expli
   EXPECT_FALSE(controller.pending_plan()->calendar_hash.empty());
 }
 
+TEST(ntn_onboard_position_plan, schema_v3_visible_but_unassigned_inventory_produces_explicit_deny_all_calendar)
+{
+  ntn_onboard_position_plan_controller controller(make_config());
+  const ntn_versioned_position_plan     plan = make_schema_v3_plan(257, 0);
+
+  const auto result = controller.submit(plan, at_ms(1280));
+
+  ASSERT_TRUE(result.accepted);
+  ASSERT_TRUE(controller.pending_plan().has_value());
+  EXPECT_EQ(controller.candidate_inventory().size(), 257U);
+  EXPECT_TRUE(controller.assigned_l1_position_ids().empty());
+  EXPECT_TRUE(controller.pending_plan()->cell_positions[0].assigned_l1_ids.empty());
+  EXPECT_TRUE(controller.pending_plan()->cell_positions[1].assigned_l1_ids.empty());
+  EXPECT_TRUE(controller.pending_plan()->access_calendar.empty());
+  EXPECT_TRUE(controller.pending_plan()->calendar_audit.accepted);
+}
+
 TEST(ntn_onboard_position_plan, management_center_json_parses_and_keeps_opaque_cell_identities)
 {
   const ntn_versioned_position_plan plan = make_plan(2);
@@ -210,6 +276,30 @@ TEST(ntn_onboard_position_plan, management_center_json_parses_and_keeps_opaque_c
 
   ntn_onboard_position_plan_controller controller(make_config());
   EXPECT_TRUE(controller.submit(parsed.value(), at_ms(1280)).accepted);
+}
+
+TEST(ntn_onboard_position_plan, schema_v3_json_parses_both_collections_and_requires_the_assignment_field)
+{
+  const ntn_versioned_position_plan plan = make_schema_v3_plan(300, 87);
+  const nlohmann::json              root = encode_management_plan_json(plan);
+
+  auto parsed = parse_ntn_position_plan_json(root.dump());
+  ASSERT_TRUE(parsed.has_value()) << parsed.error();
+  EXPECT_EQ(parsed->visible_l1_positions.size(), 300U);
+  EXPECT_EQ(parsed->assigned_l1_position_ids, plan.assigned_l1_position_ids);
+  EXPECT_EQ(compute_ntn_position_plan_content_hash(parsed.value()), plan.content_hash);
+
+  nlohmann::json missing_assignment = root;
+  missing_assignment.erase("assigned_l1_position_ids");
+  parsed = parse_ntn_position_plan_json(missing_assignment.dump());
+  ASSERT_FALSE(parsed.has_value());
+  EXPECT_NE(parsed.error().find("missing field 'root.assigned_l1_position_ids'"), std::string::npos);
+
+  nlohmann::json invalid_type               = root;
+  invalid_type["assigned_l1_position_ids"] = "G000001";
+  parsed                                    = parse_ntn_position_plan_json(invalid_type.dump());
+  ASSERT_FALSE(parsed.has_value());
+  EXPECT_NE(parsed.error().find("assigned_l1_position_ids must be an array"), std::string::npos);
 }
 
 TEST(ntn_onboard_position_plan, schema_v2_json_rejects_unknown_missing_and_invalid_child_fields)
@@ -325,7 +415,7 @@ TEST(ntn_onboard_position_plan, schema_v1_is_dry_run_only_and_schema_v2_binds_pl
   EXPECT_EQ(mismatch_result.reason, ntn_position_plan_reject_reason::planning_context_mismatch);
 
   ntn_versioned_position_plan unsupported = make_plan(2);
-  unsupported.schema_version              = 3;
+  unsupported.schema_version              = 4;
   unsupported.content_hash                = compute_ntn_position_plan_content_hash(unsupported);
   ntn_onboard_position_plan_controller unsupported_controller(make_config());
   const auto                           unsupported_result = unsupported_controller.submit(unsupported, at_ms(1280));
@@ -364,6 +454,59 @@ TEST(ntn_onboard_position_plan, web_exporter_and_cpp_share_the_same_canonical_ha
             "sha256:0e92970559dc95a87d3413e9300cf99ad257ea85e43e66898146a1af86d8c8b8");
 }
 
+TEST(ntn_onboard_position_plan, schema_v3_canonical_hash_is_order_independent_and_binds_assigned_subset)
+{
+  const ntn_versioned_position_plan golden = make_schema_v3_plan(2, 1);
+  EXPECT_EQ(golden.content_hash,
+            "sha256:005e172665221e8bad772cc5f372d3b03378e762fb3487c836389760ce6b0155");
+
+  ntn_versioned_position_plan plan = make_schema_v3_plan(5, 0);
+  plan.assigned_l1_position_ids    = {"G000004", "G000002"};
+  plan.content_hash                = compute_ntn_position_plan_content_hash(plan);
+
+  ntn_versioned_position_plan reordered = plan;
+  std::reverse(reordered.visible_l1_positions.begin(), reordered.visible_l1_positions.end());
+  std::reverse(reordered.assigned_l1_position_ids.begin(), reordered.assigned_l1_position_ids.end());
+  EXPECT_EQ(compute_ntn_position_plan_content_hash(reordered), plan.content_hash);
+
+  ntn_versioned_position_plan different_assignment = plan;
+  different_assignment.assigned_l1_position_ids     = {"G000004", "G000003"};
+  EXPECT_NE(compute_ntn_position_plan_content_hash(different_assignment), plan.content_hash);
+}
+
+TEST(ntn_onboard_position_plan, schema_v1_and_v2_implicitly_assign_the_complete_visible_inventory)
+{
+  for (unsigned schema_version : {1U, 2U}) {
+    ntn_versioned_position_plan plan = make_plan(6);
+    if (schema_version == 1) {
+      plan.schema_version = 1;
+      plan.planning_run_id.clear();
+      plan.catalog_id.clear();
+      plan.catalog_hash.clear();
+      plan.identity_registry_version.clear();
+      plan.identity_registry_hash.clear();
+      plan.access_profile_id.clear();
+      plan.access_profile_hash.clear();
+      for (ntn_l1_position& position : plan.visible_l1_positions) {
+        position.child_mask = 0;
+      }
+      plan.content_hash = compute_ntn_position_plan_content_hash(plan);
+    }
+
+    ntn_onboard_position_plan_controller controller(make_config());
+    ASSERT_TRUE(controller.submit(plan, at_ms(1280)).accepted) << "schema_version=" << schema_version;
+    ASSERT_TRUE(controller.pending_plan().has_value());
+    EXPECT_EQ(controller.assigned_l1_position_ids().size(), plan.visible_l1_positions.size());
+    EXPECT_EQ(make_owner_map(*controller.pending_plan()).size(), plan.visible_l1_positions.size());
+    for (const ntn_access_calendar_intent& intent : controller.pending_plan()->access_calendar) {
+      EXPECT_NE(std::find(controller.assigned_l1_position_ids().begin(),
+                          controller.assigned_l1_position_ids().end(),
+                          intent.position_id),
+                controller.assigned_l1_position_ids().end());
+    }
+  }
+}
+
 TEST(ntn_onboard_position_plan, partition_is_deterministic_balanced_and_assigns_every_l1_exactly_once)
 {
   ntn_onboard_position_plan_controller first(make_config());
@@ -384,6 +527,75 @@ TEST(ntn_onboard_position_plan, partition_is_deterministic_balanced_and_assigns_
   EXPECT_EQ(first_owners.size(), plan.visible_l1_positions.size());
   EXPECT_EQ(first.pending_plan()->cell_positions[0].assigned_l1_ids.size(), 64U);
   EXPECT_EQ(first.pending_plan()->cell_positions[1].assigned_l1_ids.size(), 63U);
+}
+
+TEST(ntn_onboard_position_plan, schema_v3_retains_complete_visibility_but_schedules_only_the_assigned_subset)
+{
+  for (unsigned visible_count : {257U, 300U}) {
+    ntn_versioned_position_plan plan = make_schema_v3_plan(visible_count, 0);
+    for (unsigned i = 0; i != 87; ++i) {
+      plan.assigned_l1_position_ids.push_back(plan.visible_l1_positions[i * 2].position_id);
+    }
+    plan.content_hash = compute_ntn_position_plan_content_hash(plan);
+
+    ntn_onboard_position_plan_controller controller(make_config());
+    const auto                           result = controller.submit(plan, at_ms(1280));
+
+    ASSERT_TRUE(result.accepted) << "visible_count=" << visible_count;
+    ASSERT_TRUE(controller.pending_plan().has_value());
+    EXPECT_EQ(controller.candidate_inventory().size(), visible_count);
+    EXPECT_EQ(controller.assigned_l1_position_ids(), plan.assigned_l1_position_ids);
+    EXPECT_EQ(controller.pending_plan()->source.visible_l1_positions.size(), visible_count);
+    EXPECT_EQ(controller.pending_plan()->source.assigned_l1_position_ids, plan.assigned_l1_position_ids);
+
+    const std::set<std::string> expected_assignments(plan.assigned_l1_position_ids.begin(),
+                                                      plan.assigned_l1_position_ids.end());
+    const auto                  owners = make_owner_map(*controller.pending_plan());
+    EXPECT_EQ(owners.size(), expected_assignments.size());
+    for (const auto& [position_id, cell_index] : owners) {
+      EXPECT_NE(expected_assignments.count(position_id), 0U);
+      ASSERT_LT(cell_index, 2U);
+      EXPECT_EQ(controller.pending_plan()->cell_positions[cell_index].identity.nci,
+                make_config().onboard_cells[cell_index].nci);
+      EXPECT_EQ(controller.pending_plan()->cell_positions[cell_index].identity.pci,
+                make_config().onboard_cells[cell_index].pci);
+    }
+    for (const ntn_access_calendar_intent& intent : controller.pending_plan()->access_calendar) {
+      EXPECT_NE(expected_assignments.count(intent.position_id), 0U);
+    }
+  }
+}
+
+TEST(ntn_onboard_position_plan, schema_v3_rejects_invalid_assigned_ids_with_specific_reasons)
+{
+  struct test_case {
+    const char*                     name;
+    ntn_position_plan_reject_reason expected_reason;
+    std::vector<std::string>        assigned_ids;
+  };
+  const std::vector<test_case> cases{{"duplicate",
+                                      ntn_position_plan_reject_reason::duplicate_assigned_l1_id,
+                                      {"G000001", "G000001"}},
+                                     {"invalid_format",
+                                      ntn_position_plan_reject_reason::invalid_l1_id,
+                                      {"G000001", "not-an-l1"}},
+                                     {"not_visible",
+                                      ntn_position_plan_reject_reason::assigned_l1_not_visible,
+                                      {"G000001", "G999999"}}};
+
+  for (const test_case& test : cases) {
+    ntn_versioned_position_plan plan = make_schema_v3_plan(4, 0);
+    plan.assigned_l1_position_ids    = test.assigned_ids;
+    plan.content_hash                = compute_ntn_position_plan_content_hash(plan);
+    ntn_onboard_position_plan_controller controller(make_config());
+
+    const auto result = controller.submit(plan, at_ms(1280));
+
+    EXPECT_FALSE(result.accepted) << test.name;
+    EXPECT_EQ(result.reason, test.expected_reason) << test.name;
+    EXPECT_EQ(controller.candidate_inventory().size(), 4U) << test.name;
+    EXPECT_EQ(controller.assigned_l1_position_ids(), test.assigned_ids) << test.name;
+  }
 }
 
 TEST(ntn_onboard_position_plan, small_update_preserves_existing_assignments_and_cell_identity)
@@ -444,6 +656,52 @@ TEST(ntn_onboard_position_plan, overflow_keeps_all_257_candidates_and_preserves_
   EXPECT_EQ(controller.active_plan()->source.schedule_version, 1U);
 }
 
+TEST(ntn_onboard_position_plan, schema_v3_overflow_uses_assigned_count_and_preserves_complete_visibility)
+{
+  ntn_onboard_position_plan_controller controller(make_config());
+  ASSERT_TRUE(controller.submit(make_plan(8, 1, 1280), at_ms(1280)).accepted);
+  ASSERT_TRUE(controller.active_plan().has_value());
+
+  const ntn_versioned_position_plan overflow = make_schema_v3_plan(300, 257, 2, 2560, 2);
+  const auto                        result   = controller.submit(overflow, at_ms(1920));
+
+  EXPECT_FALSE(result.accepted);
+  EXPECT_EQ(result.reason, ntn_position_plan_reject_reason::schedule_overflow);
+  EXPECT_EQ(controller.candidate_inventory().size(), 300U);
+  EXPECT_EQ(controller.assigned_l1_position_ids().size(), 257U);
+  ASSERT_TRUE(controller.active_plan().has_value());
+  EXPECT_EQ(controller.active_plan()->source.schedule_version, 1U);
+}
+
+TEST(ntn_onboard_position_plan, schema_v3_restart_validates_partition_against_assigned_subset_not_visibility)
+{
+  ntn_onboard_position_plan_config config = make_config();
+  config.require_external_apply           = true;
+  ntn_onboard_position_plan_controller controller(config);
+  const ntn_versioned_position_plan     plan = make_schema_v3_plan(300, 87, 1, 1280, 1);
+
+  ASSERT_TRUE(controller.submit(plan, at_ms(640)).accepted);
+  ASSERT_TRUE(controller.pending_plan().has_value());
+  const std::string calendar_hash = controller.pending_plan()->calendar_hash;
+  ASSERT_TRUE(controller.mark_deployment_preparing(1, calendar_hash));
+  ASSERT_TRUE(controller.mark_deployment_applied(1, calendar_hash));
+  ASSERT_TRUE(controller.advance_time(at_ms(1280)));
+  ASSERT_TRUE(controller.active_plan().has_value());
+  EXPECT_EQ(make_owner_map(*controller.active_plan()).size(), 87U);
+
+  const ntn_onboard_position_plan_persistent_state state = controller.make_persistent_state(5);
+  ASSERT_TRUE(state.active.has_value());
+  EXPECT_EQ(state.active->source.visible_l1_positions.size(), 300U);
+  EXPECT_EQ(state.active->source.assigned_l1_position_ids.size(), 87U);
+
+  ntn_onboard_position_plan_controller restarted(config);
+  auto                                 restored = restarted.restore_persistent_state(state, at_ms(1920));
+  ASSERT_TRUE(restored.has_value()) << restored.error();
+  ASSERT_TRUE(restarted.recovery_plan().has_value());
+  EXPECT_EQ(restarted.recovery_plan()->source.visible_l1_positions.size(), 300U);
+  EXPECT_EQ(make_owner_map(*restarted.recovery_plan()).size(), 87U);
+}
+
 TEST(ntn_onboard_position_plan, restart_preserves_all_257_received_candidates_without_promoting_them)
 {
   ntn_onboard_position_plan_config config = make_config();
@@ -480,7 +738,7 @@ TEST(ntn_onboard_position_plan, restart_preserves_all_257_received_candidates_wi
   EXPECT_EQ(restarted.last_received_activation_epoch(), overflow.activation_epoch);
 }
 
-TEST(ntn_onboard_position_plan, schema_v2_null_received_plan_does_not_invent_an_observation_from_active_state)
+TEST(ntn_onboard_position_plan, schema_v3_null_received_plan_does_not_invent_an_observation_from_active_state)
 {
   ntn_onboard_position_plan_config config = make_config();
   config.require_external_apply           = true;
@@ -493,7 +751,7 @@ TEST(ntn_onboard_position_plan, schema_v2_null_received_plan_does_not_invent_an_
   ASSERT_TRUE(controller.advance_time(at_ms(1280)));
 
   ntn_onboard_position_plan_persistent_state state = controller.make_persistent_state(7);
-  ASSERT_EQ(state.schema_version, 2U);
+  ASSERT_EQ(state.schema_version, 3U);
   ASSERT_TRUE(state.active.has_value());
   state.received_plan.reset();
 

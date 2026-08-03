@@ -1473,14 +1473,14 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_versioned_onboard_position_plan
   auto& plan                    = command_handler.ntn.runtime.onboard_position_plan;
   plan.enabled                  = true;
   plan.du_execution_enabled     = true;
-  plan.schema_version           = 2;
+  plan.schema_version           = 3;
   plan.planning_run_id          = "planning-run-2026-07-15";
   plan.access_profile_id        = "ntn-access-16a-64d-v1";
   plan.access_profile_hash      = "sha256:profile";
   plan.identity_authority       = "onboard_position_plan";
   plan.state_file_configured                         = true;
   plan.state_file_required                           = true;
-  plan.state_schema_version                          = 2;
+  plan.state_schema_version                          = 3;
   plan.state_generation                              = 17;
   plan.state_hash                                    = "sha256:state";
   plan.state_store_status                            = "stored";
@@ -1513,6 +1513,7 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_versioned_onboard_position_plan
   plan.received_content_hash     = "sha256:rejected";
   plan.received_activation_epoch_unix_ms = 960000;
   plan.candidate_l1_positions   = 256;
+  plan.assigned_l1_positions    = 87;
   plan.audited_schedule_version = 21;
   plan.calendar_intents         = 2560;
   plan.ssb_intents              = 2048;
@@ -1549,11 +1550,11 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_versioned_onboard_position_plan
   EXPECT_NE(output.find("NTN onboard position plan: enabled=yes du_execution=yes stage=pending deployment=ready "
                         "satellite_id=P01-S01 last_rejection=schedule_overflow rejected_schedule_version=22"),
             std::string::npos);
-  EXPECT_NE(output.find("NTN onboard planning context: schema_version=2 planning_run_id=planning-run-2026-07-15 "
+  EXPECT_NE(output.find("NTN onboard planning context: schema_version=3 planning_run_id=planning-run-2026-07-15 "
                         "access_profile_id=ntn-access-16a-64d-v1 access_profile_hash=sha256:profile "
                         "identity_authority=onboard_position_plan"),
             std::string::npos);
-  EXPECT_NE(output.find("NTN onboard state store: file_configured=yes file_required=yes schema_version=2 "
+  EXPECT_NE(output.find("NTN onboard state store: file_configured=yes file_required=yes schema_version=3 "
                         "generation=17 state_hash=sha256:state status=stored error=none write_blocked=no "
                         "last_save_unix_ms=639900"),
             std::string::npos);
@@ -1562,7 +1563,8 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_versioned_onboard_position_plan
                         "evidence=persisted_state_is_not_du_or_rf_evidence"),
             std::string::npos);
   EXPECT_NE(output.find("NTN onboard position plan received: present=yes catalog_version=12 schedule_version=22 "
-                        "content_hash=sha256:rejected candidate_l1=256 activation_epoch_unix_ms=960000"),
+                        "content_hash=sha256:rejected visible_l1=256 assigned_l1=87 "
+                        "activation_epoch_unix_ms=960000"),
             std::string::npos);
   EXPECT_NE(output.find("NTN onboard position plan active: catalog_version=10 schedule_version=20 "
                         "content_hash=sha256:active calendar_hash=sha256:active-calendar "

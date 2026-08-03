@@ -132,7 +132,7 @@ void bind_onboard_planning_context(ntn_onboard_position_plan_source_config& sour
 std::filesystem::path write_onboard_position_plan_for_runtime_test(const ntn_versioned_position_plan& plan)
 {
   nlohmann::json root;
-  if (plan.schema_version == 2) {
+  if (plan.schema_version >= 2) {
     root["schema_version"]    = plan.schema_version;
     root["planning_run_id"]   = plan.planning_run_id;
     root["catalog"]           = {{"id", plan.catalog_id}, {"sha256", plan.catalog_hash}};
@@ -159,10 +159,13 @@ std::filesystem::path write_onboard_position_plan_for_runtime_test(const ntn_ver
     nlohmann::json encoded_position = {{"position_id", position.position_id},
                                        {"latitude_deg", position.latitude_deg},
                                        {"longitude_deg", position.longitude_deg}};
-    if (plan.schema_version == 2) {
+    if (plan.schema_version >= 2) {
       encoded_position["child_mask"] = position.child_mask;
     }
     root["visible_l1_positions"].push_back(std::move(encoded_position));
+  }
+  if (plan.schema_version >= 3) {
+    root["assigned_l1_position_ids"] = plan.assigned_l1_position_ids;
   }
 
   const auto unique_suffix = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -1874,9 +1877,10 @@ TEST(cu_cp_ntn_mobility_test, restart_preserves_rejected_257_position_inventory_
     EXPECT_EQ(status.last_rejection, "schedule_overflow");
     EXPECT_EQ(status.received_schedule_version, plan.schedule_version);
     EXPECT_EQ(status.candidate_l1_positions, 257U);
+    EXPECT_EQ(status.assigned_l1_positions, 257U);
     EXPECT_EQ(status.active_schedule_version, 0U);
     EXPECT_EQ(status.pending_schedule_version, 0U);
-    EXPECT_EQ(status.state_schema_version, 2U);
+    EXPECT_EQ(status.state_schema_version, 3U);
     EXPECT_EQ(status.state_store_status, "stored");
     EXPECT_FALSE(status.state_write_blocked);
   };
@@ -1893,6 +1897,7 @@ TEST(cu_cp_ntn_mobility_test, restart_preserves_rejected_257_position_inventory_
     ASSERT_TRUE(stored->has_value());
     ASSERT_TRUE((*stored)->received_plan.has_value());
     EXPECT_EQ((*stored)->received_plan->candidate_inventory.size(), 257U);
+    EXPECT_EQ((*stored)->received_plan->assigned_l1_position_ids.size(), 257U);
     EXPECT_FALSE((*stored)->active.has_value());
     EXPECT_FALSE((*stored)->pending.has_value());
   }
@@ -1902,6 +1907,74 @@ TEST(cu_cp_ntn_mobility_test, restart_preserves_rejected_257_position_inventory_
   cu_cp_test_environment restarted(std::move(restarted_params));
   restarted.run_ng_setup();
   verify_inventory(restarted);
+}
+
+TEST(cu_cp_ntn_mobility_test, schema_v3_observes_complete_visibility_and_schedules_only_assigned_positions)
+{
+  const nr_cell_identity first_nci  = make_default_env_nci(0);
+  const nr_cell_identity second_nci = make_default_env_nci(1);
+  constexpr pci_t        shared_pci = 101;
+  const int64_t          now_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+          .count();
+  const int64_t activation_ms = ((now_ms + 10000 + 639) / 640) * 640;
+
+  ntn_versioned_position_plan plan;
+  plan.satellite_id         = "P01-S01";
+  plan.catalog_version      = 30;
+  plan.schedule_version     = 40;
+  plan.valid_from           = std::chrono::system_clock::time_point{std::chrono::milliseconds{now_ms - 640}};
+  plan.activation_epoch     = std::chrono::system_clock::time_point{std::chrono::milliseconds{activation_ms}};
+  plan.valid_until          = std::chrono::system_clock::time_point{std::chrono::milliseconds{activation_ms + 30000}};
+  plan.onboard_cells[0]     = {first_nci, shared_pci};
+  plan.onboard_cells[1]     = {second_nci, shared_pci};
+  plan.visible_l1_positions.reserve(300);
+  for (unsigned i = 0; i != 300; ++i) {
+    plan.visible_l1_positions.push_back(
+        {fmt::format("G{:06}", i + 1), 10.0 + static_cast<double>(i / 32) * 0.01, 20.0 + (i % 32) * 0.01});
+  }
+  bind_onboard_planning_context(plan);
+  plan.schema_version = 3;
+  for (unsigned i = 0; i != 87; ++i) {
+    plan.assigned_l1_position_ids.push_back(plan.visible_l1_positions[i * 3].position_id);
+  }
+  plan.content_hash = compute_ntn_position_plan_content_hash(plan);
+  const std::filesystem::path plan_path = write_onboard_position_plan_for_runtime_test(plan);
+  temporary_plan_file_guard   plan_file_guard(plan_path);
+
+  ntn_onboard_position_plan_source_config source;
+  source.enabled              = true;
+  source.du_execution_enabled = false;
+  source.satellite_id         = plan.satellite_id;
+  source.plan_json_file       = plan_path.string();
+  source.cell_ncis            = {first_nci, second_nci};
+  source.cell_pcis            = {shared_pci, shared_pci};
+  bind_onboard_planning_context(source);
+
+  cu_cp_test_env_params params;
+  params.ntn_onboard_position_plan = source;
+  cu_cp_test_environment env(std::move(params));
+  env.run_ng_setup();
+  ASSERT_TRUE(wait_for_test_condition([&env]() {
+    const auto status = env.get_cu_cp()
+                            .get_command_handler()
+                            .get_ntn_command_handler()
+                            .get_current_ntn_runtime_status()
+                            .onboard_position_plan;
+    return status.candidate_l1_positions == 300U && status.assigned_l1_positions == 87U;
+  }));
+
+  const auto status = env.get_cu_cp()
+                          .get_command_handler()
+                          .get_ntn_command_handler()
+                          .get_current_ntn_runtime_status()
+                          .onboard_position_plan;
+  EXPECT_EQ(status.schema_version, 3U);
+  EXPECT_EQ(status.pending_schedule_version, plan.schedule_version);
+  EXPECT_EQ(status.cells[0].pending_l1_positions + status.cells[1].pending_l1_positions, 87U);
+  EXPECT_EQ(status.ssb_intents, 87U * 8U);
+  EXPECT_EQ(status.prach_ro_intents, 87U);
+  EXPECT_EQ(status.prach_ul_beam_intents, 87U);
 }
 
 TEST(cu_cp_ntn_mobility_test, restart_queries_du_before_reexposing_persisted_active_calendar)
@@ -2025,7 +2098,7 @@ TEST(cu_cp_ntn_mobility_test, restart_queries_du_before_reexposing_persisted_act
   EXPECT_EQ(status.execution_evidence, "ssb_prach_software_gate_applied_no_position_or_rf_evidence");
   EXPECT_TRUE(status.state_file_configured);
   EXPECT_TRUE(status.state_file_required);
-  EXPECT_EQ(status.state_schema_version, 2U);
+  EXPECT_EQ(status.state_schema_version, 3U);
   EXPECT_GT(status.state_generation, 9U);
   EXPECT_EQ(status.state_hash.rfind("sha256:", 0), 0U);
   EXPECT_EQ(status.state_store_status, "stored");

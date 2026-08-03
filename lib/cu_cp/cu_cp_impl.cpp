@@ -8244,6 +8244,7 @@ cu_cp_ntn_runtime_status cu_cp_impl::get_current_ntn_runtime_status() const
                 .count();
       }
       position_status.candidate_l1_positions = ntn_onboard_position_plan_ctrl->candidate_inventory().size();
+      position_status.assigned_l1_positions = ntn_onboard_position_plan_ctrl->assigned_l1_position_ids().size();
       for (unsigned i = 0; i != position_status.cells.size(); ++i) {
         position_status.cells[i].nci      = controller_cfg.onboard_cells[i].nci;
         position_status.cells[i].pci      = controller_cfg.onboard_cells[i].pci;

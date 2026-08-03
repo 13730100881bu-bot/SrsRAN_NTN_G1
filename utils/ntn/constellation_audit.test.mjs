@@ -29,8 +29,8 @@ import {
 import {
   ACCESS_PROFILE_V1,
   ACCESS_PROFILE_V1_HASH,
-  validatePlanV2
-} from './versioned_position_plan_v2.mjs';
+  validatePlanV3
+} from './versioned_position_plan_v3.mjs';
 
 async function fixture(t, outputName = 'outputs', {
   satelliteShardCount = 1,
@@ -508,7 +508,7 @@ test('export-plan writes a registry-bound sticky snapshot without changing the a
   assert.equal(exported.visibleL1Count, 1);
   assert.equal(exported.assignedL1Count, 1);
   assert.equal(exported.unassignedL1Count, 0);
-  assert.equal(exported.validator.validator, 'versioned_position_plan_v2');
+  assert.equal(exported.validator.validator, 'versioned_position_plan_v3');
 
   const plan = JSON.parse(await readFile(
     join(exported.runDirectory, ...exported.plan.path.split('/')), 'utf8'
@@ -516,11 +516,12 @@ test('export-plan writes a registry-bound sticky snapshot without changing the a
   const sidecar = JSON.parse(await readFile(
     join(exported.runDirectory, ...exported.assignmentSidecar.path.split('/')), 'utf8'
   ));
-  assert.equal(validatePlanV2(plan).contentHash, exported.validator.content_hash);
+  assert.equal(validatePlanV3(plan).contentHash, exported.validator.content_hash);
   assert.equal(plan.content_hash, exported.plan.content_hash);
   assert.equal(plan.satellite_id, 'P01-S01');
   assert.equal(plan.schedule_version, exported.processedPartCount);
   assert.deepEqual(plan.visible_l1_positions.map(({position_id: id}) => id), ['G000001']);
+  assert.deepEqual(plan.assigned_l1_position_ids, ['G000001']);
   assert.deepEqual(plan.onboard_cells.map(({nci, pci}) => ({nci, pci})), [
     {nci: 1, pci: 0},
     {nci: 2, pci: 1}

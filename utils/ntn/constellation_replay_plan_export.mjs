@@ -304,7 +304,7 @@ function validateActiveCapacity(assignments, satelliteId, scenario) {
 
 /**
  * Selects one relative instant from replayable interval evidence and exports a
- * schema-v2 dry-run candidate plan plus its assignment sidecar.
+ * schema-v3 dry-run candidate plan plus its compatibility assignment sidecar.
  *
  * timeUs is relative to scenario.orbit_epoch_unix_ms. Intervals are interpreted
  * strictly as [start_time_us,end_time_us); the millisecond plan time is the

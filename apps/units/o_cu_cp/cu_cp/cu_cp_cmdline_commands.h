@@ -801,12 +801,13 @@ public:
                position_plan.catalog_version_high_water,
                position_plan.schedule_version_high_water);
     fmt::print("NTN onboard position plan received: present={} catalog_version={} schedule_version={} content_hash={} "
-               "candidate_l1={} activation_epoch_unix_ms={}\n",
+               "visible_l1={} assigned_l1={} activation_epoch_unix_ms={}\n",
                position_plan.received_plan_present ? "yes" : "no",
                position_plan.received_catalog_version,
                position_plan.received_schedule_version,
                position_plan.received_content_hash,
                position_plan.candidate_l1_positions,
+               position_plan.assigned_l1_positions,
                position_plan.received_activation_epoch_unix_ms);
     fmt::print("NTN onboard position plan active: catalog_version={} schedule_version={} content_hash={} "
                "calendar_hash={} activation_epoch_unix_ms={}\n",

@@ -1,6 +1,10 @@
 import {createHash} from 'node:crypto';
 
-import {generatePlanV2, validatePlanV2} from './versioned_position_plan_v2.mjs';
+import {
+  ACCESS_PROFILE_V1,
+  generatePlanV3,
+  validatePlanV3
+} from './versioned_position_plan_v3.mjs';
 
 export const DRY_RUN_EXPORT_SCHEMA_VERSION = 1;
 export const ASSIGNMENT_SIDECAR_SCHEMA_VERSION = 1;
@@ -210,6 +214,13 @@ function normalizeAssignments(assignments, satelliteId, visiblePositionIds, cell
     });
   }
   targetAssignments.sort((left, right) => compareText(left.position_id, right.position_id));
+  if (targetAssignments.length > ACCESS_PROFILE_V1.max_l1_positions_per_satellite) {
+    fail(
+      'schedule_overflow',
+      `satellite '${satelliteId}' has ${targetAssignments.length} assigned positions; ` +
+      `the access profile allows ${ACCESS_PROFILE_V1.max_l1_positions_per_satellite}`
+    );
+  }
   return targetAssignments;
 }
 
@@ -232,9 +243,10 @@ function normalizePlanningContext(planningContext, planningTimeUnixMs) {
 }
 
 /**
- * Exports one satellite's complete visible L1 inventory as a schema-v2 dry-run plan.
+ * Exports one satellite's complete visible L1 inventory and assigned subset as
+ * one schema-v3 dry-run plan.
  *
- * Capacity assignment is deliberately kept in a separate sidecar. It never
+ * The compatibility sidecar retains the planning-time bank selection. It never
  * trims visible_l1_positions and it never changes the two registry-owned cells.
  */
 export function exportDryRunSatellitePlan({
@@ -256,8 +268,8 @@ export function exportDryRunSatellitePlan({
   const assigned = normalizeAssignments(assignments, satelliteId, visiblePositionIds, cells);
   const assignedPositionIds = new Set(assigned.map((assignment) => assignment.position_id));
 
-  const plan = generatePlanV2({
-    schema_version: 2,
+  const plan = generatePlanV3({
+    schema_version: 3,
     planning_run_id: context.planningRunId,
     catalog: context.catalog,
     identity_registry: context.identityRegistry,
@@ -269,9 +281,10 @@ export function exportDryRunSatellitePlan({
     valid_until_unix_ms: context.validUntilUnixMs,
     activation_epoch_unix_ms: context.activationEpochUnixMs,
     onboard_cells: cells.map(({nci, pci}) => ({nci, pci})),
-    visible_l1_positions: positions
+    visible_l1_positions: positions,
+    assigned_l1_position_ids: assigned.map((assignment) => assignment.position_id)
   });
-  const validation = validatePlanV2(plan);
+  const validation = validatePlanV3(plan);
 
   const sidecarWithoutHash = {
     schema_version: ASSIGNMENT_SIDECAR_SCHEMA_VERSION,
@@ -299,7 +312,7 @@ export function exportDryRunSatellitePlan({
     runtime_activation_claimed: false,
     plan,
     plan_validation: {
-      validator: 'versioned_position_plan_v2',
+      validator: 'versioned_position_plan_v3',
       content_hash: validation.contentHash
     },
     assignment_sidecar: assignmentSidecar

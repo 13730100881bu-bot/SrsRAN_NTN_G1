@@ -53,7 +53,7 @@ struct ntn_onboard_cell_identity {
 
 /// Versioned management-center input for one satellite.
 struct ntn_versioned_position_plan {
-  /// Missing in legacy JSON and interpreted as schema v1. Execution requires schema v2.
+  /// Missing in legacy JSON and interpreted as schema v1. Execution requires schema v2 or newer.
   unsigned                                 schema_version = 1;
   std::string                              planning_run_id;
   std::string                              catalog_id;
@@ -70,7 +70,10 @@ struct ntn_versioned_position_plan {
   std::chrono::system_clock::time_point valid_until{};
   std::chrono::system_clock::time_point activation_epoch{};
   std::array<ntn_onboard_cell_identity, 2> onboard_cells{};
+  /// Complete management-center visibility inventory. It is retained even when only a subset can be scheduled.
   std::vector<ntn_l1_position>             visible_l1_positions;
+  /// Schema-v3 subset that this satellite shall actually serve. Schema v1/v2 implicitly assign every visible L1.
+  std::vector<std::string>                 assigned_l1_position_ids;
 };
 
 /// L1 assignment owned by one stable onboard cell identity.
@@ -137,6 +140,8 @@ enum class ntn_position_plan_reject_reason {
   invalid_activation_epoch,
   invalid_l1_id,
   duplicate_l1_id,
+  duplicate_assigned_l1_id,
+  assigned_l1_not_visible,
   invalid_child_mask,
   invalid_l1_position,
   identity_mismatch,
@@ -215,7 +220,7 @@ struct ntn_onboard_position_plan_config {
   /// When enabled, a pending plan may become active only after matching DU/MAC applied feedback.
   bool                                      require_external_apply = false;
   std::string                               satellite_id;
-  /// Expected management-center planning context for schema-v2 plans. Values are compared exactly, hashes
+  /// Expected management-center planning context for schema-v2/v3 plans. Values are compared exactly, hashes
   /// case-insensitively after adding the optional sha256: prefix.
   std::string                               expected_catalog_id;
   std::string                               expected_catalog_hash;
@@ -403,6 +408,7 @@ public:
   const std::string&                      last_received_content_hash() const { return last_received_hash; }
   std::chrono::system_clock::time_point   last_received_activation_epoch() const { return last_received_activation; }
   const std::vector<ntn_l1_position>&     candidate_inventory() const { return last_candidate_inventory; }
+  const std::vector<std::string>&          assigned_l1_position_ids() const { return last_assigned_l1_position_ids; }
   const std::optional<ntn_activated_position_plan>& active_plan() const { return active; }
   const std::optional<ntn_activated_position_plan>& pending_plan() const { return pending; }
   const std::optional<ntn_activated_position_plan>& recovery_plan() const { return recovery_candidate; }
@@ -445,6 +451,7 @@ private:
   uint64_t                                   highest_catalog_version  = 0;
   uint64_t                                   highest_schedule_version = 0;
   std::vector<ntn_l1_position>               last_candidate_inventory;
+  std::vector<std::string>                    last_assigned_l1_position_ids;
   std::optional<ntn_activated_position_plan> active;
   std::optional<ntn_activated_position_plan> pending;
   std::optional<ntn_activated_position_plan> recovery_candidate;

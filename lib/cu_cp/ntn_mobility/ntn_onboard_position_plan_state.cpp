@@ -234,10 +234,14 @@ json encode_source_plan(const ntn_versioned_position_plan& plan)
   for (const ntn_l1_position& position : plan.visible_l1_positions) {
     root["visible_l1_positions"].push_back(encode_l1_position(position));
   }
+  if (plan.schema_version >= 3) {
+    root["assigned_l1_position_ids"] = plan.assigned_l1_position_ids;
+  }
   return root;
 }
 
-json encode_received_observation(const ntn_onboard_position_plan_received_observation& observation)
+json encode_received_observation(const ntn_onboard_position_plan_received_observation& observation,
+                                 unsigned                                                state_schema_version)
 {
   json result = {{"catalog_version", observation.catalog_version},
                  {"schedule_version", observation.schedule_version},
@@ -246,6 +250,9 @@ json encode_received_observation(const ntn_onboard_position_plan_received_observ
   result["candidate_inventory"] = json::array();
   for (const ntn_l1_position& position : observation.candidate_inventory) {
     result["candidate_inventory"].push_back(encode_l1_position(position));
+  }
+  if (state_schema_version >= 3) {
+    result["assigned_l1_position_ids"] = observation.assigned_l1_position_ids;
   }
   return result;
 }
@@ -308,8 +315,9 @@ json encode_state_payload(const ntn_onboard_position_plan_persistent_state& stat
   payload["active"]             = state.active.has_value() ? encode_snapshot(*state.active) : json(nullptr);
   payload["pending"]            = state.pending.has_value() ? encode_snapshot(*state.pending) : json(nullptr);
   if (state.schema_version >= 2) {
-    payload["received_plan"] =
-        state.received_plan.has_value() ? encode_received_observation(*state.received_plan) : json(nullptr);
+    payload["received_plan"] = state.received_plan.has_value()
+                                   ? encode_received_observation(*state.received_plan, state.schema_version)
+                                   : json(nullptr);
   }
   payload["outstanding_clears"] = json::array();
   for (const ntn_onboard_position_plan_clear_obligation& obligation : state.outstanding_clears) {
@@ -437,16 +445,25 @@ expected<ntn_l1_position, std::string> decode_l1_position(const json& value, con
 }
 
 expected<ntn_onboard_position_plan_received_observation, std::string>
-decode_received_observation(const json& value)
+decode_received_observation(const json& value, unsigned state_schema_version)
 {
-  if (auto error = validate_exact_object_keys(value,
-                                              "received_plan",
-                                              {"catalog_version",
-                                               "schedule_version",
-                                               "content_hash",
-                                               "activation_epoch_unix_ms",
-                                               "candidate_inventory"});
-      error.has_value()) {
+  const auto error = state_schema_version >= 3
+                         ? validate_exact_object_keys(value,
+                                                      "received_plan",
+                                                      {"catalog_version",
+                                                       "schedule_version",
+                                                       "content_hash",
+                                                       "activation_epoch_unix_ms",
+                                                       "candidate_inventory",
+                                                       "assigned_l1_position_ids"})
+                         : validate_exact_object_keys(value,
+                                                      "received_plan",
+                                                      {"catalog_version",
+                                                       "schedule_version",
+                                                       "content_hash",
+                                                       "activation_epoch_unix_ms",
+                                                       "candidate_inventory"});
+  if (error.has_value()) {
     return make_unexpected(std::move(*error));
   }
   auto catalog_version  = parse_uint64(value.at("catalog_version"), "received_plan.catalog_version");
@@ -487,6 +504,28 @@ decode_received_observation(const json& value)
       return make_unexpected(position.error());
     }
     result.candidate_inventory.push_back(std::move(position.value()));
+  }
+  if (state_schema_version >= 3) {
+    const json& assigned_ids = value.at("assigned_l1_position_ids");
+    if (!assigned_ids.is_array()) {
+      return make_unexpected(std::string{"received_plan.assigned_l1_position_ids must be an array"});
+    }
+    if (assigned_ids.size() > max_ntn_onboard_position_plan_observed_positions) {
+      return make_unexpected(std::string{"received_plan.assigned_l1_position_ids is too large"});
+    }
+    result.assigned_l1_position_ids.reserve(assigned_ids.size());
+    for (size_t i = 0; i != assigned_ids.size(); ++i) {
+      auto position_id = parse_string(assigned_ids[i], fmt::format("received_plan.assigned_l1_position_ids[{}]", i));
+      if (!position_id.has_value()) {
+        return make_unexpected(position_id.error());
+      }
+      result.assigned_l1_position_ids.push_back(std::move(position_id.value()));
+    }
+  } else {
+    result.assigned_l1_position_ids.reserve(result.candidate_inventory.size());
+    for (const ntn_l1_position& position : result.candidate_inventory) {
+      result.assigned_l1_position_ids.push_back(position.position_id);
+    }
   }
   return result;
 }
@@ -568,7 +607,8 @@ expected<ntn_onboard_position_plan_persistent_state, std::string> decode_state(c
   if (schema.value() > std::numeric_limits<unsigned>::max()) {
     return make_unexpected(std::string{"state_schema_version exceeds unsigned range"});
   }
-  if (schema.value() != 1 && schema.value() != ntn_onboard_position_plan_persistent_state::current_schema_version) {
+  if (schema.value() != 1 && schema.value() != 2 &&
+      schema.value() != ntn_onboard_position_plan_persistent_state::current_schema_version) {
     return make_unexpected(fmt::format("unsupported_state_schema_version_{}", schema.value()));
   }
   const auto exact_key_error =
@@ -691,7 +731,7 @@ expected<ntn_onboard_position_plan_persistent_state, std::string> decode_state(c
     result.pending = std::move(pending.value());
   }
   if (result.schema_version >= 2 && !root.at("received_plan").is_null()) {
-    auto received_plan = decode_received_observation(root.at("received_plan"));
+    auto received_plan = decode_received_observation(root.at("received_plan"), result.schema_version);
     if (!received_plan.has_value()) {
       return make_unexpected(received_plan.error());
     }
@@ -794,7 +834,7 @@ std::optional<std::string> validate_snapshot(const ntn_onboard_position_plan_sta
                                              const char*                                       context)
 {
   const ntn_versioned_position_plan& plan = snapshot.source;
-  if (plan.schema_version != 2) {
+  if (plan.schema_version != 2 && plan.schema_version != 3) {
     return fmt::format("{}_source_schema_unsupported", context);
   }
   if (plan.satellite_id != state.satellite_id || !context_matches_plan(state.planning_context, plan) ||
@@ -821,12 +861,26 @@ std::optional<std::string> validate_snapshot(const ntn_onboard_position_plan_sta
       return fmt::format("{}_source_inventory_invalid", context);
     }
   }
-  return validate_partition(snapshot.cell_positions, state.onboard_cells, context, &inventory);
+
+  std::set<std::string> assigned_ids;
+  if (plan.schema_version >= 3) {
+    for (const std::string& position_id : plan.assigned_l1_position_ids) {
+      if (!is_valid_l1_id(position_id) || !assigned_ids.insert(position_id).second) {
+        return fmt::format("{}_source_assignment_invalid", context);
+      }
+      if (inventory.count(position_id) == 0) {
+        return fmt::format("{}_source_assignment_not_visible", context);
+      }
+    }
+  } else {
+    assigned_ids = inventory;
+  }
+  return validate_partition(snapshot.cell_positions, state.onboard_cells, context, &assigned_ids);
 }
 
 std::optional<std::string> validate_state(const ntn_onboard_position_plan_persistent_state& state)
 {
-  if (state.schema_version != 1 &&
+  if (state.schema_version != 1 && state.schema_version != 2 &&
       state.schema_version != ntn_onboard_position_plan_persistent_state::current_schema_version) {
     return fmt::format("unsupported_state_schema_version_{}", state.schema_version);
   }
@@ -874,6 +928,14 @@ std::optional<std::string> validate_state(const ntn_onboard_position_plan_persis
       if (position.position_id.size() > max_ntn_onboard_position_plan_state_file_size ||
           !std::isfinite(position.latitude_deg) || !std::isfinite(position.longitude_deg)) {
         return std::string{"invalid_received_plan_candidate_inventory"};
+      }
+    }
+    if (received.assigned_l1_position_ids.size() > max_ntn_onboard_position_plan_observed_positions) {
+      return std::string{"received_plan_assignment_too_large"};
+    }
+    for (const std::string& position_id : received.assigned_l1_position_ids) {
+      if (position_id.size() > max_ntn_onboard_position_plan_state_file_size) {
+        return std::string{"invalid_received_plan_assignment"};
       }
     }
   }

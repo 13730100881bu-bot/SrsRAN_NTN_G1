@@ -28,8 +28,8 @@ import {
 import {
   ACCESS_PROFILE_V1,
   ACCESS_PROFILE_V1_HASH,
-  validatePlanV2
-} from './versioned_position_plan_v2.mjs';
+  validatePlanV3
+} from './versioned_position_plan_v3.mjs';
 
 const INPUT_HASH = `sha256:${'1'.repeat(64)}`;
 const SOURCE_HASH = `sha256:${'2'.repeat(64)}`;
@@ -608,7 +608,7 @@ for (const count of [0, 1, 128, 256, 257]) {
   });
 }
 
-test('sticky audit start feeds the strict schema-v2 replay plan exporter', async () => {
+test('sticky audit start feeds the strict schema-v3 replay plan exporter', async () => {
   const runDirectory = await mkdtemp(join(tmpdir(), 'ntn-stream-export-'));
   const positionIds = ['G000001'];
   const journals = await writeLedger(runDirectory, steadyRecords(positionIds));
@@ -654,7 +654,7 @@ test('sticky audit start feeds the strict schema-v2 replay plan exporter', async
   assert.equal(result.stickyStart.assignments[0].satelliteId, 'P01-S01');
   assert.equal(exported.assignment_sidecar.assigned_l1_positions.length, 1);
   assert.equal(exported.assignment_sidecar.assigned_l1_positions[0].nci, 1);
-  assert.equal(validatePlanV2(exported.plan).contentHash, exported.plan.content_hash);
+  assert.equal(validatePlanV3(exported.plan).contentHash, exported.plan.content_hash);
   assert.equal(Object.hasOwn(result.checkpoint, 'epochs'), false);
   assert.equal(Object.hasOwn(result.checkpoint, 'chunks'), false);
   assert.equal(Object.hasOwn(result.checkpoint.replay_checkpoint, 'closedIntervals'), false);

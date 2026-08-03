@@ -5,7 +5,7 @@ import {
   ConstellationPlanExportError,
   exportDryRunSatellitePlan
 } from './constellation_plan_export.mjs';
-import {ACCESS_PROFILE_V1, ACCESS_PROFILE_V1_HASH, validatePlanV2} from './versioned_position_plan_v2.mjs';
+import {ACCESS_PROFILE_V1, ACCESS_PROFILE_V1_HASH, validatePlanV3} from './versioned_position_plan_v3.mjs';
 
 const HASH_A = `sha256:${'a'.repeat(64)}`;
 const HASH_B = `sha256:${'b'.repeat(64)}`;
@@ -65,7 +65,7 @@ function exportPlan(overrides = {}) {
   });
 }
 
-test('P01-S01 export is an explicitly non-runtime schema-v2 candidate plan', () => {
+test('P01-S01 export is an explicitly non-runtime schema-v3 candidate plan', () => {
   const exported = exportPlan();
 
   assert.equal(exported.mode, 'dry_run');
@@ -74,19 +74,34 @@ test('P01-S01 export is an explicitly non-runtime schema-v2 candidate plan', () 
   assert.equal(exported.assignment_sidecar.runtime_activation_claimed, false);
   assert.equal(exported.plan.satellite_id, 'P01-S01');
   assert.deepEqual(exported.plan.visible_l1_positions.map((entry) => entry.position_id), ['G000001', 'G000002']);
-  assert.equal(validatePlanV2(exported.plan).contentHash, exported.plan.content_hash);
+  assert.deepEqual(exported.plan.assigned_l1_position_ids, ['G000001', 'G000002']);
+  assert.equal(validatePlanV3(exported.plan).contentHash, exported.plan.content_hash);
   assert.equal(exported.plan_validation.content_hash, exported.plan.content_hash);
+  assert.equal(exported.plan_validation.validator, 'versioned_position_plan_v3');
 });
 
-test('257 visible positions remain in candidate inventory while assignment stays in the sidecar', () => {
+test('257 visible positions remain complete while 256 assignments are inside the same plan', () => {
   const visibleInventory = Array.from({length: 257}, (_, index) => position(index));
   const assignments = Array.from({length: 256}, (_, index) => assignment(index));
   const exported = exportPlan({visibleInventory: visibleInventory.reverse(), assignments: assignments.reverse()});
 
   assert.equal(exported.plan.visible_l1_positions.length, 257);
+  assert.equal(exported.plan.assigned_l1_position_ids.length, 256);
   assert.equal(exported.assignment_sidecar.assigned_l1_positions.length, 256);
   assert.deepEqual(exported.assignment_sidecar.visible_but_not_assigned_position_ids, ['G000257']);
-  assert.equal(validatePlanV2(exported.plan).contentHash, exported.plan.content_hash);
+  assert.equal(validatePlanV3(exported.plan).contentHash, exported.plan.content_hash);
+});
+
+test('257 assigned positions are rejected as schedule_overflow without trimming the input', () => {
+  const visibleInventory = Array.from({length: 257}, (_, index) => position(index));
+  const assignments = Array.from({length: 257}, (_, index) => assignment(index));
+
+  assert.throws(
+    () => exportPlan({visibleInventory, assignments}),
+    (error) => error instanceof ConstellationPlanExportError && error.code === 'schedule_overflow'
+  );
+  assert.equal(visibleInventory.length, 257);
+  assert.equal(assignments.length, 257);
 });
 
 test('input ordering does not change the plan or deterministic assignment sidecar', () => {

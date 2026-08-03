@@ -44,7 +44,7 @@ import {
   restoreSlabVisibilityState
 } from './constellation_slab_visibility.mjs';
 import {auditPairVisibility} from './constellation_visibility.mjs';
-import {ACCESS_PROFILE_V1, ACCESS_PROFILE_V1_HASH} from './versioned_position_plan_v2.mjs';
+import {ACCESS_PROFILE_V1, ACCESS_PROFILE_V1_HASH} from './versioned_position_plan_v3.mjs';
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(moduleDirectory, '..', '..');
@@ -66,7 +66,8 @@ export const PLANNER_SOURCE_FILES = Object.freeze([
   'utils/ntn/constellation_streaming_assignment_ledger.mjs',
   'utils/ntn/constellation_timeline.mjs',
   'utils/ntn/constellation_visibility.mjs',
-  'utils/ntn/versioned_position_plan_v2.mjs'
+  'utils/ntn/versioned_position_plan_v2.mjs',
+  'utils/ntn/versioned_position_plan_v3.mjs'
 ]);
 
 function fail(message) {

@@ -241,7 +241,7 @@ static bool validate_mobility_appconfig(gnb_id_t gnb_id, const cu_cp_unit_mobili
                                                !position_plan_cfg.expected_access_profile_id.empty() &&
                                                is_sha256_digest(position_plan_cfg.expected_access_profile_hash);
     if ((position_plan_cfg.du_execution_enabled || has_any_planning_context) && !has_complete_planning_context) {
-      fmt::print("Invalid CU-CP configuration. NTN schema-v2 planning context requires complete catalog, identity "
+      fmt::print("Invalid CU-CP configuration. NTN schema-v2/v3 planning context requires complete catalog, identity "
                  "registry and access-profile identifiers with SHA-256 digests\n");
       return false;
     }

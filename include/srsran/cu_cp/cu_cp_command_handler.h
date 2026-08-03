@@ -240,6 +240,7 @@ struct cu_cp_ntn_position_plan_status {
   std::string received_content_hash     = "none";
   int64_t     received_activation_epoch_unix_ms = -1;
   unsigned    candidate_l1_positions   = 0;
+  unsigned    assigned_l1_positions    = 0;
   uint64_t    audited_schedule_version = 0;
   unsigned    calendar_intents         = 0;
   unsigned    ssb_intents              = 0;
