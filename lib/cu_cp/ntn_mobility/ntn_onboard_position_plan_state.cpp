@@ -47,6 +47,7 @@ using json = nlohmann::json;
 
 std::atomic<unsigned> next_default_store_failpoint{
     static_cast<unsigned>(ntn_onboard_position_plan_state_store_failpoint::none)};
+std::atomic<ntn_onboard_position_plan_state_file_read_test_hook> next_state_file_read_test_hook{nullptr};
 
 std::optional<std::string>
 validate_exact_object_keys(const json& value, const char* context, std::initializer_list<const char*> required)
@@ -380,6 +381,9 @@ expected<ntn_onboard_cell_position_set, std::string> decode_cell_position_set(co
   const json& ids = value.at("assigned_l1_ids");
   if (!ids.is_array()) {
     return make_unexpected(fmt::format("{}.assigned_l1_ids must be an array", context));
+  }
+  if (ids.size() > max_ntn_onboard_position_plan_observed_positions) {
+    return make_unexpected(fmt::format("{}.assigned_l1_ids is too large", context));
   }
 
   ntn_onboard_cell_position_set result;
@@ -747,6 +751,9 @@ expected<ntn_onboard_position_plan_persistent_state, std::string> decode_state(c
   if (!outstanding_clears.is_array()) {
     return make_unexpected(std::string{"outstanding_clears must be an array"});
   }
+  if (outstanding_clears.size() > max_ntn_onboard_position_plan_cleanup_claims) {
+    return make_unexpected(std::string{"outstanding_clears is too large"});
+  }
   result.outstanding_clears.reserve(outstanding_clears.size());
   for (size_t i = 0; i != outstanding_clears.size(); ++i) {
     auto obligation = decode_clear_obligation(outstanding_clears[i], fmt::format("outstanding_clears[{}]", i));
@@ -893,10 +900,14 @@ std::optional<std::string> validate_state(const ntn_onboard_position_plan_persis
   if (!is_valid_satellite_id(state.satellite_id)) {
     return std::string{"invalid_state_satellite_id"};
   }
-  if (state.planning_context.catalog_id.empty() || !is_sha256_digest(state.planning_context.catalog_hash) ||
+  if (state.planning_context.catalog_id.empty() ||
+      state.planning_context.catalog_id.size() > max_ntn_position_plan_context_identifier_size ||
+      !is_sha256_digest(state.planning_context.catalog_hash) ||
       state.planning_context.identity_registry_version.empty() ||
+      state.planning_context.identity_registry_version.size() > max_ntn_position_plan_context_identifier_size ||
       !is_sha256_digest(state.planning_context.identity_registry_hash) ||
       state.planning_context.access_profile_id.empty() ||
+      state.planning_context.access_profile_id.size() > max_ntn_position_plan_context_identifier_size ||
       !is_sha256_digest(state.planning_context.access_profile_hash)) {
     return std::string{"invalid_state_planning_context"};
   }
@@ -1034,21 +1045,26 @@ expected<std::string, std::string> read_bounded_regular_file(const std::string& 
     return make_unexpected(fmt::format("cannot open state file '{}': {}", path, std::strerror(errno)));
   }
 
-  struct stat file_status{};
-  if (::fstat(fd.value(), &file_status) != 0) {
+  struct stat initial_status {};
+  if (::fstat(fd.value(), &initial_status) != 0) {
     return make_unexpected(fmt::format("cannot stat state file '{}': {}", path, std::strerror(errno)));
   }
-  if (!S_ISREG(file_status.st_mode)) {
+  if (!S_ISREG(initial_status.st_mode)) {
     return make_unexpected(fmt::format("state file '{}' is not a regular file", path));
   }
-  if (file_status.st_size < 0 ||
-      static_cast<uint64_t>(file_status.st_size) > max_ntn_onboard_position_plan_state_file_size) {
-    return make_unexpected(
-        fmt::format("state file '{}' exceeds {} bytes", path, max_ntn_onboard_position_plan_state_file_size));
+  if (initial_status.st_size < 0 ||
+      static_cast<uint64_t>(initial_status.st_size) > max_ntn_onboard_position_plan_state_file_size) {
+    return make_unexpected(fmt::format(
+        "input_too_large: state file '{}' exceeds {} bytes", path, max_ntn_onboard_position_plan_state_file_size));
   }
 
+  if (const auto hook = next_state_file_read_test_hook.exchange(nullptr, std::memory_order_acq_rel); hook != nullptr) {
+    hook(path);
+  }
+
+  const size_t initial_size = static_cast<size_t>(initial_status.st_size);
   std::string text;
-  text.reserve(static_cast<size_t>(file_status.st_size));
+  text.reserve(initial_size);
   std::array<char, 8192> buffer{};
   while (true) {
     const ssize_t count = ::read(fd.value(), buffer.data(), buffer.size());
@@ -1062,10 +1078,22 @@ expected<std::string, std::string> read_bounded_regular_file(const std::string& 
       break;
     }
     if (text.size() + static_cast<size_t>(count) > max_ntn_onboard_position_plan_state_file_size) {
-      return make_unexpected(
-          fmt::format("state file '{}' exceeds {} bytes", path, max_ntn_onboard_position_plan_state_file_size));
+      return make_unexpected(fmt::format("input_too_large: state file '{}' exceeds {} bytes while being read",
+                                         path,
+                                         max_ntn_onboard_position_plan_state_file_size));
     }
     text.append(buffer.data(), static_cast<size_t>(count));
+  }
+
+  struct stat final_status {};
+  if (::fstat(fd.value(), &final_status) != 0) {
+    return make_unexpected(fmt::format("cannot restat state file '{}': {}", path, std::strerror(errno)));
+  }
+  if (final_status.st_size > initial_status.st_size || text.size() > initial_size) {
+    return make_unexpected(fmt::format("input_too_large: state file '{}' grew while being read", path));
+  }
+  if (final_status.st_size != initial_status.st_size || text.size() != initial_size) {
+    return make_unexpected(fmt::format("state file '{}' changed while being read", path));
   }
   return text;
 }
@@ -1139,6 +1167,12 @@ create_same_directory_temporary_file(const std::filesystem::path& target)
 }
 
 } // namespace
+
+void srsran::srs_cu_cp::set_ntn_onboard_position_plan_state_file_read_test_hook_once_for_test(
+    ntn_onboard_position_plan_state_file_read_test_hook hook)
+{
+  next_state_file_read_test_hook.store(hook, std::memory_order_release);
+}
 
 void srsran::srs_cu_cp::set_ntn_onboard_position_plan_state_store_failpoint_once_for_test(
     ntn_onboard_position_plan_state_store_failpoint failpoint)

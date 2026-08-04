@@ -26,6 +26,9 @@
 #include "fmt/format.h"
 #include "gtest/gtest.h"
 #include <algorithm>
+#include <atomic>
+#include <filesystem>
+#include <fstream>
 #include <map>
 #include <set>
 
@@ -37,6 +40,39 @@ namespace {
 constexpr const char* catalog_hash        = "sha256:b39fe9c3ee9a9355b3546036b7f16e0fb858c953f8558cc4295122f2169fbe7a";
 constexpr const char* registry_hash       = "sha256:7475821350e104b57a70d979d630f4b29a6cecb89ca0eca7b16dddf2ffee6a4a";
 constexpr const char* access_profile_hash = "sha256:195786f4161e3b0fad6faa0605144948a7401c067a014bde684c1b29a8087d63";
+
+std::filesystem::path make_plan_path(const char* label)
+{
+  static std::atomic<uint64_t> suffix{0};
+  return std::filesystem::temp_directory_path() /
+         fmt::format("srsran-ntn-plan-{}-{}.json", label, suffix.fetch_add(1, std::memory_order_relaxed));
+}
+
+class temporary_plan_guard
+{
+public:
+  explicit temporary_plan_guard(std::filesystem::path path_) : path(std::move(path_)) {}
+  ~temporary_plan_guard()
+  {
+    std::error_code error;
+    std::filesystem::remove(path, error);
+  }
+
+private:
+  std::filesystem::path path;
+};
+
+void write_plan_file(const std::filesystem::path& path, const std::string& text)
+{
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  output.write(text.data(), static_cast<std::streamsize>(text.size()));
+}
+
+void grow_plan_file_after_size_check(const std::string& path)
+{
+  std::ofstream output(path, std::ios::binary | std::ios::app);
+  output.put(' ');
+}
 
 std::chrono::system_clock::time_point at_ms(int64_t milliseconds)
 {
@@ -302,6 +338,112 @@ TEST(ntn_onboard_position_plan, schema_v3_json_parses_both_collections_and_requi
   EXPECT_NE(parsed.error().find("assigned_l1_position_ids must be an array"), std::string::npos);
 }
 
+TEST(ntn_onboard_position_plan, bounded_file_loader_accepts_exact_limit_and_rejects_oversized_or_growing_files)
+{
+  EXPECT_EQ(max_ntn_position_plan_file_size, 4U * 1024U * 1024U);
+  const std::filesystem::path path = make_plan_path("bounded-read");
+  temporary_plan_guard       guard(path);
+
+  std::string exact_limit = encode_management_plan_json(make_schema_v3_plan(2, 1)).dump();
+  ASSERT_LT(exact_limit.size(), max_ntn_position_plan_file_size);
+  exact_limit.resize(max_ntn_position_plan_file_size, ' ');
+  write_plan_file(path, exact_limit);
+
+  auto loaded = load_ntn_position_plan_json_file(path.string());
+  ASSERT_TRUE(loaded.has_value()) << loaded.error().detail;
+  EXPECT_EQ(loaded->visible_l1_positions.size(), 2U);
+  EXPECT_EQ(loaded->assigned_l1_position_ids.size(), 1U);
+
+  write_plan_file(path, exact_limit + " ");
+  loaded = load_ntn_position_plan_json_file(path.string());
+  ASSERT_FALSE(loaded.has_value());
+  EXPECT_EQ(loaded.error().reason, ntn_position_plan_input_error::input_too_large);
+  EXPECT_NE(loaded.error().detail.find("exceeds"), std::string::npos);
+
+  write_plan_file(path, exact_limit);
+  set_ntn_position_plan_file_read_test_hook_once_for_test(&grow_plan_file_after_size_check);
+  loaded = load_ntn_position_plan_json_file(path.string());
+  ASSERT_FALSE(loaded.has_value());
+  EXPECT_EQ(loaded.error().reason, ntn_position_plan_input_error::input_too_large);
+  EXPECT_TRUE(loaded.error().detail.find("exceeds") != std::string::npos ||
+              loaded.error().detail.find("grew") != std::string::npos);
+}
+
+TEST(ntn_onboard_position_plan, parser_checks_visible_and_assigned_array_limits_before_reserving_storage)
+{
+  EXPECT_EQ(max_ntn_position_plan_positions, 65536U);
+  const nlohmann::json valid_root = encode_management_plan_json(make_schema_v3_plan(1, 1));
+
+  nlohmann::json exact_visible = valid_root;
+  exact_visible["visible_l1_positions"] = nlohmann::json::array();
+  for (size_t i = 0; i != max_ntn_position_plan_positions; ++i) {
+    exact_visible["visible_l1_positions"].push_back(nullptr);
+  }
+  auto parsed = parse_ntn_position_plan_json(exact_visible.dump());
+  ASSERT_FALSE(parsed.has_value());
+  EXPECT_NE(parsed.error().find("visible_l1_positions[0] must be an object"), std::string::npos);
+  EXPECT_EQ(parsed.error().find("input_too_large:"), std::string::npos);
+
+  exact_visible["visible_l1_positions"].push_back(nullptr);
+  parsed = parse_ntn_position_plan_json(exact_visible.dump());
+  ASSERT_FALSE(parsed.has_value());
+  EXPECT_EQ(parsed.error().find("input_too_large:"), 0U);
+  EXPECT_NE(parsed.error().find("visible_l1_positions"), std::string::npos);
+
+  nlohmann::json exact_assigned = valid_root;
+  exact_assigned["assigned_l1_position_ids"] = nlohmann::json::array();
+  for (size_t i = 0; i != max_ntn_position_plan_positions; ++i) {
+    exact_assigned["assigned_l1_position_ids"].push_back(nullptr);
+  }
+  parsed = parse_ntn_position_plan_json(exact_assigned.dump());
+  ASSERT_FALSE(parsed.has_value());
+  EXPECT_NE(parsed.error().find("assigned_l1_position_ids[0] must be a string"), std::string::npos);
+  EXPECT_EQ(parsed.error().find("input_too_large:"), std::string::npos);
+
+  exact_assigned["assigned_l1_position_ids"].push_back(nullptr);
+  parsed = parse_ntn_position_plan_json(exact_assigned.dump());
+  ASSERT_FALSE(parsed.has_value());
+  EXPECT_EQ(parsed.error().find("input_too_large:"), 0U);
+  EXPECT_NE(parsed.error().find("assigned_l1_position_ids"), std::string::npos);
+}
+
+TEST(ntn_onboard_position_plan, planning_context_identifiers_are_bounded_by_utf8_byte_count)
+{
+  EXPECT_EQ(max_ntn_position_plan_context_identifier_size, 256U);
+  const nlohmann::json valid_root = encode_management_plan_json(make_schema_v3_plan(1, 1));
+  const std::array<const char*, 4> identifier_paths = {
+      "/planning_run_id", "/catalog/id", "/identity_registry/version", "/access_profile/id"};
+
+  for (const char* path : identifier_paths) {
+    const nlohmann::json::json_pointer pointer(path);
+    nlohmann::json                     at_limit = valid_root;
+    at_limit[pointer]                           = std::string(max_ntn_position_plan_context_identifier_size, 'x');
+    auto parsed = parse_ntn_position_plan_json(at_limit.dump());
+    ASSERT_TRUE(parsed.has_value()) << path << ": " << parsed.error();
+
+    nlohmann::json over_limit = valid_root;
+    over_limit[pointer] = std::string(max_ntn_position_plan_context_identifier_size + 1, 'x');
+    parsed              = parse_ntn_position_plan_json(over_limit.dump());
+    ASSERT_FALSE(parsed.has_value()) << path;
+    EXPECT_EQ(parsed.error().find("input_too_large:"), 0U) << path;
+  }
+
+  std::string utf8_identifier;
+  for (unsigned i = 0; i != 85; ++i) {
+    utf8_identifier.append("\xE7\x95\x8C");
+  }
+  ASSERT_EQ(utf8_identifier.size(), 255U);
+  nlohmann::json utf8_root      = valid_root;
+  utf8_root["planning_run_id"] = utf8_identifier;
+  auto parsed                   = parse_ntn_position_plan_json(utf8_root.dump());
+  ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+  utf8_root["planning_run_id"] = utf8_identifier + "\xE7\x95\x8C";
+  parsed                        = parse_ntn_position_plan_json(utf8_root.dump());
+  ASSERT_FALSE(parsed.has_value());
+  EXPECT_EQ(parsed.error().find("input_too_large:"), 0U);
+}
+
 TEST(ntn_onboard_position_plan, schema_v2_json_rejects_unknown_missing_and_invalid_child_fields)
 {
   const ntn_versioned_position_plan plan = make_plan(1);
@@ -493,8 +635,25 @@ TEST(ntn_onboard_position_plan, schema_v1_and_v2_implicitly_assign_the_complete_
       plan.content_hash = compute_ntn_position_plan_content_hash(plan);
     }
 
+    nlohmann::json root = encode_management_plan_json(plan);
+    if (schema_version == 1) {
+      root.erase("planning_run_id");
+      root.erase("catalog");
+      root.erase("identity_registry");
+      root.erase("access_profile");
+      for (nlohmann::json& position : root["visible_l1_positions"]) {
+        position.erase("child_mask");
+      }
+    }
+    auto parsed = parse_ntn_position_plan_json(root.dump());
+    ASSERT_TRUE(parsed.has_value()) << "schema_version=" << schema_version << ": " << parsed.error();
+    ASSERT_EQ(parsed->assigned_l1_position_ids.size(), parsed->visible_l1_positions.size());
+    for (size_t i = 0; i != parsed->visible_l1_positions.size(); ++i) {
+      EXPECT_EQ(parsed->assigned_l1_position_ids[i], parsed->visible_l1_positions[i].position_id);
+    }
+
     ntn_onboard_position_plan_controller controller(make_config());
-    ASSERT_TRUE(controller.submit(plan, at_ms(1280)).accepted) << "schema_version=" << schema_version;
+    ASSERT_TRUE(controller.submit(parsed.value(), at_ms(1280)).accepted) << "schema_version=" << schema_version;
     ASSERT_TRUE(controller.pending_plan().has_value());
     EXPECT_EQ(controller.assigned_l1_position_ids().size(), plan.visible_l1_positions.size());
     EXPECT_EQ(make_owner_map(*controller.pending_plan()).size(), plan.visible_l1_positions.size());
@@ -663,7 +822,9 @@ TEST(ntn_onboard_position_plan, schema_v3_overflow_uses_assigned_count_and_prese
   ASSERT_TRUE(controller.active_plan().has_value());
 
   const ntn_versioned_position_plan overflow = make_schema_v3_plan(300, 257, 2, 2560, 2);
-  const auto                        result   = controller.submit(overflow, at_ms(1920));
+  auto parsed = parse_ntn_position_plan_json(encode_management_plan_json(overflow).dump());
+  ASSERT_TRUE(parsed.has_value()) << parsed.error();
+  const auto result = controller.submit(parsed.value(), at_ms(1920));
 
   EXPECT_FALSE(result.accepted);
   EXPECT_EQ(result.reason, ntn_position_plan_reject_reason::schedule_overflow);

@@ -27,6 +27,7 @@
 #include "srsran/ran/pci.h"
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -35,6 +36,11 @@
 
 namespace srsran {
 namespace srs_cu_cp {
+
+/// Private management-center input limits. They are operational safeguards, not protocol constants.
+inline constexpr size_t max_ntn_position_plan_file_size               = 4U * 1024U * 1024U;
+inline constexpr size_t max_ntn_position_plan_positions               = 65536U;
+inline constexpr size_t max_ntn_position_plan_context_identifier_size = 256U;
 
 /// Earth-fixed L1 position supplied by the management-center catalog. It intentionally carries no NCI or PCI.
 struct ntn_l1_position {
@@ -129,6 +135,7 @@ enum class ntn_position_plan_reject_reason {
   none,
   feature_disabled,
   parse_error,
+  input_too_large,
   unsupported_schema,
   unbound_planning_context,
   planning_context_mismatch,
@@ -478,8 +485,21 @@ std::string compute_ntn_access_calendar_hash(uint64_t                           
 /// Parses a management-center plan JSON document.
 expected<ntn_versioned_position_plan, std::string> parse_ntn_position_plan_json(const std::string& json_text);
 
-/// Loads and parses a management-center plan JSON file.
-expected<ntn_versioned_position_plan, std::string> load_ntn_position_plan_json_file(const std::string& path);
+enum class ntn_position_plan_input_error { parse_error, input_too_large };
+
+struct ntn_position_plan_input_failure {
+  ntn_position_plan_input_error reason = ntn_position_plan_input_error::parse_error;
+  std::string                   detail;
+};
+
+/// Loads and parses one bounded regular management-center plan JSON file.
+expected<ntn_versioned_position_plan, ntn_position_plan_input_failure>
+load_ntn_position_plan_json_file(const std::string& path);
+
+/// Installs a private one-shot hook after the initial file-size check. Focused tests use it to grow the same file and
+/// prove that CU-CP never accepts bytes appended while a plan is being read.
+using ntn_position_plan_file_read_test_hook = void (*)(const std::string& path);
+void set_ntn_position_plan_file_read_test_hook_once_for_test(ntn_position_plan_file_read_test_hook hook);
 
 } // namespace srs_cu_cp
 } // namespace srsran

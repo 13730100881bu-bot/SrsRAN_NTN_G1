@@ -78,6 +78,12 @@ void write_file(const std::filesystem::path& path, const std::string& text)
   output << text;
 }
 
+void grow_state_file_after_size_check(const std::string& path)
+{
+  std::ofstream output(path, std::ios::binary | std::ios::app);
+  output << ' ';
+}
+
 ntn_versioned_position_plan
 make_plan(uint64_t catalog_version, uint64_t schedule_version, std::vector<ntn_l1_position> positions)
 {
@@ -424,16 +430,67 @@ TEST(ntn_onboard_position_plan_state, hash_tamper_and_corrupt_json_fail_closed)
   EXPECT_NE(corrupt.error().find("invalid NTN position-plan state JSON"), std::string::npos);
 }
 
-TEST(ntn_onboard_position_plan_state, oversized_file_is_rejected_before_json_parsing)
+TEST(ntn_onboard_position_plan_state, bounded_file_loader_accepts_exact_limit_and_rejects_oversized_or_growing_files)
 {
   const std::filesystem::path path = make_state_path("oversized");
   temporary_state_guard       guard(path);
-  write_file(path, std::string(max_ntn_onboard_position_plan_state_file_size + 1, 'x'));
+  EXPECT_EQ(max_ntn_onboard_position_plan_state_file_size, 16U * 1024U * 1024U);
+
+  ASSERT_TRUE(store_ntn_onboard_position_plan_state_atomic(path.string(), make_state()).has_value());
+  std::string exact_limit = read_file(path);
+  ASSERT_LT(exact_limit.size(), max_ntn_onboard_position_plan_state_file_size);
+  exact_limit.resize(max_ntn_onboard_position_plan_state_file_size, ' ');
+  write_file(path, exact_limit);
 
   auto loaded = load_ntn_onboard_position_plan_state(path.string());
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  ASSERT_TRUE(loaded->has_value());
+  EXPECT_EQ((*loaded)->generation, 7U);
+
+  write_file(path, std::string(max_ntn_onboard_position_plan_state_file_size + 1, 'x'));
+
+  loaded = load_ntn_onboard_position_plan_state(path.string());
 
   ASSERT_FALSE(loaded.has_value());
   EXPECT_NE(loaded.error().find("exceeds"), std::string::npos);
+
+  ASSERT_TRUE(store_ntn_onboard_position_plan_state_atomic(path.string(), make_state()).has_value());
+  set_ntn_onboard_position_plan_state_file_read_test_hook_once_for_test(&grow_state_file_after_size_check);
+  loaded = load_ntn_onboard_position_plan_state(path.string());
+
+  ASSERT_FALSE(loaded.has_value());
+  EXPECT_EQ(loaded.error().find("input_too_large:"), 0U);
+  EXPECT_NE(loaded.error().find("grew while being read"), std::string::npos);
+}
+
+TEST(ntn_onboard_position_plan_state, decoder_bounds_arrays_before_reserving_storage)
+{
+  const std::filesystem::path path = make_state_path("bounded-arrays");
+  temporary_state_guard       guard(path);
+  ASSERT_TRUE(store_ntn_onboard_position_plan_state_atomic(path.string(), make_state()).has_value());
+  const nlohmann::json valid_root = nlohmann::json::parse(read_file(path));
+
+  nlohmann::json too_many_cell_ids = valid_root;
+  too_many_cell_ids["sticky_partition"][0]["assigned_l1_ids"] = nlohmann::json::array();
+  for (size_t i = 0; i != max_ntn_onboard_position_plan_observed_positions + 1; ++i) {
+    too_many_cell_ids["sticky_partition"][0]["assigned_l1_ids"].push_back(nullptr);
+  }
+  write_file(path, too_many_cell_ids.dump());
+
+  auto loaded = load_ntn_onboard_position_plan_state(path.string());
+  ASSERT_FALSE(loaded.has_value());
+  EXPECT_NE(loaded.error().find("sticky_partition[0].assigned_l1_ids is too large"), std::string::npos);
+
+  nlohmann::json too_many_clears = valid_root;
+  too_many_clears["outstanding_clears"] = nlohmann::json::array();
+  for (size_t i = 0; i != max_ntn_onboard_position_plan_cleanup_claims + 1; ++i) {
+    too_many_clears["outstanding_clears"].push_back(nullptr);
+  }
+  write_file(path, too_many_clears.dump());
+
+  loaded = load_ntn_onboard_position_plan_state(path.string());
+  ASSERT_FALSE(loaded.has_value());
+  EXPECT_EQ(loaded.error(), "outstanding_clears is too large");
 }
 
 TEST(ntn_onboard_position_plan_state, pre_rename_failure_preserves_previous_valid_state_and_cleans_temp)

@@ -11529,15 +11529,19 @@ void cu_cp_impl::reload_ntn_onboard_position_plan()
   const auto& source_cfg = cfg.mobility.onboard_position_plan;
   auto plan = load_ntn_position_plan_json_file(source_cfg.plan_json_file);
   if (!plan.has_value()) {
+    const ntn_position_plan_reject_reason rejection_reason =
+        plan.error().reason == ntn_position_plan_input_error::input_too_large
+            ? ntn_position_plan_reject_reason::input_too_large
+            : ntn_position_plan_reject_reason::parse_error;
     {
       std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
       if (ntn_onboard_position_plan_ctrl.has_value()) {
-        ntn_onboard_position_plan_ctrl->record_external_rejection(ntn_position_plan_reject_reason::parse_error);
+        ntn_onboard_position_plan_ctrl->record_external_rejection(rejection_reason);
       }
     }
     logger.warning("Rejected NTN onboard position plan file='{}'. Cause: {}",
                    source_cfg.plan_json_file,
-                   plan.error());
+                   plan.error().detail);
     return;
   }
 

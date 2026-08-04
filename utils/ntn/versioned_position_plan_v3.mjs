@@ -1,7 +1,17 @@
 #!/usr/bin/env node
 
-import {createHash} from 'node:crypto';
-import {readFileSync, writeFileSync} from 'node:fs';
+import {createHash, randomBytes} from 'node:crypto';
+import {
+  closeSync,
+  fstatSync,
+  fsyncSync,
+  openSync,
+  readSync,
+  renameSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs';
+import {basename, dirname, join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 
 import {
@@ -35,12 +45,29 @@ const ROOT_KEYS = [
 const MAX_NCI = 0xfffffffff;
 const MAX_PCI = 1007;
 
+export const MAX_POSITION_PLAN_FILE_BYTES = 4 * 1024 * 1024;
+export const MAX_POSITION_PLAN_ENTRIES = 65_536;
+export const MAX_PLANNING_CONTEXT_IDENTIFIER_BYTES = 256;
+
+const DEFAULT_ATOMIC_FILE_OPERATIONS = Object.freeze({
+  closeSync,
+  fsyncSync,
+  openSync,
+  renameSync,
+  rmSync,
+  writeFileSync
+});
+
 // Updated after the canonical representation is intentionally changed.
 export const GOLDEN_CONTENT_HASH_V3 =
   'sha256:005e172665221e8bad772cc5f372d3b03378e762fb3487c836389760ce6b0155';
 
 function fail(message) {
   throw new PlanValidationError(message);
+}
+
+function failInputTooLarge(message) {
+  fail(`input_too_large: ${message}`);
 }
 
 function isPlainObject(value) {
@@ -70,6 +97,16 @@ function assertNonEmptyString(value, context) {
   }
 }
 
+function assertBoundedIdentifier(value, context) {
+  assertNonEmptyString(value, context);
+  const size = Buffer.byteLength(value, 'utf8');
+  if (size > MAX_PLANNING_CONTEXT_IDENTIFIER_BYTES) {
+    failInputTooLarge(
+      `${context} is ${size} UTF-8 bytes; maximum is ${MAX_PLANNING_CONTEXT_IDENTIFIER_BYTES}`
+    );
+  }
+}
+
 function assertSafeInteger(value, context, minimum, maximum = Number.MAX_SAFE_INTEGER) {
   if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
     fail(`${context} must be a safe integer in ${minimum}..${maximum}`);
@@ -87,18 +124,18 @@ function validateShape(plan, {contentHashRequired}) {
   if (plan.schema_version !== 3) {
     fail('schema_version must be exactly 3');
   }
-  assertNonEmptyString(plan.planning_run_id, 'planning_run_id');
+  assertBoundedIdentifier(plan.planning_run_id, 'planning_run_id');
 
   assertExactKeys(plan.catalog, 'catalog', ['id', 'sha256']);
-  assertNonEmptyString(plan.catalog.id, 'catalog.id');
+  assertBoundedIdentifier(plan.catalog.id, 'catalog.id');
   normalizeSha256(plan.catalog.sha256, 'catalog.sha256');
 
   assertExactKeys(plan.identity_registry, 'identity_registry', ['version', 'sha256']);
-  assertNonEmptyString(plan.identity_registry.version, 'identity_registry.version');
+  assertBoundedIdentifier(plan.identity_registry.version, 'identity_registry.version');
   normalizeSha256(plan.identity_registry.sha256, 'identity_registry.sha256');
 
   assertExactKeys(plan.access_profile, 'access_profile', ['id', 'sha256']);
-  assertNonEmptyString(plan.access_profile.id, 'access_profile.id');
+  assertBoundedIdentifier(plan.access_profile.id, 'access_profile.id');
   normalizeSha256(plan.access_profile.sha256, 'access_profile.sha256');
 
   if (typeof plan.satellite_id !== 'string' || !/^P\d{2}-S\d{2}$/.test(plan.satellite_id)) {
@@ -135,6 +172,12 @@ function validateShape(plan, {contentHashRequired}) {
   if (!Array.isArray(plan.visible_l1_positions)) {
     fail('visible_l1_positions must be an array');
   }
+  if (plan.visible_l1_positions.length > MAX_POSITION_PLAN_ENTRIES) {
+    failInputTooLarge(
+      `visible_l1_positions contains ${plan.visible_l1_positions.length} entries; maximum is ` +
+      `${MAX_POSITION_PLAN_ENTRIES}`
+    );
+  }
   const visiblePositionIds = new Set();
   for (const [index, position] of plan.visible_l1_positions.entries()) {
     const context = `visible_l1_positions[${index}]`;
@@ -157,6 +200,12 @@ function validateShape(plan, {contentHashRequired}) {
 
   if (!Array.isArray(plan.assigned_l1_position_ids)) {
     fail('assigned_l1_position_ids must be an array');
+  }
+  if (plan.assigned_l1_position_ids.length > MAX_POSITION_PLAN_ENTRIES) {
+    failInputTooLarge(
+      `assigned_l1_position_ids contains ${plan.assigned_l1_position_ids.length} entries; maximum is ` +
+      `${MAX_POSITION_PLAN_ENTRIES}`
+    );
   }
   const assignedPositionIds = new Set();
   for (const [index, positionId] of plan.assigned_l1_position_ids.entries()) {
@@ -304,16 +353,121 @@ export function makeGoldenPlanV3() {
   });
 }
 
+function readUtf8FileBounded(path) {
+  let descriptor;
+  try {
+    descriptor = openSync(path, 'r');
+    const initialStatus = fstatSync(descriptor);
+    if (!initialStatus.isFile()) {
+      fail(`plan input '${path}' is not a regular file`);
+    }
+    if (initialStatus.size > MAX_POSITION_PLAN_FILE_BYTES) {
+      failInputTooLarge(
+        `plan file is ${initialStatus.size} bytes; maximum is ${MAX_POSITION_PLAN_FILE_BYTES}`
+      );
+    }
+
+    const chunks = [];
+    const chunk = Buffer.allocUnsafe(64 * 1024);
+    let totalSize = 0;
+    while (true) {
+      const bytesRead = readSync(descriptor, chunk, 0, chunk.length, null);
+      if (bytesRead === 0) break;
+      totalSize += bytesRead;
+      if (totalSize > MAX_POSITION_PLAN_FILE_BYTES) {
+        failInputTooLarge(
+          `plan file grew beyond the ${MAX_POSITION_PLAN_FILE_BYTES}-byte maximum while being read`
+        );
+      }
+      chunks.push(Buffer.from(chunk.subarray(0, bytesRead)));
+    }
+
+    const finalStatus = fstatSync(descriptor);
+    if (finalStatus.size > initialStatus.size || totalSize > initialStatus.size) {
+      failInputTooLarge('plan file grew while being read');
+    }
+    if (finalStatus.size !== initialStatus.size || totalSize !== initialStatus.size) {
+      fail('plan file changed while being read');
+    }
+    return Buffer.concat(chunks, totalSize).toString('utf8');
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
 function readJson(path) {
-  return JSON.parse(readFileSync(path, 'utf8'));
+  return JSON.parse(readUtf8FileBounded(path));
+}
+
+function serializedPlanJson(plan) {
+  validatePlanV3(plan);
+  const text = `${JSON.stringify(plan, null, 2)}\n`;
+  const size = Buffer.byteLength(text, 'utf8');
+  if (size > MAX_POSITION_PLAN_FILE_BYTES) {
+    failInputTooLarge(
+      `serialized plan is ${size} UTF-8 bytes; maximum is ${MAX_POSITION_PLAN_FILE_BYTES}`
+    );
+  }
+  return text;
+}
+
+function syncDirectoryBestEffort(directory, operations) {
+  let descriptor;
+  try {
+    descriptor = operations.openSync(directory, 'r');
+    operations.fsyncSync(descriptor);
+  } catch {
+    // Some platforms do not permit opening or syncing a directory. The plan file itself is already durable.
+  } finally {
+    if (descriptor !== undefined) {
+      try {
+        operations.closeSync(descriptor);
+      } catch {
+        // The replacement has already completed; a directory-close failure cannot be rolled back safely.
+      }
+    }
+  }
+}
+
+export function writePlanFileV3(plan, outputPath, operationOverrides = {}) {
+  const text = serializedPlanJson(plan);
+  const operations = {...DEFAULT_ATOMIC_FILE_OPERATIONS, ...operationOverrides};
+  const directory = dirname(outputPath);
+  const temporaryPath = join(
+    directory,
+    `.${basename(outputPath)}.tmp-${process.pid}-${randomBytes(8).toString('hex')}`
+  );
+  let descriptor;
+  try {
+    descriptor = operations.openSync(temporaryPath, 'wx', 0o600);
+    operations.writeFileSync(descriptor, text, 'utf8');
+    operations.fsyncSync(descriptor);
+    operations.closeSync(descriptor);
+    descriptor = undefined;
+    operations.renameSync(temporaryPath, outputPath);
+  } catch (error) {
+    if (descriptor !== undefined) {
+      try {
+        operations.closeSync(descriptor);
+      } catch {
+        // Preserve the original write error.
+      }
+    }
+    try {
+      operations.rmSync(temporaryPath, {force: true});
+    } catch {
+      // Preserve the original write error.
+    }
+    fail(`atomic_write_failed: cannot replace '${outputPath}': ${error.message}`);
+  }
+  syncDirectoryBestEffort(directory, operations);
 }
 
 function emitJson(plan, outputPath) {
-  const text = `${JSON.stringify(plan, null, 2)}\n`;
   if (outputPath === undefined || outputPath === '-') {
-    process.stdout.write(text);
+    process.stdout.write(serializedPlanJson(plan));
   } else {
-    writeFileSync(outputPath, text, 'utf8');
+    writePlanFileV3(plan, outputPath);
   }
 }
 

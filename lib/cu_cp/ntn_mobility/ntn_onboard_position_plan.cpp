@@ -23,12 +23,16 @@
 #include "ntn_onboard_position_plan.h"
 #include "nlohmann/json.hpp"
 #include "ntn_onboard_position_plan_state.h"
+#include "srsran/support/io/unique_fd.h"
 #include "fmt/format.h"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
+#include <cerrno>
 #include <cmath>
-#include <fstream>
+#include <cstring>
+#include <fcntl.h>
 #include <iomanip>
 #include <locale>
 #include <map>
@@ -37,6 +41,8 @@
 #include <sstream>
 #include <tuple>
 #include <unordered_map>
+#include <sys/stat.h>
+#include <unistd.h>
 
 using namespace srsran;
 using namespace srs_cu_cp;
@@ -44,6 +50,20 @@ using namespace srs_cu_cp;
 namespace {
 
 constexpr double pi = 3.14159265358979323846;
+
+constexpr const char* input_too_large_prefix = "input_too_large:";
+
+std::atomic<ntn_position_plan_file_read_test_hook> next_plan_file_read_test_hook{nullptr};
+
+std::string make_input_too_large_error(const std::string& detail)
+{
+  return fmt::format("{} {}", input_too_large_prefix, detail);
+}
+
+bool is_input_too_large_error(const std::string& detail)
+{
+  return detail.compare(0, std::strlen(input_too_large_prefix), input_too_large_prefix) == 0;
+}
 
 int64_t to_unix_milliseconds(std::chrono::system_clock::time_point value)
 {
@@ -203,6 +223,20 @@ expected<std::string, std::string> parse_json_string(const nlohmann::json& value
     return make_unexpected(fmt::format("{} must be a string", context));
   }
   return value.get<std::string>();
+}
+
+expected<std::string, std::string> parse_context_identifier(const nlohmann::json& value,
+                                                            const std::string&   context)
+{
+  auto result = parse_json_string(value, context);
+  if (!result.has_value()) {
+    return make_unexpected(result.error());
+  }
+  if (result->size() > max_ntn_position_plan_context_identifier_size) {
+    return make_unexpected(make_input_too_large_error(
+        fmt::format("{} exceeds {} bytes", context, max_ntn_position_plan_context_identifier_size)));
+  }
+  return result;
 }
 
 bool cell_identity_less(const ntn_onboard_cell_identity& lhs, const ntn_onboard_cell_identity& rhs)
@@ -555,6 +589,8 @@ const char* srsran::srs_cu_cp::to_string(ntn_position_plan_reject_reason reason)
       return "feature_disabled";
     case ntn_position_plan_reject_reason::parse_error:
       return "parse_error";
+    case ntn_position_plan_reject_reason::input_too_large:
+      return "input_too_large";
     case ntn_position_plan_reject_reason::unsupported_schema:
       return "unsupported_schema";
     case ntn_position_plan_reject_reason::unbound_planning_context:
@@ -2270,6 +2306,10 @@ std::string srsran::srs_cu_cp::compute_ntn_access_calendar_hash(
 expected<ntn_versioned_position_plan, std::string>
 srsran::srs_cu_cp::parse_ntn_position_plan_json(const std::string& json_text)
 {
+  if (json_text.size() > max_ntn_position_plan_file_size) {
+    return make_unexpected(make_input_too_large_error(
+        fmt::format("plan document exceeds {} bytes", max_ntn_position_plan_file_size)));
+  }
   try {
     const nlohmann::json root = nlohmann::json::parse(json_text);
     if (!root.is_object()) {
@@ -2357,12 +2397,29 @@ srsran::srs_cu_cp::parse_ntn_position_plan_json(const std::string& json_text)
       if (auto error = validate_exact_object_keys(profile, "access_profile", {"id", "sha256"}); error.has_value()) {
         return make_unexpected(std::move(error.value()));
       }
-      result.planning_run_id           = root.at("planning_run_id").get<std::string>();
-      result.catalog_id                = catalog.at("id").get<std::string>();
+      auto planning_run_id = parse_context_identifier(root.at("planning_run_id"), "planning_run_id");
+      auto catalog_id      = parse_context_identifier(catalog.at("id"), "catalog.id");
+      auto registry_version =
+          parse_context_identifier(registry.at("version"), "identity_registry.version");
+      auto profile_id = parse_context_identifier(profile.at("id"), "access_profile.id");
+      if (!planning_run_id.has_value()) {
+        return make_unexpected(planning_run_id.error());
+      }
+      if (!catalog_id.has_value()) {
+        return make_unexpected(catalog_id.error());
+      }
+      if (!registry_version.has_value()) {
+        return make_unexpected(registry_version.error());
+      }
+      if (!profile_id.has_value()) {
+        return make_unexpected(profile_id.error());
+      }
+      result.planning_run_id           = std::move(planning_run_id.value());
+      result.catalog_id                = std::move(catalog_id.value());
       result.catalog_hash              = catalog.at("sha256").get<std::string>();
-      result.identity_registry_version = registry.at("version").get<std::string>();
+      result.identity_registry_version = std::move(registry_version.value());
       result.identity_registry_hash    = registry.at("sha256").get<std::string>();
-      result.access_profile_id         = profile.at("id").get<std::string>();
+      result.access_profile_id         = std::move(profile_id.value());
       result.access_profile_hash       = profile.at("sha256").get<std::string>();
     }
     auto catalog_version  = parse_json_uint64(root.at("catalog_version"), "catalog_version");
@@ -2385,7 +2442,11 @@ srsran::srs_cu_cp::parse_ntn_position_plan_json(const std::string& json_text)
     if (!activation_epoch.has_value()) {
       return make_unexpected(activation_epoch.error());
     }
-    result.satellite_id      = root.at("satellite_id").get<std::string>();
+    auto satellite_id = parse_context_identifier(root.at("satellite_id"), "satellite_id");
+    if (!satellite_id.has_value()) {
+      return make_unexpected(satellite_id.error());
+    }
+    result.satellite_id      = std::move(satellite_id.value());
     result.catalog_version   = catalog_version.value();
     result.schedule_version  = schedule_version.value();
     result.content_hash      = root.at("content_hash").get<std::string>();
@@ -2420,6 +2481,10 @@ srsran::srs_cu_cp::parse_ntn_position_plan_json(const std::string& json_text)
     if (!positions.is_array()) {
       return make_unexpected(std::string{"visible_l1_positions must be an array"});
     }
+    if (positions.size() > max_ntn_position_plan_positions) {
+      return make_unexpected(make_input_too_large_error(fmt::format(
+          "visible_l1_positions contains more than {} entries", max_ntn_position_plan_positions)));
+    }
     result.visible_l1_positions.reserve(positions.size());
     for (size_t i = 0; i != positions.size(); ++i) {
       const std::string context = fmt::format("visible_l1_positions[{}]", i);
@@ -2453,6 +2518,10 @@ srsran::srs_cu_cp::parse_ntn_position_plan_json(const std::string& json_text)
       if (!assigned_ids.is_array()) {
         return make_unexpected(std::string{"assigned_l1_position_ids must be an array"});
       }
+      if (assigned_ids.size() > max_ntn_position_plan_positions) {
+        return make_unexpected(make_input_too_large_error(fmt::format(
+            "assigned_l1_position_ids contains more than {} entries", max_ntn_position_plan_positions)));
+      }
       result.assigned_l1_position_ids.reserve(assigned_ids.size());
       for (size_t i = 0; i != assigned_ids.size(); ++i) {
         auto position_id = parse_json_string(assigned_ids[i], fmt::format("assigned_l1_position_ids[{}]", i));
@@ -2473,17 +2542,96 @@ srsran::srs_cu_cp::parse_ntn_position_plan_json(const std::string& json_text)
   }
 }
 
-expected<ntn_versioned_position_plan, std::string>
+void srsran::srs_cu_cp::set_ntn_position_plan_file_read_test_hook_once_for_test(
+    ntn_position_plan_file_read_test_hook hook)
+{
+  next_plan_file_read_test_hook.store(hook, std::memory_order_release);
+}
+
+expected<ntn_versioned_position_plan, ntn_position_plan_input_failure>
 srsran::srs_cu_cp::load_ntn_position_plan_json_file(const std::string& path)
 {
-  std::ifstream input(path);
-  if (!input.is_open()) {
-    return make_unexpected(fmt::format("cannot open '{}'", path));
+  const auto fail = [](ntn_position_plan_input_error reason, std::string detail) {
+    return make_unexpected(ntn_position_plan_input_failure{reason, std::move(detail)});
+  };
+
+  int flags = O_RDONLY | O_NONBLOCK;
+#ifdef O_CLOEXEC
+  flags |= O_CLOEXEC;
+#endif
+#ifdef O_NOFOLLOW
+  flags |= O_NOFOLLOW;
+#endif
+  unique_fd fd(::open(path.c_str(), flags));
+  if (!fd.is_open()) {
+    return fail(ntn_position_plan_input_error::parse_error,
+                fmt::format("cannot open plan file '{}': {}", path, std::strerror(errno)));
   }
-  std::ostringstream text;
-  text << input.rdbuf();
-  if (!input.good() && !input.eof()) {
-    return make_unexpected(fmt::format("cannot read '{}'", path));
+
+  struct stat initial_status {};
+  if (::fstat(fd.value(), &initial_status) != 0) {
+    return fail(ntn_position_plan_input_error::parse_error,
+                fmt::format("cannot stat plan file '{}': {}", path, std::strerror(errno)));
   }
-  return parse_ntn_position_plan_json(text.str());
+  if (!S_ISREG(initial_status.st_mode)) {
+    return fail(ntn_position_plan_input_error::parse_error,
+                fmt::format("plan file '{}' is not a regular file", path));
+  }
+  if (initial_status.st_size < 0 ||
+      static_cast<uint64_t>(initial_status.st_size) > max_ntn_position_plan_file_size) {
+    return fail(ntn_position_plan_input_error::input_too_large,
+                fmt::format("plan file '{}' exceeds {} bytes", path, max_ntn_position_plan_file_size));
+  }
+
+  if (const auto hook = next_plan_file_read_test_hook.exchange(nullptr, std::memory_order_acq_rel); hook != nullptr) {
+    hook(path);
+  }
+
+  const size_t initial_size = static_cast<size_t>(initial_status.st_size);
+  std::string  text;
+  text.reserve(initial_size);
+  std::array<char, 8192> buffer{};
+  while (true) {
+    const ssize_t count = ::read(fd.value(), buffer.data(), buffer.size());
+    if (count < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return fail(ntn_position_plan_input_error::parse_error,
+                  fmt::format("cannot read plan file '{}': {}", path, std::strerror(errno)));
+    }
+    if (count == 0) {
+      break;
+    }
+    const size_t bytes_read = static_cast<size_t>(count);
+    if (text.size() > max_ntn_position_plan_file_size - bytes_read) {
+      return fail(ntn_position_plan_input_error::input_too_large,
+                  fmt::format("plan file '{}' exceeds {} bytes while being read",
+                              path,
+                              max_ntn_position_plan_file_size));
+    }
+    text.append(buffer.data(), bytes_read);
+  }
+
+  struct stat final_status {};
+  if (::fstat(fd.value(), &final_status) != 0) {
+    return fail(ntn_position_plan_input_error::parse_error,
+                fmt::format("cannot restat plan file '{}': {}", path, std::strerror(errno)));
+  }
+  if (final_status.st_size > initial_status.st_size || text.size() > initial_size) {
+    return fail(ntn_position_plan_input_error::input_too_large,
+                fmt::format("plan file '{}' grew while being read", path));
+  }
+  if (final_status.st_size != initial_status.st_size || text.size() != initial_size) {
+    return fail(ntn_position_plan_input_error::parse_error,
+                fmt::format("plan file '{}' changed while being read", path));
+  }
+
+  auto parsed = parse_ntn_position_plan_json(text);
+  if (!parsed.has_value()) {
+    return fail(is_input_too_large_error(parsed.error()) ? ntn_position_plan_input_error::input_too_large
+                                                         : ntn_position_plan_input_error::parse_error,
+                parsed.error());
+  }
+  return std::move(parsed.value());
 }

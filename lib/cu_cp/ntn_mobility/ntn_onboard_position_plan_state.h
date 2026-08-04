@@ -31,13 +31,13 @@
 namespace srsran {
 namespace srs_cu_cp {
 
-/// On-disk state is deliberately bounded before JSON parsing.
-inline constexpr size_t max_ntn_onboard_position_plan_state_file_size = 4U * 1024U * 1024U;
+/// On-disk state is deliberately bounded before JSON parsing. It can retain active, pending and received plan data.
+inline constexpr size_t max_ntn_onboard_position_plan_state_file_size = 16U * 1024U * 1024U;
 /// Bounds every calendar that may still require exact cleanup. The two extra slots let a state with 64 historical
 /// clear tasks retain its persisted active and pending calendars until they are either reconciled or converted into
 /// clear tasks themselves.
 inline constexpr size_t max_ntn_onboard_position_plan_cleanup_claims = 66U;
-inline constexpr size_t max_ntn_onboard_position_plan_observed_positions = 65536U;
+inline constexpr size_t max_ntn_onboard_position_plan_observed_positions = max_ntn_position_plan_positions;
 
 /// Management-center artifacts that bind the persisted state to one planning context.
 struct ntn_onboard_position_plan_state_context {
@@ -112,6 +112,12 @@ struct ntn_onboard_position_plan_persistent_state {
 /// All other I/O, schema, integrity and internal-consistency errors fail closed.
 expected<std::optional<ntn_onboard_position_plan_persistent_state>, std::string>
 load_ntn_onboard_position_plan_state(const std::string& path);
+
+/// Installs a private one-shot hook after the initial state-file size check. Focused tests use it to prove that a
+/// state file which grows during a read is rejected before recovery.
+using ntn_onboard_position_plan_state_file_read_test_hook = void (*)(const std::string& path);
+void set_ntn_onboard_position_plan_state_file_read_test_hook_once_for_test(
+    ntn_onboard_position_plan_state_file_read_test_hook hook);
 
 /// Result returned once rename has committed the new state bytes.
 ///
