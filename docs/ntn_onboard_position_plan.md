@@ -173,6 +173,21 @@ schema v1/v2 继续可读，并统一解释为 `assigned = visible`。v1 仍只�
 - `activation_epoch` 位于有效期内并满足配置的对齐要求；
 - `content_hash` 与规范内容一致。
 
+### 4.1 输入规模与原子写入
+
+计划输入使用统一边界：
+
+- 单个 UTF-8 JSON 文件最大 4 MiB；
+- `visible_l1_positions` 和 `assigned_l1_position_ids` 各最多 65,536 条；
+- `planning_run_id`、catalog ID、identity registry version 和 access profile ID 各最多 256 UTF-8 bytes；
+- 执行状态文件最大 16 MiB，状态 schema 继续使用 v3。
+
+CU-CP 分块读取普通文件，并在读取前后检查文件大小和文件身份。计划文件超限、读取期间增长或数组超限统一返回 `input_too_large`，而且在分配大型数组、划分波位、生成日历和写入状态之前停止处理。该拒绝只更新最近拒绝原因；active、pending、accepted version high-water 以及最近一次成功解析的波位清单保持原值。文件路径和底层读取错误仅写日志，不进入只读状态输出。
+
+重启状态文件采用同样的读取前后大小核对：读取期间增长时停止恢复并保持 fail-closed。双小区 assigned ID 数组和 cleanup queue 在 `reserve` 前先检查 65,536 与 66 的上限，损坏文件不能用异常数组触发大额预分配。
+
+管理中心 Node 工具使用相同边界。输出先在目标目录创建临时文件，完整写入并同步后再原子替换目标文件；写入或替换失败时，原计划文件保持完整。限制检查不参与 canonical hash，合法计划的 hash 规则保持不变。
+
 ## 5. Content hash
 
 `content_hash` 不是原始 JSON 文件字节的 hash。它对规范化后的逻辑内容计算 SHA-256。schema v3 包含：
@@ -248,6 +263,14 @@ not_sent -> preparing -> ready -> applied
 
 执行前还会核对 DU 的实际静态配置是否能覆盖全部 SSB/PRACH opportunity。反馈包含 expected/matched 数、实际最大间隔和失败明细；部分匹配不能进入 `ready`。
 
+### 9.1 schema v3 执行结果
+
+- 300 个可见一级波位、87 个实际负责一级波位时，CU-CP 保存完整 300 条可见清单，只将 87 条负责 ID 分给两个小区并下发。默认日历共 870 条：696 条 SSB、87 条 PRACH RO 和 87 条对应的 UL beam。
+- DU 完整接受后，计划依次经过 `prepare -> applied -> activation`；到达启用时刻后一次性切换，两个小区的 NCI/PCI 保持不变。
+- 重启后先查询当前 DU，再恢复 300 条可见清单、87 条负责 ID、双小区划分和 active 状态。
+- 实际负责 257 个一级波位时，完整输入仍被保存并返回 `schedule_overflow`，旧 active 计划继续运行。
+- 实际负责集合为空时，CU-CP 向两个小区分别下发空日历，明确关闭该版本的 NTN 软件接入授权。
+
 ## 10. 重启和 DU 重连
 
 ### 10.1 状态文件
@@ -262,7 +285,7 @@ not_sent -> preparing -> ready -> applied
 
 状态文件当前写入 schema v3，并显式保存这两份集合。读取 schema v1/v2 时，CU-CP 按旧语义补出 `assigned = visible`，随后仍执行相同的身份、hash、有效期和恢复检查。
 
-启动时会重新校验状态和规划上下文。历史 `applied` 不会直接恢复成当前证据；CU-CP 必须向 live DU 查询同一 version/hash 和两个小区的完整结果。
+启动时会重新校验状态和规划上下文。历史 `applied` 先保持隐藏；CU-CP 必须向 live DU 查询同一 version/hash 和两个小区的完整结果，核对成功后才恢复 active/applied 状态。
 
 状态文件用于恢复，不是管理中心真实性证明。替换整个文件为旧的合法副本或删除文件，仍需要独立可信的单调锚点才能检测。
 
@@ -270,7 +293,7 @@ not_sent -> preparing -> ready -> applied
 
 当承载这两个小区的 DU 断开时：
 
-1. CU-CP 立即隐藏旧 `applied` 证据；
+1. CU-CP 立即隐藏旧 `applied` 状态；
 2. 保留计划、version high-water 和旧计划恢复副本；
 3. 使正在等待的 prepare/query/clear 请求失效；
 4. 重连后只接受新连接上、同一请求实例、同一 version/hash 的完整回复；
@@ -300,14 +323,14 @@ cleanup queue 记录精确 schedule version、calendar hash 和原因。DU 确�
 
 这些字段是只读诊断，不改变状态。Digital 资源在本阶段只显示规划容量，仍标记为未绑定到真实数字业务运行态。
 
-## 12. 兼容与证据边界
+## 12. 兼容与实现边界
 
 - schema v3 只收敛管理中心输入、CU-CP 处理、恢复和只读观测，没有修改 F1AP、DU、MAC、PHY、RU/RF、Web/GIS 或 generated ASN.1。
 - 旧 `find_ntn_beam_id_by_nci`、beam-derived TAC/TAI/NGAP/Paging 和 per-beam NCI 路径继续作为默认关闭 profile 之外的兼容实现。
 - 新 L1 目录不永久保存 NCI/PCI，也不注入 legacy beam table。
 - 原始 PRACH detection 仍属于 PHY/DU/MAC；CU-CP 只管理计划、资源授权和可用 metadata 的 Initial UL 审计。
 - 当前没有 `(nci, position_id, cell_local_port, direction) -> hardware_beam_handle` 映射，也没有设备 `prepare_bank/arm_at/cancel/query` 回执。
-- 因此 software `applied` 不能写成 `device_applied`、RF 已执行或全球连续覆盖已经通过。
+- software `applied` 的含义固定为软件日历已经安装；`device_applied`、天线控制、RF 输出和全球连续覆盖由后续设备接口及系统验收给出。
 
 ## 13. 代码和验证入口
 
@@ -327,12 +350,18 @@ cleanup queue 记录精确 schedule version、calendar hash 和原因。DU 确�
 - `tests/unittests/cu_cp/cu_cp_ntn_mobility_test.cpp`
 - `tests/unittests/apps/units/o_cu_cp/cu_cp/cu_cp_unit_config_test.cpp`
 
-阶段性命令：
+Focused validation 命令：
 
 ```bash
+node --test \
+  utils/ntn/versioned_position_plan_v3.test.mjs \
+  utils/ntn/constellation_plan_export.test.mjs \
+  utils/ntn/constellation_replay_plan_export.test.mjs
 cmake --build build/ai-clean --target ntn_mobility_test -j1
-ctest --test-dir build/ai-clean -R "ntn_mobility" --output-on-failure
-cmake --build build/ai-clean --target srsran_cu_cp cu_cp_test cu_cp_unit_config_test -j1
+build/ai-clean/tests/unittests/cu_cp/ntn_mobility/ntn_mobility_test \
+  --gtest_filter='ntn_onboard_position_plan.*:ntn_onboard_position_plan_state.*'
+cmake --build build/ai-clean --target cu_cp_test -j1
+cmake --build build/ai-clean --target cu_cp_unit_config_test -j1
 ```
 
 每次交付的实际通过数量和未运行项记录在 [NTN CU-CP Task Change Index](ntn_cucp_task_change_index.md)，不能用历史测试数替代当前验证结果。

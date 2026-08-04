@@ -499,6 +499,20 @@ For a more detailed task-to-change lookup, use
   semantics. Read-only status reports visible and assigned counts separately.
   The Node exporter and C++ use one fixed canonical hash vector. This changes
   no F1AP, DU, MAC, PHY, RU/RF or generated ASN.1 interface.
+- CUCP-045 bounds schema-v3 input and closes its CU-CP execution/restart path.
+  Plans are limited to 4 MiB, both position arrays to 65,536 entries and the
+  planning context identifiers to 256 UTF-8 bytes; recovery state is limited to
+  16 MiB without changing state schema v3. Oversize or growing input returns
+  `input_too_large` before partition/calendar work and leaves active, pending,
+  accepted high-water and the latest successfully parsed inventory unchanged.
+  Recovery reads reject state-file growth, and persisted cell assignments plus
+  cleanup tasks are bounded before vector reservation.
+  The Node producer uses the same limits and same-directory atomic replacement.
+  The 300-visible/87-assigned case sends only 87 positions (870 intents),
+  activates at the configured epoch and restores only after a DU query. An
+  empty assignment installs two empty calendars, while 257 assigned positions
+  return `schedule_overflow` and preserve the old active plan. The default-off
+  path does not read the plan file. No lower-layer interface changed.
 
 ## Protocol References
 
@@ -599,6 +613,12 @@ needs that layer.
   Schema v1/v2 intentionally keep their historical `assigned=visible`
   behavior and must not be used to encode a larger visibility inventory with a
   smaller service subset.
+- Never read plan or recovery files without an explicit bound. Current limits
+  are 4 MiB per plan, 16 MiB per recovery state, 65,536 entries in either
+  schema-v3 position array and 256 UTF-8 bytes for each planning context
+  identifier. Reject size or growth errors as `input_too_large` before `reserve`
+  and leave all previously accepted state untouched. Recovery cell-assignment
+  and cleanup arrays also need their 65,536 and 66 bounds before reservation.
 - Do not aggregate PRACH at satellite level. Every assigned L1 needs its own
   planned PRACH opportunity and corresponding uplink beam intent.
 - Do not assume adding satellites monotonically improves a Walker arrangement;

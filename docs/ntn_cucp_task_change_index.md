@@ -118,6 +118,7 @@ them casually.
 | CUCP-042 | Exact hidden-fallback expiry. A historical fallback hidden behind an early-confirmed future plan loses fallback eligibility at its own `valid_until`; CU-CP queues one exact `schedule_version`/`calendar_hash` cleanup with reason `historical_fallback_expired` before any same-instant activation. Pending state, version high-water, latest input and partition remain unchanged. The outstanding cleanup survives DU disconnection and restart, while later deployment failure cannot restore the expired plan. State/queue failure remains fail closed. State schema v2 and existing read-only OAM fields are reused; no F1AP, DU, MAC, PHY, RU/RF, Web/GIS or generated ASN.1 change is involved. | `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.*`, `lib/cu_cp/cu_cp_impl.cpp`, `tests/unittests/cu_cp/ntn_mobility/ntn_onboard_position_plan_test.cpp`, `tests/unittests/cu_cp/cu_cp_ntn_mobility_test.cpp`, runtime contract and agent memory. |
 | CUCP-043 | Fail-closed activation and bounded cleanup responsibility. DU prepare/query feedback records evidence but no longer publishes a pending plan as active inside the response path; the activation timer performs the one-time switch and exposes it only after the matching state update is durable. A blocked state store continues processing `valid_until` while suppressing new deployment, recovery confirmation and clear transmission. Uncommitted writes restore the last saved snapshot and apply expiry only; a replacement whose directory durability is uncertain keeps memory aligned with the replaced file, hides live evidence and requires restart reconciliation. State validation bounds historical clears plus active/pending together at 66 identities, preserving the exact cleanup that is created when a valid 64-clear + two-live state expires. Default-off terrestrial behavior is unchanged; no F1AP payload, DU/MAC, PHY, RU/RF, Web/GIS or generated ASN.1 change is involved. | `lib/cu_cp/cu_cp_impl.*`, `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.*`, `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan_state.*`, controller/state/CU-CP restart tests, runtime contract and agent memory. |
 | CUCP-044 | Management-center dual-set position plan. Private schema v3 carries the complete `visible_l1_positions` inventory and the independent `assigned_l1_position_ids` service subset in one canonical hash. CU-CP retains every visible entry, validates that each assigned ID is unique and visible, applies the 256/128 calendar capacities only to the assigned subset, then partitions and schedules only that subset without changing the two stable NCI/PCI identities. State schema v3 persists both collections and remains able to read schema v1/v2 with `assigned=visible` semantics. Read-only status reports visible and assigned counts separately. The headless Node exporter and C++ share a fixed golden hash. Default-off terrestrial behavior is unchanged; no F1AP, DU, MAC, PHY, RU/RF, Web/GIS or generated ASN.1 interface changed. | `utils/ntn/versioned_position_plan_v3.*`, `utils/ntn/constellation_*export*`, `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.*`, `ntn_onboard_position_plan_state.*`, `lib/cu_cp/cu_cp_impl.cpp`, `include/srsran/cu_cp/cu_cp_command_handler.h`, O-CU-CP `ntn_state`, focused Node/controller/state/CU-CP tests and NTN planning/runtime documents. |
+| CUCP-045 | Bounded schema-v3 input and complete CU-CP execution/restart flow. Plan files are limited to 4 MiB, both position arrays to 65,536 entries, planning-context identifiers to 256 UTF-8 bytes and recovery state to 16 MiB. Bounded reads reject oversize or growing input before large allocation or state changes; state cell-assignment and cleanup arrays are checked before vector reservation. The Node producer uses the same limits and atomic same-directory replacement. A 300-visible/87-assigned plan sends only 87 positions and 870 intents, activates without changing the two NCI/PCI identities and is restored only after a matching DU query. A 257-assigned plan returns `schedule_overflow` while preserving the old active plan; an empty assignment installs two empty cell calendars. Schema v1/v2 and the default-off terrestrial path retain their existing behavior. No F1AP, DU, MAC, PHY, RU/RF, Web/GIS or generated ASN.1 interface changed. | `utils/ntn/versioned_position_plan_v3.*`, `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.*`, `ntn_onboard_position_plan_state.*`, `lib/cu_cp/cu_cp_impl.cpp`, focused Node/controller/state/CU-CP/config tests and NTN planning/runtime documents. |
 | NTNPLAN-001 | Historical state before NTNPLAN-002: separated complete L1 visibility from unique service assignment in the offline planner and added a reproducible sampled comparison with a verified catalog content hash. At that point the Web displayed 3,528 satellites and treated 2,990 as an unselected coarse candidate. The 256/128 limits apply only to actual assignment, PRACH is planned per assigned L1, and the CU-CP at that point could not consume complete visibility and actual assignment as two independent sets. CUCP-044 later closed that input-contract gap. NTNPLAN-002 supersedes only the constellation decision status, not these planning boundaries. | `utils/ntn/constellation_screen.*`, `utils/ntn/scenarios/global_constellation_screen_v1*`, `docs/ntn_orbit_constellation_plan.md`, `docs/ntn_beam_hopping_access_plan.md`, Web planner source/tests and the separate `gh-pages` deployment. |
 | NTNPLAN-002 | Records the final engineering decision to use 46 planes × 65 satellites, 2,990 satellites in total. The 3,528-satellite model becomes a historical Web display comparison. The existing 720/720 fixed-step coverage and unique-assignment evidence supports the decision, while `selectedScenario=null` and `exact=false` continue to record that seven-day continuous coverage, N-1, gateway, power/interference and real-radio acceptance are unfinished. This does not claim CU-CP, DU, PHY/RU/RF or over-the-air execution. | `docs/ntn_orbit_constellation_plan.md`, `docs/ntn_beam_hopping_access_plan.md`, `docs/ntn_cucp_agent_memory.md`, Web planner source/tests and the separate `gh-pages` deployment. |
 
@@ -487,3 +488,38 @@ demo and lower-layer suites were not repeated because CUCP-044 changes only the
 private planning input, CU-CP state and read-only output; it leaves the existing
 calendar transport and lower-layer interfaces unchanged. Radio transmission
 and antenna steering remain outside this software-plan stage.
+
+CUCP-045 validation record (2026-08-05):
+
+```bash
+node --test \
+  utils/ntn/versioned_position_plan_v3.test.mjs \
+  utils/ntn/constellation_plan_export.test.mjs \
+  utils/ntn/constellation_replay_plan_export.test.mjs
+cmake --build build/ai-clean --target ntn_mobility_test -j1
+build/ai-clean/tests/unittests/cu_cp/ntn_mobility/ntn_mobility_test \
+  --gtest_filter='ntn_onboard_position_plan.*:ntn_onboard_position_plan_state.*'
+cmake --build build/ai-clean --target cu_cp_test -j1
+build/ai-clean/tests/unittests/cu_cp/cu_cp_test \
+  --gtest_filter='cu_cp_ntn_mobility_test.when_schema_v3_has_300_visible_and_87_assigned_then_only_assigned_calendar_is_applied_and_recovered:cu_cp_ntn_mobility_test.when_schema_v3_has_257_assigned_then_old_active_calendar_remains:cu_cp_ntn_mobility_test.when_schema_v3_assignment_is_empty_then_two_cell_deny_all_calendar_is_applied:cu_cp_ntn_mobility_test.when_position_plan_feature_is_disabled_then_configured_file_is_not_read:cu_cp_ntn_mobility_test.when_plan_reload_exceeds_input_limit_then_last_successful_state_is_unchanged'
+cmake --build build/ai-clean --target cu_cp_unit_config_test -j1
+build/ai-clean/tests/unittests/apps/units/o_cu_cp/cu_cp/cu_cp_unit_config_test \
+  --gtest_filter='cu_cp_unit_config.ntn_state_command_*:cu_cp_unit_config.default_terrestrial_config_keeps_ntn_disabled'
+git diff --check
+```
+
+The Node schema-v3/export/replay group passed 22/22. The position-plan and
+state-file group passed 77/77. The direct CU-CP execution, overflow, deny-all,
+oversize-reload and default-off group passed 5/5. The command/configuration
+group passed 5/5. All three requested CMake targets built successfully and
+`git diff --check` passed.
+
+These checks cover the exact 4 MiB and 16 MiB file boundaries, 65,536-entry and
+256-byte boundaries, plan/state read-time growth, pre-reserve state-array
+bounds, atomic producer replacement, canonical
+hash stability, schema v1/v2 compatibility, 300-visible/87-assigned execution
+and restart, 257-assigned overflow, empty assignment and terrestrial default
+off. The split demo and broad F1AP/MAC/RF suites were not repeated because
+CUCP-045 leaves their interfaces unchanged. In this contract, `applied` means
+the software calendar gate is installed; device and radio execution remain in
+the later hardware-control task.

@@ -48,6 +48,32 @@ not bound to the complete planning context. Schema v2 remains accepted and,
 like v1, is normalized to `assigned = visible` so existing plans keep their old
 meaning.
 
+## bounded_position_plan_input
+
+Plan producers and CU-CP use the same input bounds:
+
+- one UTF-8 plan file is at most 4 MiB;
+- `visible_l1_positions` and `assigned_l1_position_ids` each contain at most
+  65,536 entries; and
+- `planning_run_id`, catalog id, identity-registry version and access-profile id
+  are each at most 256 UTF-8 bytes.
+
+CU-CP reads a regular file in bounded chunks and checks the file before and
+after reading. Oversize input, growth during the read and either oversized
+array return `input_too_large` before array reservation, partitioning, calendar
+generation or state persistence. This rejection changes only the latest
+rejection status. Active and pending plans, accepted version high-water marks
+and the most recently parsed successful inventory remain unchanged. The OAM
+reason is machine readable; file paths and detailed I/O errors stay in logs.
+
+The Node producer checks the same limits before output and writes through a
+same-directory temporary file followed by sync and atomic replacement. A failed
+write leaves the previous target intact. Limit checks do not alter the schema-v3
+canonical hash. Recovery files are bounded at 16 MiB and continue to use state
+schema v3. Recovery reads also compare initial and final file sizes; growth is
+rejected before recovery. Persisted cell-assignment arrays and the cleanup queue
+are checked against their 65,536-entry and 66-identity bounds before `reserve`.
+
 ## assigned_l1_position_ids
 
 The exact `G######` subset that the current plan authorizes this satellite to
@@ -208,10 +234,20 @@ the complete accepted intent count for both cells.
 It is not evidence of antenna steering, a transmitted or received beam, PHY
 execution, RU state, or RF output.
 
+For the schema-v3 execution reference case, 300 visible positions and 87
+assigned positions produce a calendar for only those 87 ids: 696 SSB intents,
+87 PRACH ROs and 87 matching UL-beam intents, 870 intents in total. The plan
+passes prepare and application before the activation timer publishes it. A
+restart queries DU before restoring the 300/87 state. An assignment of 257 ids
+returns `schedule_overflow` and leaves the old active plan in service. An empty
+assignment prepares two empty cell calendars as an explicit deny-all software
+gate.
+
 ## onboard_plan_recovery_state
 
 When DU calendar execution is enabled, CU-CP requires a private `state_file`.
-Dry-run mode does not require it. The file is atomically replaced and records:
+Dry-run mode does not require it. The file is limited to 16 MiB, is atomically
+replaced and records:
 
 - the highest accepted catalog and schedule versions;
 - the active and pending plans, including their exact two-cell L1 partition,
