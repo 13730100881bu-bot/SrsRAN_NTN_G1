@@ -1,6 +1,6 @@
 # NTN CU-CP Agent Memory
 
-Last updated: 2026-07-19
+Last updated: 2026-08-05
 
 This file is the compact handoff memory for future conversations. It keeps the
 durable NTN CU-CP design context without pulling in the old project-management
@@ -513,6 +513,26 @@ For a more detailed task-to-change lookup, use
   empty assignment installs two empty calendars, while 257 assigned positions
   return `schedule_overflow` and preserve the old active plan. The default-off
   path does not read the plan file. No lower-layer interface changed.
+- CUCP-046 adds authenticated schema-v4 management plans and an independent
+  software version record. Schema v4 keeps the schema-v3 visible/assigned
+  contract and adds `authentication.algorithm`, `key_id` and an ASN.1 DER
+  ECDSA signature in canonical base64. The fixed algorithm is
+  `ecdsa-p256-sha256`; CU-CP selects only locally configured P-256 public keys,
+  rejects duplicate JSON members, bounds cross-language integers and permits
+  only delimiter-safe identifiers in the signed canonical form. It then
+  reports their SHA-256 SPKI fingerprint and re-verifies the complete signed
+  high-water source after restart. Signed execution reserves the new plan
+  identity in `version_anchor_file`, durably stores state schema v4, commits the
+  version record and only then permits DU software-calendar preparation.
+  Restart requires the signed state and independent version record to agree on
+  satellite, planning context, two NCI/PCI identities, catalog/schedule
+  versions, content hash and key ID; a mismatch or rollback fails closed.
+  OAM exposes signature and version-record status without public protocol
+  changes. The anchor mode is explicitly `software_only`: it catches ordinary
+  state-only rollback but cannot replace HSM/TPM/trusted monotonic storage or
+  detect a coordinated rollback/deletion of both local files. `applied` remains
+  the installed software access calendar, not PHY/RU/RF or over-the-air execution.
+  See `docs/ntn_schema_v4_signed_plan.md`.
 
 ## Protocol References
 
@@ -613,6 +633,16 @@ needs that layer.
   Schema v1/v2 intentionally keep their historical `assigned=visible`
   behavior and must not be used to encode a larger visibility inventory with a
   smaller service subset.
+- Use schema v4 when deployment policy requires authenticated management input.
+  Keep the signing private key outside CU-CP and the repository; configure only
+  bounded local P-256 public keys with unique `key_id` values. In signed mode,
+  schema v1/v2/v3 must be rejected as `signature_required`, and restart must
+  re-verify the complete signed high-water plan rather than trusting saved
+  version numbers alone.
+- Treat `version_anchor_mode=software_only` literally. The separate file can
+  detect a state-only rollback or missing counterpart, but both files share one
+  host trust domain. Coordinated rollback/deletion requires HSM, TPM or another
+  trusted monotonic store to detect.
 - Never read plan or recovery files without an explicit bound. Current limits
   are 4 MiB per plan, 16 MiB per recovery state, 65,536 entries in either
   schema-v3 position array and 256 UTF-8 bytes for each planning context
