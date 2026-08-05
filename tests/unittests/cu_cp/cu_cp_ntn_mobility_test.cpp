@@ -24,6 +24,7 @@
 #include "lib/cu_cp/cu_cp_impl.h"
 #include "lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.h"
 #include "lib/cu_cp/ntn_mobility/ntn_onboard_position_plan_state.h"
+#include "lib/cu_cp/ntn_mobility/ntn_plan_version_anchor.h"
 #include "lib/f1ap/asn1_helpers.h"
 #include "lib/ngap/ngap_asn1_converters.h"
 #include "lib/rrc/ue/rrc_measurement_types_asn1_converters.h"
@@ -56,6 +57,11 @@
 #include <fstream>
 #include <gtest/gtest.h>
 #include <iterator>
+#include <mbedtls/base64.h>
+#include <mbedtls/ctr_drbg.h>
+#include <mbedtls/entropy.h>
+#include <mbedtls/md.h>
+#include <mbedtls/pk.h>
 #include <set>
 #include <thread>
 #include <utility>
@@ -168,6 +174,11 @@ std::filesystem::path write_onboard_position_plan_for_runtime_test(const ntn_ver
   if (plan.schema_version >= 3) {
     root["assigned_l1_position_ids"] = plan.assigned_l1_position_ids;
   }
+  if (plan.schema_version >= 4 && plan.authentication.has_value()) {
+    root["authentication"] = {{"algorithm", plan.authentication->algorithm},
+                              {"key_id", plan.authentication->key_id},
+                              {"signature_base64", plan.authentication->signature_base64}};
+  }
 
   const auto unique_suffix = std::chrono::steady_clock::now().time_since_epoch().count();
   const std::filesystem::path path =
@@ -178,6 +189,19 @@ std::filesystem::path write_onboard_position_plan_for_runtime_test(const ntn_ver
   return path;
 }
 
+std::string read_runtime_test_file(const std::filesystem::path& path)
+{
+  std::ifstream input(path, std::ios::binary);
+  return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+}
+
+void write_runtime_test_file(const std::filesystem::path& path, const std::string& contents)
+{
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+  srsran_assert(output.good(), "Failed to write NTN runtime test file");
+}
+
 struct temporary_plan_file_guard {
   explicit temporary_plan_file_guard(std::filesystem::path path_) : path(std::move(path_)) {}
   ~temporary_plan_file_guard()
@@ -186,15 +210,103 @@ struct temporary_plan_file_guard {
     std::filesystem::remove(path, error);
     const std::filesystem::path state_path{path.string() + ".state"};
     std::filesystem::remove(state_path, error);
-    const std::string state_temp_prefix = fmt::format(".{}.tmp.", state_path.filename().string());
+    const std::filesystem::path anchor_path{path.string() + ".anchor"};
+    std::filesystem::remove(anchor_path, error);
+    const std::string state_temp_prefix  = fmt::format(".{}.tmp.", state_path.filename().string());
+    const std::string anchor_temp_prefix = fmt::format(".{}.tmp-", anchor_path.filename().string());
     for (const auto& entry : std::filesystem::directory_iterator(path.parent_path(), error)) {
-      if (entry.path().filename().string().rfind(state_temp_prefix, 0) == 0) {
+      const std::string filename = entry.path().filename().string();
+      if (filename.rfind(state_temp_prefix, 0) == 0 || filename.rfind(anchor_temp_prefix, 0) == 0) {
         std::filesystem::remove(entry.path(), error);
       }
     }
   }
   std::filesystem::path path;
 };
+
+std::vector<ntn_versioned_position_plan>
+sign_schema_v4_runtime_plans(std::vector<ntn_versioned_position_plan> plans,
+                             const std::filesystem::path&             public_key_path,
+                             const std::string&                       key_id)
+{
+  mbedtls_entropy_context entropy;
+  mbedtls_ctr_drbg_context random;
+  mbedtls_pk_context key;
+  mbedtls_entropy_init(&entropy);
+  mbedtls_ctr_drbg_init(&random);
+  mbedtls_pk_init(&key);
+  const std::string personalization = "srsran-ntn-schema-v4-runtime-test";
+  srsran_assert(mbedtls_ctr_drbg_seed(&random,
+                                      mbedtls_entropy_func,
+                                      &entropy,
+                                      reinterpret_cast<const unsigned char*>(personalization.data()),
+                                      personalization.size()) == 0,
+                "Failed to seed schema-v4 test signer");
+  srsran_assert(mbedtls_pk_setup(&key, mbedtls_pk_info_from_type(MBEDTLS_PK_ECKEY)) == 0,
+                "Failed to initialize schema-v4 test signer");
+  srsran_assert(mbedtls_ecp_gen_key(
+                    MBEDTLS_ECP_DP_SECP256R1, mbedtls_pk_ec(key), mbedtls_ctr_drbg_random, &random) == 0,
+                "Failed to generate schema-v4 test key");
+
+  std::array<unsigned char, 2048> public_key_pem{};
+  srsran_assert(mbedtls_pk_write_pubkey_pem(&key, public_key_pem.data(), public_key_pem.size()) == 0,
+                "Failed to encode schema-v4 test public key");
+  {
+    std::ofstream output(public_key_path, std::ios::binary | std::ios::trunc);
+    output << reinterpret_cast<const char*>(public_key_pem.data());
+    srsran_assert(output.good(), "Failed to write schema-v4 test public key");
+  }
+
+  const mbedtls_md_info_t* md_info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+  srsran_assert(md_info != nullptr, "SHA-256 is unavailable for schema-v4 runtime signing");
+  for (ntn_versioned_position_plan& plan : plans) {
+    plan.schema_version = 4;
+    plan.content_hash   = compute_ntn_position_plan_content_hash(plan);
+    plan.authentication = ntn_position_plan_authentication{ntn_position_plan_signature_algorithm, key_id, {}};
+
+    const std::string payload = compute_ntn_position_plan_signature_payload(plan);
+    std::array<unsigned char, 32> digest{};
+    srsran_assert(mbedtls_md(md_info,
+                             reinterpret_cast<const unsigned char*>(payload.data()),
+                             payload.size(),
+                             digest.data()) == 0,
+                  "Failed to hash schema-v4 test signature payload");
+    std::array<unsigned char, max_ntn_position_plan_signature_size> signature{};
+    size_t signature_size = 0;
+    srsran_assert(mbedtls_pk_sign(&key,
+                                  MBEDTLS_MD_SHA256,
+                                  digest.data(),
+                                  digest.size(),
+                                  signature.data(),
+                                  &signature_size,
+                                  mbedtls_ctr_drbg_random,
+                                  &random) == 0,
+                  "Failed to sign schema-v4 runtime plan");
+    std::array<unsigned char, 512> encoded_signature{};
+    size_t encoded_size = 0;
+    srsran_assert(mbedtls_base64_encode(encoded_signature.data(),
+                                        encoded_signature.size(),
+                                        &encoded_size,
+                                        signature.data(),
+                                        signature_size) == 0,
+                  "Failed to encode schema-v4 runtime signature");
+    plan.authentication->signature_base64.assign(reinterpret_cast<const char*>(encoded_signature.data()), encoded_size);
+  }
+
+  mbedtls_pk_free(&key);
+  mbedtls_ctr_drbg_free(&random);
+  mbedtls_entropy_free(&entropy);
+  return plans;
+}
+
+ntn_versioned_position_plan sign_schema_v4_runtime_plan(ntn_versioned_position_plan plan,
+                                                        const std::filesystem::path& public_key_path,
+                                                        const std::string&           key_id)
+{
+  auto signed_plans =
+      sign_schema_v4_runtime_plans({std::move(plan)}, public_key_path, key_id);
+  return std::move(signed_plans.front());
+}
 
 ntn_versioned_position_plan make_schema_v3_runtime_plan(unsigned             visible_positions,
                                                         unsigned             assigned_positions,
@@ -1927,6 +2039,187 @@ TEST(cu_cp_ntn_mobility_test, versioned_two_cell_calendar_is_prepared_and_activa
     EXPECT_EQ(status.cells[0].active_l1_positions + status.cells[1].active_l1_positions,
               plan.visible_l1_positions.size());
   }
+}
+
+TEST(cu_cp_ntn_mobility_test, schema_v4_signed_calendar_is_applied_persisted_and_reverified_on_restart)
+{
+  const nr_cell_identity first_nci  = make_default_env_nci(0);
+  const nr_cell_identity second_nci = make_default_env_nci(1);
+  constexpr pci_t        shared_pci = 101;
+  constexpr const char*  signing_key_id = "ntn-runtime-test-key-v1";
+  const int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::system_clock::now().time_since_epoch())
+                             .count();
+  const int64_t activation_ms = ((now_ms + 1000 + 639) / 640) * 640;
+  const auto activation_epoch =
+      std::chrono::system_clock::time_point{std::chrono::milliseconds{activation_ms}};
+  ntn_versioned_position_plan plan = make_schema_v3_runtime_plan(12,
+                                                                  6,
+                                                                  70,
+                                                                  80,
+                                                                  first_nci,
+                                                                  second_nci,
+                                                                  shared_pci,
+                                                                  activation_epoch,
+                                                                  activation_epoch + std::chrono::seconds{10});
+  const auto unique_suffix = std::chrono::steady_clock::now().time_since_epoch().count();
+  const std::filesystem::path public_key_path =
+      std::filesystem::temp_directory_path() / fmt::format("srsran-ntn-signing-key-{}.pem", unique_suffix);
+  temporary_plan_file_guard public_key_guard(public_key_path);
+  plan = sign_schema_v4_runtime_plan(std::move(plan), public_key_path, signing_key_id);
+  const std::filesystem::path plan_path = write_onboard_position_plan_for_runtime_test(plan);
+  temporary_plan_file_guard   plan_file_guard(plan_path);
+
+  auto source                    = make_schema_v3_runtime_source(plan, plan_path);
+  source.require_signed_plan     = true;
+  source.version_anchor_file     = plan_path.string() + ".anchor";
+  source.trusted_signing_keys    = {{signing_key_id, public_key_path.string()}};
+
+  {
+    cu_cp_test_env_params env_params;
+    env_params.ntn_onboard_position_plan = source;
+    cu_cp_test_environment env(std::move(env_params));
+    env.run_ng_setup();
+    const auto du_idx = env.connect_new_du();
+    ASSERT_TRUE(du_idx.has_value());
+    ASSERT_TRUE(env.run_f1_setup(
+        du_idx.value(), int_to_gnb_du_id(0x41), make_onboard_served_cells(first_nci, second_nci, shared_pci)));
+
+    f1ap_message ignored;
+    (void)env.wait_for_f1ap_tx_pdu(du_idx.value(), ignored, std::chrono::milliseconds{2600});
+    const auto status = env.get_cu_cp()
+                            .get_command_handler()
+                            .get_ntn_command_handler()
+                            .get_current_ntn_runtime_status()
+                            .onboard_position_plan;
+    EXPECT_EQ(status.stage, "active");
+    EXPECT_EQ(status.deployment_stage, "applied");
+    EXPECT_EQ(status.active_schedule_version, plan.schedule_version);
+    EXPECT_TRUE(status.signature_required);
+    EXPECT_EQ(status.signature_status, "verified");
+    EXPECT_EQ(status.signing_key_id, signing_key_id);
+    EXPECT_NE(status.signing_key_fingerprint, "none");
+    EXPECT_EQ(status.state_schema_version, 4U);
+    EXPECT_EQ(status.version_anchor_mode, "software_only");
+    EXPECT_EQ(status.version_anchor_status, "committed");
+    EXPECT_EQ(status.version_anchor_schedule_version, plan.schedule_version);
+    EXPECT_FALSE(status.state_write_blocked);
+  }
+
+  auto persisted_state = load_ntn_onboard_position_plan_state(source.state_file);
+  ASSERT_TRUE(persisted_state.has_value()) << persisted_state.error();
+  ASSERT_TRUE(persisted_state->has_value());
+  ASSERT_TRUE((*persisted_state)->version_anchor_source.has_value());
+  EXPECT_EQ((*persisted_state)->version_anchor_source->authentication->key_id, signing_key_id);
+  auto persisted_anchor = load_ntn_plan_version_anchor(source.version_anchor_file);
+  ASSERT_TRUE(persisted_anchor.has_value()) << persisted_anchor.error();
+  ASSERT_TRUE(persisted_anchor->has_value());
+  ASSERT_TRUE((*persisted_anchor)->committed.has_value());
+  EXPECT_EQ((*persisted_anchor)->committed->schedule_version, plan.schedule_version);
+
+  cu_cp_test_env_params restarted_params;
+  restarted_params.ntn_onboard_position_plan = source;
+  cu_cp_test_environment restarted(std::move(restarted_params));
+  restarted.run_ng_setup();
+  const auto restarted_status = restarted.get_cu_cp()
+                                    .get_command_handler()
+                                    .get_ntn_command_handler()
+                                    .get_current_ntn_runtime_status()
+                                    .onboard_position_plan;
+  EXPECT_EQ(restarted_status.recovery_stage, "reconciling");
+  EXPECT_EQ(restarted_status.signature_status, "verified");
+  EXPECT_EQ(restarted_status.version_anchor_status, "committed");
+  EXPECT_FALSE(restarted_status.state_write_blocked);
+}
+
+TEST(cu_cp_ntn_mobility_test, schema_v4_restart_rejects_a_state_file_rolled_back_below_the_version_anchor)
+{
+  const nr_cell_identity first_nci  = make_default_env_nci(0);
+  const nr_cell_identity second_nci = make_default_env_nci(1);
+  constexpr pci_t        shared_pci = 101;
+  constexpr const char*  signing_key_id = "ntn-runtime-replay-key-v1";
+  const int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::system_clock::now().time_since_epoch())
+                             .count();
+  const int64_t activation_ms = ((now_ms + 60000 + 639) / 640) * 640;
+  const auto activation_epoch =
+      std::chrono::system_clock::time_point{std::chrono::milliseconds{activation_ms}};
+  ntn_versioned_position_plan older = make_schema_v3_runtime_plan(8,
+                                                                   4,
+                                                                   90,
+                                                                   100,
+                                                                   first_nci,
+                                                                   second_nci,
+                                                                   shared_pci,
+                                                                   activation_epoch,
+                                                                   activation_epoch + std::chrono::seconds{120});
+  ntn_versioned_position_plan newer = make_schema_v3_runtime_plan(10,
+                                                                   5,
+                                                                   91,
+                                                                   101,
+                                                                   first_nci,
+                                                                   second_nci,
+                                                                   shared_pci,
+                                                                   activation_epoch + std::chrono::milliseconds{640},
+                                                                   activation_epoch + std::chrono::seconds{120});
+  const auto unique_suffix = std::chrono::steady_clock::now().time_since_epoch().count();
+  const std::filesystem::path public_key_path =
+      std::filesystem::temp_directory_path() / fmt::format("srsran-ntn-replay-key-{}.pem", unique_suffix);
+  temporary_plan_file_guard public_key_guard(public_key_path);
+  auto signed_plans = sign_schema_v4_runtime_plans(
+      {std::move(older), std::move(newer)}, public_key_path, signing_key_id);
+  older = std::move(signed_plans[0]);
+  newer = std::move(signed_plans[1]);
+  const std::filesystem::path plan_path = write_onboard_position_plan_for_runtime_test(older);
+  temporary_plan_file_guard   plan_file_guard(plan_path);
+  const std::filesystem::path newer_path = write_onboard_position_plan_for_runtime_test(newer);
+  temporary_plan_file_guard   newer_file_guard(newer_path);
+
+  auto source                 = make_schema_v3_runtime_source(older, plan_path);
+  source.require_signed_plan  = true;
+  source.version_anchor_file  = plan_path.string() + ".anchor";
+  source.trusted_signing_keys = {{signing_key_id, public_key_path.string()}};
+  source.reload_period        = std::chrono::milliseconds{50};
+  std::string older_state_bytes;
+  {
+    cu_cp_test_env_params params;
+    params.ntn_onboard_position_plan = source;
+    cu_cp_test_environment env(std::move(params));
+    env.run_ng_setup();
+    ASSERT_TRUE(wait_for_test_condition([&env, &older]() {
+      return env.get_cu_cp()
+                 .get_command_handler()
+                 .get_ntn_command_handler()
+                 .get_current_ntn_runtime_status()
+                 .onboard_position_plan.pending_schedule_version == older.schedule_version;
+    }));
+    older_state_bytes = read_runtime_test_file(source.state_file);
+    ASSERT_FALSE(older_state_bytes.empty());
+    write_runtime_test_file(plan_path, read_runtime_test_file(newer_path));
+    ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{1000}, [&env, &newer]() {
+      return env.get_cu_cp()
+                 .get_command_handler()
+                 .get_ntn_command_handler()
+                 .get_current_ntn_runtime_status()
+                 .onboard_position_plan.pending_schedule_version == newer.schedule_version;
+    }));
+  }
+
+  write_runtime_test_file(source.state_file, older_state_bytes);
+  cu_cp_test_env_params restarted_params;
+  restarted_params.ntn_onboard_position_plan = source;
+  cu_cp_test_environment restarted(std::move(restarted_params));
+  restarted.run_ng_setup();
+  const auto status = restarted.get_cu_cp()
+                          .get_command_handler()
+                          .get_ntn_command_handler()
+                          .get_current_ntn_runtime_status()
+                          .onboard_position_plan;
+  EXPECT_TRUE(status.state_write_blocked);
+  EXPECT_EQ(status.last_rejection, "version_replay");
+  EXPECT_EQ(status.version_anchor_error, "version_replay");
+  EXPECT_EQ(status.active_schedule_version, 0U);
+  EXPECT_EQ(status.pending_schedule_version, 0U);
 }
 
 TEST(cu_cp_ntn_mobility_test, restart_preserves_rejected_257_position_inventory_as_observation_only)

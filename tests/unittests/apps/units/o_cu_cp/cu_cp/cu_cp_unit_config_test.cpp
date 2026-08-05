@@ -259,11 +259,14 @@ TEST(cu_cp_unit_config, default_terrestrial_config_keeps_ntn_disabled)
   ASSERT_EQ(ntn_cfg.satellite_state_update.update_period, std::chrono::milliseconds(0));
   ASSERT_FALSE(cu_cp_cfg.mobility.onboard_position_plan.enabled);
   ASSERT_FALSE(cu_cp_cfg.mobility.onboard_position_plan.du_execution_enabled);
+  ASSERT_FALSE(cu_cp_cfg.mobility.onboard_position_plan.require_signed_plan);
+  ASSERT_TRUE(cu_cp_cfg.mobility.onboard_position_plan.trusted_signing_keys.empty());
   ASSERT_EQ(cu_cp_cfg.mobility.onboard_position_plan.du_prepare_guard, std::chrono::milliseconds{1000});
   ASSERT_EQ(cu_cp_cfg.mobility.onboard_position_plan.du_prepare_horizon, std::chrono::milliseconds{4000});
   ASSERT_EQ(cu_cp_cfg.mobility.onboard_position_plan.du_apply_timeout, std::chrono::milliseconds{500});
   ASSERT_TRUE(cu_cp_cfg.mobility.onboard_position_plan.plan_json_file.empty());
   ASSERT_TRUE(cu_cp_cfg.mobility.onboard_position_plan.state_file.empty());
+  ASSERT_TRUE(cu_cp_cfg.mobility.onboard_position_plan.version_anchor_file.empty());
 }
 
 TEST(cu_cp_unit_config, onboard_position_plan_is_an_independent_opt_in_profile)
@@ -271,6 +274,12 @@ TEST(cu_cp_unit_config, onboard_position_plan_is_an_independent_opt_in_profile)
   cu_cp_unit_config cfg;
   cfg.mobility_config.ntn_onboard_position_plan.enabled          = true;
   cfg.mobility_config.ntn_onboard_position_plan.du_execution_enabled = true;
+  cfg.mobility_config.ntn_onboard_position_plan.require_signed_plan = true;
+  cfg.mobility_config.ntn_onboard_position_plan.trusted_signing_keys = {
+      {"planning-key-2026-01", "keys/planning-key-2026-01.pem"},
+      {"planning-key-2026-02", "keys/planning-key-2026-02.pem"}};
+  cfg.mobility_config.ntn_onboard_position_plan.version_anchor_file =
+      "ntn-onboard-position-plan-version-anchor.json";
   cfg.mobility_config.ntn_onboard_position_plan.satellite_id                    = "P01-S01";
   cfg.mobility_config.ntn_onboard_position_plan.plan_json_file   = "management-center-plan.json";
   cfg.mobility_config.ntn_onboard_position_plan.reload_period_ms = 2000;
@@ -296,9 +305,16 @@ TEST(cu_cp_unit_config, onboard_position_plan_is_an_independent_opt_in_profile)
   EXPECT_FALSE(cu_cp_cfg.mobility.meas_manager_config.ntn_location_mobility.enabled);
   EXPECT_TRUE(cu_cp_cfg.mobility.onboard_position_plan.enabled);
   EXPECT_TRUE(cu_cp_cfg.mobility.onboard_position_plan.du_execution_enabled);
+  EXPECT_TRUE(cu_cp_cfg.mobility.onboard_position_plan.require_signed_plan);
+  ASSERT_EQ(cu_cp_cfg.mobility.onboard_position_plan.trusted_signing_keys.size(), 2U);
+  EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.trusted_signing_keys[0].key_id, "planning-key-2026-01");
+  EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.trusted_signing_keys[0].public_key_file,
+            "keys/planning-key-2026-01.pem");
   EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.satellite_id, "P01-S01");
   EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.plan_json_file, "management-center-plan.json");
   EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.state_file, "ntn-onboard-position-plan-state.json");
+  EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.version_anchor_file,
+            "ntn-onboard-position-plan-version-anchor.json");
   EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.expected_catalog_id, "global-land-l1-v1");
   EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.expected_catalog_hash,
             "sha256:b39fe9c3ee9a9355b3546036b7f16e0fb858c953f8558cc4295122f2169fbe7a");
@@ -327,6 +343,13 @@ TEST(cu_cp_unit_config, onboard_position_plan_is_an_independent_opt_in_profile)
   EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.activation_alignment, std::chrono::milliseconds{640});
   EXPECT_EQ(yaml_plan["expected_catalog_id"].as<std::string>(), "global-land-l1-v1");
   EXPECT_EQ(yaml_plan["state_file"].as<std::string>(), "ntn-onboard-position-plan-state.json");
+  EXPECT_TRUE(yaml_plan["require_signed_plan"].as<bool>());
+  EXPECT_EQ(yaml_plan["version_anchor_file"].as<std::string>(),
+            "ntn-onboard-position-plan-version-anchor.json");
+  ASSERT_EQ(yaml_plan["trusted_signing_keys"].size(), 2U);
+  EXPECT_EQ(yaml_plan["trusted_signing_keys"][0]["key_id"].as<std::string>(), "planning-key-2026-01");
+  EXPECT_EQ(yaml_plan["trusted_signing_keys"][0]["public_key_file"].as<std::string>(),
+            "keys/planning-key-2026-01.pem");
   EXPECT_EQ(yaml_plan["expected_catalog_hash"].as<std::string>(),
             "sha256:b39fe9c3ee9a9355b3546036b7f16e0fb858c953f8558cc4295122f2169fbe7a");
   EXPECT_EQ(yaml_plan["expected_identity_registry_version"].as<std::string>(), "mc-ntn-onboard-cell-registry-v1");
@@ -388,6 +411,65 @@ TEST(cu_cp_unit_config, onboard_position_plan_state_file_is_execution_only_and_m
   EXPECT_FALSE(validate_cu_cp_unit_config(cfg));
 
   plan.state_file = "ntn-onboard-position-plan-state.json";
+  EXPECT_TRUE(validate_cu_cp_unit_config(cfg));
+
+  plan.require_signed_plan = true;
+  plan.trusted_signing_keys = {{"planning-key", "keys/planning-key.pem"}};
+  EXPECT_FALSE(validate_cu_cp_unit_config(cfg));
+
+  plan.version_anchor_file = plan.plan_json_file;
+  EXPECT_FALSE(validate_cu_cp_unit_config(cfg));
+
+  plan.version_anchor_file = "recovery/../ntn-onboard-position-plan-state.json";
+  EXPECT_FALSE(validate_cu_cp_unit_config(cfg));
+
+  plan.version_anchor_file = "ntn-onboard-position-plan-version-anchor.json";
+  EXPECT_TRUE(validate_cu_cp_unit_config(cfg));
+}
+
+TEST(cu_cp_unit_config, signed_onboard_position_plan_requires_complete_unique_trusted_keys)
+{
+  cu_cp_unit_config cfg;
+  auto&             plan = cfg.mobility_config.ntn_onboard_position_plan;
+
+  plan.require_signed_plan = true;
+  EXPECT_FALSE(validate_cu_cp_unit_config(cfg));
+
+  plan.enabled        = true;
+  plan.satellite_id   = "P01-S01";
+  plan.plan_json_file = "management-center-plan.json";
+  plan.cell_ncis      = {0x123450001ULL, 0x123450002ULL};
+  plan.cell_pcis      = {101, 101};
+  set_onboard_planning_context(plan);
+  EXPECT_FALSE(validate_cu_cp_unit_config(cfg));
+
+  plan.trusted_signing_keys = {{"", "keys/planning-key.pem"}};
+  EXPECT_FALSE(validate_cu_cp_unit_config(cfg));
+
+  plan.trusted_signing_keys = {{"planning-key", ""}};
+  EXPECT_FALSE(validate_cu_cp_unit_config(cfg));
+
+  plan.trusted_signing_keys = {{"planning-key", "keys/planning-key.pem"}};
+  EXPECT_TRUE(validate_cu_cp_unit_config(cfg));
+
+  const std::string catalog_id = plan.expected_catalog_id;
+  plan.expected_catalog_id     = "catalog,ambiguous";
+  EXPECT_FALSE(validate_cu_cp_unit_config(cfg));
+  plan.expected_catalog_id = catalog_id;
+
+  plan.trusted_signing_keys.push_back({"planning-key", "keys/next-key.pem"});
+  EXPECT_FALSE(validate_cu_cp_unit_config(cfg));
+
+  plan.trusted_signing_keys.back() = {"next-key", "keys/../keys/planning-key.pem"};
+  EXPECT_FALSE(validate_cu_cp_unit_config(cfg));
+
+  plan.trusted_signing_keys.back() = {"next key", "keys/next-key.pem"};
+  EXPECT_FALSE(validate_cu_cp_unit_config(cfg));
+
+  plan.trusted_signing_keys.back() = {"next-key", plan.plan_json_file};
+  EXPECT_FALSE(validate_cu_cp_unit_config(cfg));
+
+  plan.trusted_signing_keys.back() = {"next-key", "keys/next-key.pem"};
   EXPECT_TRUE(validate_cu_cp_unit_config(cfg));
 }
 

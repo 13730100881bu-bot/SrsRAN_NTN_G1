@@ -40,6 +40,7 @@
 #include "ntn_mobility/ntn_beam_tac.h"
 #include "ntn_mobility/ntn_onboard_position_plan.h"
 #include "ntn_mobility/ntn_onboard_position_plan_state.h"
+#include "ntn_mobility/ntn_plan_version_anchor.h"
 #include "ntn_mobility/ntn_satellite_state_updater.h"
 #include "ntn_mobility/ntn_served_beam_scheduler.h"
 #include "ntn_mobility/ntn_service_switch_over_controller.h"
@@ -706,6 +707,8 @@ private:
   using ntn_position_plan_clear_entry = std::pair<ntn_activated_position_plan, std::string>;
   void reload_ntn_onboard_position_plan();
   void restore_ntn_onboard_position_plan_state();
+  ntn_state_persist_outcome persist_new_signed_ntn_position_plan_locked(
+      const ntn_versioned_position_plan& plan, const char* reason);
   ntn_state_persist_outcome persist_ntn_onboard_position_plan_state_locked(const char* reason,
                                                                             bool omit_clear_queue_head = false);
   void restore_ntn_onboard_position_plan_checkpoint_fail_closed_locked(
@@ -757,6 +760,10 @@ private:
   std::string                                                      ntn_position_plan_state_error;
   int64_t                                                          ntn_position_plan_state_last_save_unix_ms = -1;
   bool                                                             ntn_position_plan_state_write_blocked     = false;
+  std::optional<ntn_plan_version_anchor_state>                      ntn_position_plan_version_anchor;
+  std::string                                                       ntn_position_plan_version_anchor_status = "disabled";
+  std::string                                                       ntn_position_plan_version_anchor_error  = "none";
+  std::string                                                       ntn_position_plan_version_anchor_hash;
 
   ntn_beam_placement_planner ntn_beam_planner;
   ntn_beam_placement_plan    current_ntn_beam_placement_plan;

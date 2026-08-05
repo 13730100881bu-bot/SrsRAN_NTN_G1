@@ -274,9 +274,17 @@ build_cu_cp_ntn_onboard_position_plan_section(const cu_cp_unit_ntn_onboard_posit
   YAML::Node node;
   node["enabled"]          = config.enabled;
   node["du_execution_enabled"] = config.du_execution_enabled;
+  node["require_signed_plan"] = config.require_signed_plan;
   node["satellite_id"]     = config.satellite_id;
   node["plan_json_file"]   = config.plan_json_file;
   node["state_file"]                         = config.state_file;
+  node["version_anchor_file"]                = config.version_anchor_file;
+  for (const cu_cp_unit_ntn_position_plan_trusted_key_config& key : config.trusted_signing_keys) {
+    YAML::Node key_node;
+    key_node["key_id"]          = key.key_id;
+    key_node["public_key_file"] = key.public_key_file;
+    node["trusted_signing_keys"].push_back(key_node);
+  }
   node["expected_catalog_id"]                = config.expected_catalog_id;
   node["expected_catalog_hash"]              = config.expected_catalog_hash;
   node["expected_identity_registry_version"] = config.expected_identity_registry_version;

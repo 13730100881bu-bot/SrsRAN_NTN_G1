@@ -269,6 +269,13 @@ static void configure_cli11_ntn_circular_orbit_satellite_args(CLI::App& app,
   add_option(app, "--epoch_unix_s", config.epoch_unix_s, "Circular orbit epoch as Unix seconds");
 }
 
+static void configure_cli11_ntn_position_plan_trusted_key_args(
+    CLI::App& app, cu_cp_unit_ntn_position_plan_trusted_key_config& config)
+{
+  add_option(app, "--key_id", config.key_id, "Management-center signing key identifier");
+  add_option(app, "--public_key_file", config.public_key_file, "Path to the trusted public-key file");
+}
+
 static void configure_cli11_ncell_args(CLI::App& app, cu_cp_unit_neighbor_cell_config_item& config)
 {
   add_option(app, "--nr_cell_id", config.nr_cell_id, "Neighbor cell id")
@@ -618,6 +625,11 @@ static void configure_cli11_mobility_args(CLI::App& app, cu_cp_unit_mobility_con
              "Deploy checked calendars to DU/MAC; applied means software scheduler state, not RF telemetry")
       ->capture_default_str();
   add_option(*ntn_position_plan_subcmd,
+             "--require_signed_plan",
+             config.ntn_onboard_position_plan.require_signed_plan,
+             "Require every accepted position plan to have a valid management-center signature")
+      ->capture_default_str();
+  add_option(*ntn_position_plan_subcmd,
              "--satellite_id",
              config.ntn_onboard_position_plan.satellite_id,
              "Stable local satellite identifier expected in the position plan")
@@ -632,6 +644,27 @@ static void configure_cli11_mobility_args(CLI::App& app, cu_cp_unit_mobility_con
              config.ntn_onboard_position_plan.state_file,
              "Private durable recovery-state file; required when DU calendar execution is enabled")
       ->capture_default_str();
+  add_option(*ntn_position_plan_subcmd,
+             "--version_anchor_file",
+             config.ntn_onboard_position_plan.version_anchor_file,
+             "Durable version-anchor file; required when signed-plan DU calendar execution is enabled")
+      ->capture_default_str();
+  ntn_position_plan_subcmd->add_option_function<std::vector<std::string>>(
+      "--trusted_signing_keys",
+      [&config](const std::vector<std::string>& values) {
+        config.ntn_onboard_position_plan.trusted_signing_keys.resize(values.size());
+
+        for (unsigned i = 0, e = values.size(); i != e; ++i) {
+          CLI::App subapp("NTN position-plan trusted signing key");
+          subapp.config_formatter(create_yaml_config_parser());
+          subapp.allow_config_extras(CLI::config_extras_mode::error);
+          configure_cli11_ntn_position_plan_trusted_key_args(
+              subapp, config.ntn_onboard_position_plan.trusted_signing_keys[i]);
+          std::istringstream ss(values[i]);
+          subapp.parse_from_stream(ss);
+        }
+      },
+      "Sets the local public keys trusted to authenticate management-center position plans");
   add_option(*ntn_position_plan_subcmd,
              "--expected_catalog_id",
              config.ntn_onboard_position_plan.expected_catalog_id,

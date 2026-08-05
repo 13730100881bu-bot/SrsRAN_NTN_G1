@@ -782,6 +782,13 @@ public:
                position_plan.access_profile_id,
                position_plan.access_profile_hash,
                position_plan.identity_authority);
+    fmt::print("NTN onboard plan authentication: required={} status={} trusted_keys={} key_id={} "
+               "key_fingerprint={}\n",
+               position_plan.signature_required ? "yes" : "no",
+               position_plan.signature_status,
+               position_plan.trusted_signing_key_count,
+               position_plan.signing_key_id,
+               position_plan.signing_key_fingerprint);
     fmt::print("NTN onboard state store: file_configured={} file_required={} schema_version={} generation={} "
                "state_hash={} status={} error={} write_blocked={} last_save_unix_ms={}\n",
                position_plan.state_file_configured ? "yes" : "no",
@@ -793,6 +800,17 @@ public:
                position_plan.state_store_error,
                position_plan.state_write_blocked ? "yes" : "no",
                position_plan.last_state_save_unix_ms);
+    fmt::print("NTN onboard version anchor: configured={} mode={} status={} error={} generation={} "
+               "anchor_hash={} committed_catalog_version={} committed_schedule_version={} reserved_schedule_version={}\n",
+               position_plan.version_anchor_configured ? "yes" : "no",
+               position_plan.version_anchor_mode,
+               position_plan.version_anchor_status,
+               position_plan.version_anchor_error,
+               position_plan.version_anchor_generation,
+               position_plan.version_anchor_hash,
+               position_plan.version_anchor_catalog_version,
+               position_plan.version_anchor_schedule_version,
+               position_plan.version_anchor_reserved_version);
     fmt::print("NTN onboard recovery: stage={} detail={} schedule_version={} catalog_version_high_water={} "
                "schedule_version_high_water={} evidence=persisted_state_is_not_du_or_rf_evidence\n",
                position_plan.recovery_stage,

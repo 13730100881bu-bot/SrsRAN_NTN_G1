@@ -39,6 +39,8 @@
 #include "srsran/support/executors/task_executor.h"
 #include <array>
 #include <chrono>
+#include <string>
+#include <vector>
 
 namespace srsran {
 
@@ -66,16 +68,28 @@ struct ran_node_configuration {
   std::string ran_node_name = "gnb01";
 };
 
+/// Local trust entry used to authenticate a management-center position plan.
+struct ntn_position_plan_trusted_key_source_config {
+  std::string key_id;
+  std::string public_key_file;
+};
+
 /// Opt-in source for management-center versioned onboard L1 position plans.
 /// This is independent of the legacy per-beam NCI location-mobility profile.
 struct ntn_onboard_position_plan_source_config {
   bool                      enabled = false;
   /// Deploy checked calendars over F1AP and require matching DU/MAC applied feedback before CU-CP activation.
   bool                      du_execution_enabled = false;
+  /// Require every accepted position plan to carry a valid management-center signature.
+  bool                      require_signed_plan = false;
+  /// Local public-key files. Only their configured key IDs may authenticate a plan.
+  std::vector<ntn_position_plan_trusted_key_source_config> trusted_signing_keys;
   std::string               satellite_id;
   std::string               plan_json_file;
   /// Private durable recovery state. Required only when DU calendar execution is enabled.
   std::string               state_file;
+  /// Durable monotonic version anchor. Required when signed-plan DU calendar execution is enabled.
+  std::string               version_anchor_file;
   std::string               expected_catalog_id;
   std::string               expected_catalog_hash;
   std::string               expected_identity_registry_version;

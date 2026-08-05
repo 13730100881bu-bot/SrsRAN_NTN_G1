@@ -263,13 +263,22 @@ struct cu_cp_unit_ntn_location_mobility_config {
   unsigned core_network_reporting_min_report_interval_ms = 0;
 };
 
+/// Local trusted public key used to authenticate a management-center position plan.
+struct cu_cp_unit_ntn_position_plan_trusted_key_config {
+  std::string key_id;
+  std::string public_key_file;
+};
+
 /// Independent, opt-in management-center source for the two-cell onboard L1 position plan.
 struct cu_cp_unit_ntn_onboard_position_plan_config {
   bool                  enabled = false;
   bool                  du_execution_enabled = false;
+  bool                  require_signed_plan = false;
+  std::vector<cu_cp_unit_ntn_position_plan_trusted_key_config> trusted_signing_keys;
   std::string           satellite_id;
   std::string           plan_json_file;
   std::string           state_file;
+  std::string           version_anchor_file;
   std::string           expected_catalog_id;
   std::string           expected_catalog_hash;
   std::string           expected_identity_registry_version;

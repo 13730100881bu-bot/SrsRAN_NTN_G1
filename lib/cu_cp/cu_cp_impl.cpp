@@ -76,6 +76,49 @@ static std::string normalize_ntn_calendar_hash_for_comparison(std::string value)
   return value;
 }
 
+static ntn_plan_version_identity make_ntn_plan_version_identity(const ntn_versioned_position_plan& plan)
+{
+  return {plan.catalog_version,
+          plan.schedule_version,
+          normalize_ntn_calendar_hash_for_comparison(plan.content_hash),
+          plan.authentication.has_value() ? plan.authentication->key_id : std::string{}};
+}
+
+static bool ntn_plan_version_anchor_context_matches(const ntn_plan_version_anchor_state&      anchor,
+                                                    const ntn_onboard_position_plan_config& controller_cfg)
+{
+  if (anchor.satellite_id != controller_cfg.satellite_id ||
+      anchor.planning_context.catalog_id != controller_cfg.expected_catalog_id ||
+      normalize_ntn_calendar_hash_for_comparison(anchor.planning_context.catalog_hash) !=
+          normalize_ntn_calendar_hash_for_comparison(controller_cfg.expected_catalog_hash) ||
+      anchor.planning_context.identity_registry_version != controller_cfg.expected_identity_registry_version ||
+      normalize_ntn_calendar_hash_for_comparison(anchor.planning_context.identity_registry_hash) !=
+          normalize_ntn_calendar_hash_for_comparison(controller_cfg.expected_identity_registry_hash) ||
+      anchor.planning_context.access_profile_id != controller_cfg.expected_access_profile_id ||
+      normalize_ntn_calendar_hash_for_comparison(anchor.planning_context.access_profile_hash) !=
+          normalize_ntn_calendar_hash_for_comparison(controller_cfg.expected_access_profile_hash)) {
+    return false;
+  }
+  for (unsigned i = 0; i != anchor.onboard_cells.size(); ++i) {
+    if (anchor.onboard_cells[i].nci != controller_cfg.onboard_cells[i].nci ||
+        anchor.onboard_cells[i].pci != controller_cfg.onboard_cells[i].pci) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool ntn_plan_version_anchor_snapshot_matches(
+    const std::optional<ntn_position_plan_version_anchor_snapshot>& snapshot,
+    const ntn_plan_version_identity&                                identity)
+{
+  return snapshot.has_value() && snapshot->mode == "software_only" &&
+         snapshot->catalog_version == identity.catalog_version &&
+         snapshot->schedule_version == identity.schedule_version &&
+         normalize_ntn_calendar_hash_for_comparison(snapshot->content_hash) ==
+             normalize_ntn_calendar_hash_for_comparison(identity.content_hash);
+}
+
 static bool ntn_deployment_stage_may_have_installed_calendar(ntn_position_plan_deployment_stage stage)
 {
   return stage == ntn_position_plan_deployment_stage::preparing ||
@@ -263,6 +306,7 @@ static ntn_onboard_position_plan_config make_ntn_onboard_position_plan_config(co
   const auto& source_cfg = cfg.mobility.onboard_position_plan;
   result.enabled                                  = source_cfg.enabled;
   result.require_external_apply                   = source_cfg.du_execution_enabled;
+  result.require_signed_plan                      = source_cfg.require_signed_plan;
   result.satellite_id                             = source_cfg.satellite_id;
   result.expected_catalog_id                      = source_cfg.expected_catalog_id;
   result.expected_catalog_hash                    = source_cfg.expected_catalog_hash;
@@ -283,6 +327,24 @@ static ntn_onboard_position_plan_config make_ntn_onboard_position_plan_config(co
   result.activation_alignment                     = source_cfg.activation_alignment;
   for (unsigned index = 0; index != result.onboard_cells.size(); ++index) {
     result.onboard_cells[index] = {source_cfg.cell_ncis[index], source_cfg.cell_pcis[index]};
+  }
+  std::set<std::string> loaded_key_ids;
+  for (const ntn_position_plan_trusted_key_source_config& key_source : source_cfg.trusted_signing_keys) {
+    if (!loaded_key_ids.insert(key_source.key_id).second) {
+      result.authentication_setup_error = fmt::format("duplicate signing key id '{}'", key_source.key_id);
+      result.trusted_public_keys.clear();
+      break;
+    }
+    auto loaded_key = load_ntn_position_plan_public_key_file(key_source.public_key_file, key_source.key_id);
+    if (!loaded_key.has_value()) {
+      result.authentication_setup_error = loaded_key.error();
+      result.trusted_public_keys.clear();
+      break;
+    }
+    result.trusted_public_keys.push_back(std::move(loaded_key.value()));
+  }
+  if (result.require_signed_plan && result.trusted_public_keys.empty() && result.authentication_setup_error.empty()) {
+    result.authentication_setup_error = "no trusted signing key is configured";
   }
   return result;
 }
@@ -2736,6 +2798,10 @@ cu_cp_impl::cu_cp_impl(const cu_cp_configuration& config_) :
   const auto& position_plan_cfg = cfg.mobility.onboard_position_plan;
   if (position_plan_cfg.enabled) {
     ntn_onboard_position_plan_ctrl.emplace(make_ntn_onboard_position_plan_config(cfg));
+    if (!ntn_onboard_position_plan_ctrl->config().authentication_setup_error.empty()) {
+      logger.error("Failed to initialize NTN position-plan public-key trust. Cause: {}",
+                   ntn_onboard_position_plan_ctrl->config().authentication_setup_error);
+    }
     ntn_position_plan_reload_timer = cfg.services.timers->create_unique_timer(*cfg.services.cu_cp_executor);
     ntn_position_plan_activation_timer = cfg.services.timers->create_unique_timer(*cfg.services.cu_cp_executor);
     restore_ntn_onboard_position_plan_state();
@@ -8180,6 +8246,11 @@ cu_cp_ntn_runtime_status cu_cp_impl::get_current_ntn_runtime_status() const
   cu_cp_ntn_position_plan_status& position_status = status.onboard_position_plan;
   position_status.enabled      = cfg.mobility.onboard_position_plan.enabled;
   position_status.du_execution_enabled = cfg.mobility.onboard_position_plan.du_execution_enabled;
+  position_status.signature_required = cfg.mobility.onboard_position_plan.require_signed_plan;
+  position_status.version_anchor_configured = !cfg.mobility.onboard_position_plan.version_anchor_file.empty();
+  position_status.version_anchor_mode = position_status.signature_required && position_status.du_execution_enabled
+                                            ? "software_only"
+                                            : "disabled";
   position_status.state_file_configured           = !cfg.mobility.onboard_position_plan.state_file.empty();
   position_status.state_file_required             = position_status.enabled && position_status.du_execution_enabled;
   position_status.access_profile_id = cfg.mobility.onboard_position_plan.expected_access_profile_id.empty()
@@ -8206,8 +8277,46 @@ cu_cp_ntn_runtime_status cu_cp_impl::get_current_ntn_runtime_status() const
     position_status.state_store_error  = ntn_position_plan_state_error.empty() ? "none" : ntn_position_plan_state_error;
     position_status.last_state_save_unix_ms = ntn_position_plan_state_last_save_unix_ms;
     position_status.state_write_blocked     = ntn_position_plan_state_write_blocked;
+    position_status.version_anchor_status   = ntn_position_plan_version_anchor_status;
+    position_status.version_anchor_error    = ntn_position_plan_version_anchor_error;
+    position_status.version_anchor_hash     = ntn_position_plan_version_anchor_hash.empty()
+                                                  ? "none"
+                                                  : ntn_position_plan_version_anchor_hash;
+    if (ntn_position_plan_version_anchor.has_value()) {
+      position_status.version_anchor_generation = ntn_position_plan_version_anchor->generation;
+      if (ntn_position_plan_version_anchor->committed.has_value()) {
+        position_status.version_anchor_catalog_version =
+            ntn_position_plan_version_anchor->committed->catalog_version;
+        position_status.version_anchor_schedule_version =
+            ntn_position_plan_version_anchor->committed->schedule_version;
+      }
+      if (ntn_position_plan_version_anchor->reserved.has_value()) {
+        position_status.version_anchor_reserved_version =
+            ntn_position_plan_version_anchor->reserved->identity.schedule_version;
+      }
+    }
     if (ntn_onboard_position_plan_ctrl.has_value()) {
       const auto& controller_cfg = ntn_onboard_position_plan_ctrl->config();
+      position_status.trusted_signing_key_count = controller_cfg.trusted_public_keys.size();
+      position_status.signature_status = !controller_cfg.require_signed_plan
+                                             ? "disabled"
+                                             : (!controller_cfg.authentication_setup_error.empty()
+                                                    ? "setup_error"
+                                                    : "awaiting_authenticated_plan");
+      if (ntn_onboard_position_plan_ctrl->highest_accepted_plan_source().has_value() &&
+          ntn_onboard_position_plan_ctrl->highest_accepted_plan_source()->authentication.has_value()) {
+        position_status.signature_status = "verified";
+        position_status.signing_key_id =
+            ntn_onboard_position_plan_ctrl->highest_accepted_plan_source()->authentication->key_id;
+        const auto key_it = std::find_if(controller_cfg.trusted_public_keys.begin(),
+                                         controller_cfg.trusted_public_keys.end(),
+                                         [&position_status](const ntn_position_plan_public_key& key) {
+                                           return key.key_id == position_status.signing_key_id;
+                                         });
+        if (key_it != controller_cfg.trusted_public_keys.end()) {
+          position_status.signing_key_fingerprint = key_it->fingerprint;
+        }
+      }
       position_status.stage          = to_string(ntn_onboard_position_plan_ctrl->stage());
       position_status.deployment_stage = to_string(ntn_onboard_position_plan_ctrl->deployment_stage());
       position_status.deployment_detail = ntn_onboard_position_plan_ctrl->deployment_detail();
@@ -11309,15 +11418,41 @@ void cu_cp_impl::restore_ntn_onboard_position_plan_state()
   const auto& source_cfg = cfg.mobility.onboard_position_plan;
   if (!source_cfg.du_execution_enabled) {
     ntn_position_plan_state_store_status = "disabled";
+    ntn_position_plan_version_anchor_status = "disabled";
     return;
   }
 
   ntn_position_plan_state_store_status = "loading";
-  auto                        loaded   = load_ntn_onboard_position_plan_state(source_cfg.state_file);
+  auto loaded = load_ntn_onboard_position_plan_state(source_cfg.state_file);
+  std::optional<ntn_plan_version_anchor_state> loaded_anchor;
+  std::string                                  anchor_load_error;
+  if (source_cfg.require_signed_plan) {
+    ntn_position_plan_version_anchor_status = "loading";
+    auto anchor_result = load_ntn_plan_version_anchor(source_cfg.version_anchor_file);
+    if (!anchor_result.has_value()) {
+      anchor_load_error = anchor_result.error();
+    } else {
+      loaded_anchor = std::move(anchor_result.value());
+    }
+  }
   std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
   if (!ntn_onboard_position_plan_ctrl.has_value()) {
     return;
   }
+  const auto reject_anchor = [&](ntn_position_plan_reject_reason reason,
+                                 const char*                     status,
+                                 const std::string&              detail,
+                                 uint64_t                        schedule_version = 0) {
+    ntn_position_plan_version_anchor_status = status;
+    ntn_position_plan_version_anchor_error  = to_string(reason);
+    ntn_position_plan_state_write_blocked   = true;
+    const ntn_onboard_position_plan_config controller_config = ntn_onboard_position_plan_ctrl->config();
+    *ntn_onboard_position_plan_ctrl = ntn_onboard_position_plan_controller(controller_config);
+    ntn_onboard_position_plan_ctrl->record_external_rejection(reason, schedule_version);
+    logger.error("Rejected NTN position-plan version anchor file='{}'. Cause: {}",
+                 source_cfg.version_anchor_file,
+                 detail);
+  };
   ntn_position_plan_state_schema_version = 0;
   if (!loaded.has_value()) {
     ntn_position_plan_state_store_status  = "corrupt";
@@ -11328,9 +11463,44 @@ void cu_cp_impl::restore_ntn_onboard_position_plan_state()
         "Rejected NTN onboard position-plan state file='{}'. Cause: {}", source_cfg.state_file, loaded.error());
     return;
   }
+  if (source_cfg.require_signed_plan && !anchor_load_error.empty()) {
+    reject_anchor(ntn_position_plan_reject_reason::version_anchor_unavailable,
+                  "load_failed",
+                  anchor_load_error);
+    return;
+  }
   if (!loaded->has_value()) {
+    if (source_cfg.require_signed_plan && loaded_anchor.has_value() &&
+        (loaded_anchor->committed.has_value() || loaded_anchor->reserved.has_value())) {
+      reject_anchor(ntn_position_plan_reject_reason::version_replay,
+                    "state_missing",
+                    "state file is missing while a version anchor exists");
+      return;
+    }
     ntn_position_plan_state_store_status = "first_boot";
     ntn_position_plan_state_error.clear();
+    if (source_cfg.require_signed_plan) {
+      ntn_position_plan_version_anchor_status = "first_boot";
+      ntn_position_plan_version_anchor_error  = "none";
+      if (loaded_anchor.has_value()) {
+        if (!ntn_plan_version_anchor_context_matches(*loaded_anchor, ntn_onboard_position_plan_ctrl->config())) {
+          reject_anchor(ntn_position_plan_reject_reason::version_replay,
+                        "context_mismatch",
+                        "empty first-boot version anchor does not match configuration");
+          return;
+        }
+        ntn_position_plan_version_anchor      = std::move(loaded_anchor);
+        ntn_position_plan_version_anchor_hash = ntn_position_plan_version_anchor->anchor_hash;
+      }
+    }
+    return;
+  }
+
+  if (source_cfg.require_signed_plan && !loaded_anchor.has_value()) {
+    reject_anchor(ntn_position_plan_reject_reason::version_anchor_unavailable,
+                  "anchor_missing",
+                  "version anchor is missing while signed recovery state exists",
+                  (*loaded)->highest_schedule_version);
     return;
   }
 
@@ -11348,6 +11518,88 @@ void cu_cp_impl::restore_ntn_onboard_position_plan_state()
                  source_cfg.state_file,
                  restored.error());
     return;
+  }
+  if (source_cfg.require_signed_plan) {
+    ntn_plan_version_anchor_state reconciled_anchor = *loaded_anchor;
+    if (!ntn_plan_version_anchor_context_matches(reconciled_anchor, ntn_onboard_position_plan_ctrl->config()) ||
+        !(*loaded)->version_anchor_source.has_value() ||
+        !(*loaded)->version_anchor_source->authentication.has_value()) {
+      reject_anchor(ntn_position_plan_reject_reason::version_replay,
+                    "context_mismatch",
+                    "version anchor does not match the configured planning context or signed state source",
+                    (*loaded)->highest_schedule_version);
+      return;
+    }
+    const ntn_plan_version_identity state_identity =
+        make_ntn_plan_version_identity(*(*loaded)->version_anchor_source);
+    if (!ntn_plan_version_anchor_snapshot_matches((*loaded)->version_anchor, state_identity)) {
+      reject_anchor(ntn_position_plan_reject_reason::version_replay,
+                    "state_anchor_mismatch",
+                    "recovery state high-water does not match its authenticated source",
+                    (*loaded)->highest_schedule_version);
+      return;
+    }
+
+    bool anchor_changed = false;
+    if (reconciled_anchor.reserved.has_value()) {
+      const auto reservation = *reconciled_anchor.reserved;
+      if (reservation.target_state_generation == (*loaded)->generation &&
+          ntn_plan_version_identity_equal(reservation.identity, state_identity)) {
+        auto committed = commit_ntn_plan_version(
+            reconciled_anchor, reservation.identity, reservation.target_state_generation);
+        if (!committed.has_value()) {
+          reject_anchor(ntn_position_plan_reject_reason::version_anchor_unavailable,
+                        "reconcile_failed",
+                        committed.error(),
+                        (*loaded)->highest_schedule_version);
+          return;
+        }
+        anchor_changed = true;
+      } else if (reservation.target_state_generation > (*loaded)->generation &&
+                 reconciled_anchor.committed.has_value() &&
+                 ntn_plan_version_identity_equal(*reconciled_anchor.committed, state_identity)) {
+        auto cancelled = cancel_ntn_plan_version_reservation(
+            reconciled_anchor, reservation.identity, reservation.target_state_generation);
+        if (!cancelled.has_value()) {
+          reject_anchor(ntn_position_plan_reject_reason::version_anchor_unavailable,
+                        "reconcile_failed",
+                        cancelled.error(),
+                        (*loaded)->highest_schedule_version);
+          return;
+        }
+        anchor_changed = true;
+      } else {
+        reject_anchor(ntn_position_plan_reject_reason::version_replay,
+                      "reservation_mismatch",
+                      "outstanding version reservation cannot be reconciled with recovery state",
+                      (*loaded)->highest_schedule_version);
+        return;
+      }
+    }
+    if (!reconciled_anchor.committed.has_value() ||
+        !ntn_plan_version_identity_equal(*reconciled_anchor.committed, state_identity)) {
+      reject_anchor(ntn_position_plan_reject_reason::version_replay,
+                    "committed_mismatch",
+                    "committed version anchor does not match recovery state",
+                    (*loaded)->highest_schedule_version);
+      return;
+    }
+    if (anchor_changed) {
+      auto stored_anchor =
+          store_ntn_plan_version_anchor_atomic(source_cfg.version_anchor_file, reconciled_anchor);
+      if (!stored_anchor.has_value()) {
+        reject_anchor(ntn_position_plan_reject_reason::version_anchor_unavailable,
+                      "reconcile_write_failed",
+                      stored_anchor.error(),
+                      (*loaded)->highest_schedule_version);
+        return;
+      }
+      reconciled_anchor.anchor_hash = stored_anchor.value();
+    }
+    ntn_position_plan_version_anchor        = std::move(reconciled_anchor);
+    ntn_position_plan_version_anchor_hash   = ntn_position_plan_version_anchor->anchor_hash;
+    ntn_position_plan_version_anchor_status = "committed";
+    ntn_position_plan_version_anchor_error  = "none";
   }
   ntn_position_plan_clear_queue.clear();
   for (const ntn_onboard_position_plan_clear_obligation& obligation : (*loaded)->outstanding_clears) {
@@ -11408,6 +11660,119 @@ void cu_cp_impl::restore_ntn_onboard_position_plan_state()
               ntn_position_plan_clear_queue.size());
 }
 
+cu_cp_impl::ntn_state_persist_outcome cu_cp_impl::persist_new_signed_ntn_position_plan_locked(
+    const ntn_versioned_position_plan& plan, const char* reason)
+{
+  const auto& source_cfg = cfg.mobility.onboard_position_plan;
+  if (!source_cfg.require_signed_plan || !source_cfg.du_execution_enabled || !plan.authentication.has_value() ||
+      !ntn_onboard_position_plan_ctrl.has_value() || ntn_position_plan_state_write_blocked ||
+      ntn_position_plan_state_generation == std::numeric_limits<uint64_t>::max()) {
+    return ntn_state_persist_outcome::not_committed;
+  }
+
+  if (!ntn_position_plan_version_anchor.has_value()) {
+    const auto& controller_cfg = ntn_onboard_position_plan_ctrl->config();
+    ntn_plan_version_anchor_state initial;
+    initial.generation                                 = 1;
+    initial.satellite_id                               = controller_cfg.satellite_id;
+    initial.planning_context.catalog_id                = controller_cfg.expected_catalog_id;
+    initial.planning_context.catalog_hash              = controller_cfg.expected_catalog_hash;
+    initial.planning_context.identity_registry_version = controller_cfg.expected_identity_registry_version;
+    initial.planning_context.identity_registry_hash    = controller_cfg.expected_identity_registry_hash;
+    initial.planning_context.access_profile_id         = controller_cfg.expected_access_profile_id;
+    initial.planning_context.access_profile_hash       = controller_cfg.expected_access_profile_hash;
+    initial.onboard_cells                              = controller_cfg.onboard_cells;
+    ntn_position_plan_version_anchor                   = std::move(initial);
+  }
+
+  const ntn_plan_version_anchor_state anchor_checkpoint = *ntn_position_plan_version_anchor;
+  const ntn_plan_version_identity     identity          = make_ntn_plan_version_identity(plan);
+  const uint64_t target_generation = ntn_position_plan_state_generation + 1;
+  auto reserve_result = reserve_ntn_plan_version(*ntn_position_plan_version_anchor, identity, target_generation);
+  if (!reserve_result.has_value()) {
+    ntn_position_plan_version_anchor = anchor_checkpoint;
+    ntn_position_plan_version_anchor_status = reserve_result.error() == "version_replay" ? "replay_rejected"
+                                                                                           : "reserve_failed";
+    ntn_position_plan_version_anchor_error = reserve_result.error() == "version_replay"
+                                                 ? "version_replay"
+                                                 : "version_anchor_unavailable";
+    return ntn_state_persist_outcome::not_committed;
+  }
+
+  const bool reservation_required =
+      reserve_result.value() != ntn_plan_version_reserve_outcome::already_committed;
+  if (reservation_required) {
+    auto stored_reservation =
+        store_ntn_plan_version_anchor_atomic(source_cfg.version_anchor_file, *ntn_position_plan_version_anchor);
+    if (!stored_reservation.has_value()) {
+      if (stored_reservation.error() != "anchor committed_not_durable") {
+        ntn_position_plan_version_anchor = anchor_checkpoint;
+      }
+      ntn_position_plan_version_anchor_status = "reserve_write_failed";
+      ntn_position_plan_version_anchor_error  = "version_anchor_unavailable";
+      ntn_position_plan_state_write_blocked   = true;
+      logger.error("Failed to reserve NTN signed-plan version file='{}'. Cause: {}",
+                   source_cfg.version_anchor_file,
+                   stored_reservation.error());
+      return ntn_state_persist_outcome::not_committed;
+    }
+    ntn_position_plan_version_anchor->anchor_hash = stored_reservation.value();
+    ntn_position_plan_version_anchor_hash         = stored_reservation.value();
+    ntn_position_plan_version_anchor_status       = "reserved";
+    ntn_position_plan_version_anchor_error        = "none";
+  }
+
+  const ntn_state_persist_outcome state_outcome = persist_ntn_onboard_position_plan_state_locked(reason);
+  if (state_outcome == ntn_state_persist_outcome::not_committed) {
+    if (reservation_required && ntn_position_plan_version_anchor.has_value() &&
+        ntn_position_plan_version_anchor->reserved.has_value()) {
+      ntn_plan_version_anchor_state cancelled_anchor = *ntn_position_plan_version_anchor;
+      auto cancelled = cancel_ntn_plan_version_reservation(cancelled_anchor, identity, target_generation);
+      if (cancelled.has_value()) {
+        auto stored_cancel = store_ntn_plan_version_anchor_atomic(source_cfg.version_anchor_file, cancelled_anchor);
+        if (stored_cancel.has_value()) {
+          cancelled_anchor.anchor_hash         = stored_cancel.value();
+          ntn_position_plan_version_anchor     = std::move(cancelled_anchor);
+          ntn_position_plan_version_anchor_hash = stored_cancel.value();
+        } else {
+          logger.error("Failed to cancel NTN signed-plan version reservation file='{}'. Cause: {}",
+                       source_cfg.version_anchor_file,
+                       stored_cancel.error());
+        }
+      }
+    }
+    return state_outcome;
+  }
+  if (state_outcome == ntn_state_persist_outcome::committed_not_durable || !reservation_required) {
+    return state_outcome;
+  }
+
+  auto committed = commit_ntn_plan_version(*ntn_position_plan_version_anchor, identity, target_generation);
+  if (!committed.has_value()) {
+    ntn_position_plan_version_anchor_status = "commit_failed";
+    ntn_position_plan_version_anchor_error  = "version_anchor_unavailable";
+    ntn_position_plan_state_write_blocked   = true;
+    logger.error("Failed to commit NTN signed-plan version reservation. Cause: {}", committed.error());
+    return ntn_state_persist_outcome::committed_not_durable;
+  }
+  auto stored_commit =
+      store_ntn_plan_version_anchor_atomic(source_cfg.version_anchor_file, *ntn_position_plan_version_anchor);
+  if (!stored_commit.has_value()) {
+    ntn_position_plan_version_anchor_status = "commit_write_failed";
+    ntn_position_plan_version_anchor_error  = "version_anchor_unavailable";
+    ntn_position_plan_state_write_blocked   = true;
+    logger.error("Failed to persist committed NTN signed-plan version file='{}'. Cause: {}",
+                 source_cfg.version_anchor_file,
+                 stored_commit.error());
+    return ntn_state_persist_outcome::committed_not_durable;
+  }
+  ntn_position_plan_version_anchor->anchor_hash = stored_commit.value();
+  ntn_position_plan_version_anchor_hash         = stored_commit.value();
+  ntn_position_plan_version_anchor_status       = "committed";
+  ntn_position_plan_version_anchor_error        = "none";
+  return ntn_state_persist_outcome::durable;
+}
+
 cu_cp_impl::ntn_state_persist_outcome
 cu_cp_impl::persist_ntn_onboard_position_plan_state_locked(const char* reason, bool omit_clear_queue_head)
 {
@@ -11418,6 +11783,37 @@ cu_cp_impl::persist_ntn_onboard_position_plan_state_locked(const char* reason, b
   if (!ntn_onboard_position_plan_ctrl.has_value() || ntn_position_plan_state_write_blocked) {
     return ntn_state_persist_outcome::not_committed;
   }
+  const ntn_plan_version_identity* anchor_identity = nullptr;
+  if (source_cfg.require_signed_plan) {
+    if (ntn_onboard_position_plan_ctrl->highest_schedule_version_seen() == 0) {
+      // Invalid first-boot input is observable in memory, but there is no authenticated high-water to persist yet.
+      return ntn_state_persist_outcome::durable;
+    }
+    if (!ntn_position_plan_version_anchor.has_value() ||
+        !ntn_onboard_position_plan_ctrl->highest_accepted_plan_source().has_value()) {
+      ntn_position_plan_version_anchor_status = "unavailable";
+      ntn_position_plan_version_anchor_error  = "version_anchor_unavailable";
+      ntn_position_plan_state_write_blocked   = true;
+      return ntn_state_persist_outcome::not_committed;
+    }
+    const ntn_plan_version_identity expected_identity =
+        make_ntn_plan_version_identity(*ntn_onboard_position_plan_ctrl->highest_accepted_plan_source());
+    if (ntn_position_plan_version_anchor->reserved.has_value() &&
+        ntn_plan_version_identity_equal(ntn_position_plan_version_anchor->reserved->identity, expected_identity)) {
+      anchor_identity = &ntn_position_plan_version_anchor->reserved->identity;
+    } else if (ntn_position_plan_version_anchor->committed.has_value() &&
+               ntn_plan_version_identity_equal(*ntn_position_plan_version_anchor->committed, expected_identity)) {
+      anchor_identity = &*ntn_position_plan_version_anchor->committed;
+    } else {
+      ntn_position_plan_version_anchor_status = "mismatch";
+      ntn_position_plan_version_anchor_error  = "version_replay";
+      ntn_position_plan_state_write_blocked   = true;
+      ntn_onboard_position_plan_ctrl->record_external_rejection(
+          ntn_position_plan_reject_reason::version_replay,
+          ntn_onboard_position_plan_ctrl->highest_schedule_version_seen());
+      return ntn_state_persist_outcome::not_committed;
+    }
+  }
 
   if (ntn_position_plan_state_generation == std::numeric_limits<uint64_t>::max()) {
     ntn_position_plan_state_store_status  = "generation_exhausted";
@@ -11427,6 +11823,9 @@ cu_cp_impl::persist_ntn_onboard_position_plan_state_locked(const char* reason, b
   }
   const uint64_t next_generation = ntn_position_plan_state_generation + 1;
   auto           state           = ntn_onboard_position_plan_ctrl->make_persistent_state(next_generation);
+  if (anchor_identity != nullptr) {
+    state.version_anchor = make_ntn_plan_version_anchor_snapshot(*anchor_identity);
+  }
   const size_t first_clear = omit_clear_queue_head && !ntn_position_plan_clear_queue.empty() ? 1U : 0U;
   state.outstanding_clears.reserve(ntn_position_plan_clear_queue.size() - first_clear);
   for (size_t clear_index = first_clear; clear_index != ntn_position_plan_clear_queue.size(); ++clear_index) {
@@ -11580,10 +11979,12 @@ void cu_cp_impl::reload_ntn_onboard_position_plan()
       queue_ntn_onboard_position_plan_clear_locked(*superseded_pending, "superseded_by_new_checked_plan");
     }
     const ntn_state_persist_outcome persist_outcome =
-        source_cfg.du_execution_enabled
-            ? persist_ntn_onboard_position_plan_state_locked(result.accepted ? "checked_plan_accepted"
-                                                                              : "received_plan_rejected")
-            : ntn_state_persist_outcome::durable;
+        !source_cfg.du_execution_enabled
+            ? ntn_state_persist_outcome::durable
+            : (result.accepted && source_cfg.require_signed_plan
+                   ? persist_new_signed_ntn_position_plan_locked(plan.value(), "checked_signed_plan_accepted")
+                   : persist_ntn_onboard_position_plan_state_locked(result.accepted ? "checked_plan_accepted"
+                                                                                     : "received_plan_rejected"));
     if (result.accepted && persist_outcome != ntn_state_persist_outcome::durable) {
       if (persist_outcome == ntn_state_persist_outcome::not_committed) {
         restore_ntn_onboard_position_plan_checkpoint_fail_closed_locked(checkpoint, clear_checkpoint, submit_time);
@@ -11593,9 +11994,14 @@ void cu_cp_impl::reload_ntn_onboard_position_plan()
         ntn_onboard_position_plan_ctrl->require_du_reconciliation_after_connection_loss(
             "state_commit_not_durable_reconciliation_required");
       }
-      ntn_onboard_position_plan_ctrl->record_external_rejection(
-          ntn_position_plan_reject_reason::state_persistence_failure, plan->schedule_version);
-      result = {false, ntn_position_plan_stage::rejected, ntn_position_plan_reject_reason::state_persistence_failure};
+      const ntn_position_plan_reject_reason persistence_reason =
+          ntn_position_plan_version_anchor_error == "version_replay"
+              ? ntn_position_plan_reject_reason::version_replay
+              : (source_cfg.require_signed_plan
+                     ? ntn_position_plan_reject_reason::version_anchor_unavailable
+                     : ntn_position_plan_reject_reason::state_persistence_failure);
+      ntn_onboard_position_plan_ctrl->record_external_rejection(persistence_reason, plan->schedule_version);
+      result = {false, ntn_position_plan_stage::rejected, persistence_reason};
       superseded_pending.reset();
     } else {
       last_ntn_position_plan_file_signature = signature;

@@ -546,11 +546,22 @@ srs_cu_cp::cu_cp_configuration srsran::generate_cu_cp_config(const cu_cp_unit_co
   out_cfg.mobility.onboard_position_plan.enabled = cu_cfg.mobility_config.ntn_onboard_position_plan.enabled;
   out_cfg.mobility.onboard_position_plan.du_execution_enabled =
       cu_cfg.mobility_config.ntn_onboard_position_plan.du_execution_enabled;
+  out_cfg.mobility.onboard_position_plan.require_signed_plan =
+      cu_cfg.mobility_config.ntn_onboard_position_plan.require_signed_plan;
+  out_cfg.mobility.onboard_position_plan.trusted_signing_keys.reserve(
+      cu_cfg.mobility_config.ntn_onboard_position_plan.trusted_signing_keys.size());
+  for (const cu_cp_unit_ntn_position_plan_trusted_key_config& key :
+       cu_cfg.mobility_config.ntn_onboard_position_plan.trusted_signing_keys) {
+    out_cfg.mobility.onboard_position_plan.trusted_signing_keys.push_back(
+        srs_cu_cp::ntn_position_plan_trusted_key_source_config{key.key_id, key.public_key_file});
+  }
   out_cfg.mobility.onboard_position_plan.satellite_id =
       cu_cfg.mobility_config.ntn_onboard_position_plan.satellite_id;
   out_cfg.mobility.onboard_position_plan.plan_json_file =
       cu_cfg.mobility_config.ntn_onboard_position_plan.plan_json_file;
   out_cfg.mobility.onboard_position_plan.state_file = cu_cfg.mobility_config.ntn_onboard_position_plan.state_file;
+  out_cfg.mobility.onboard_position_plan.version_anchor_file =
+      cu_cfg.mobility_config.ntn_onboard_position_plan.version_anchor_file;
   out_cfg.mobility.onboard_position_plan.expected_catalog_id =
       cu_cfg.mobility_config.ntn_onboard_position_plan.expected_catalog_id;
   out_cfg.mobility.onboard_position_plan.expected_catalog_hash =

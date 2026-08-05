@@ -62,6 +62,19 @@ static bool is_canonical_ntn_satellite_id(const std::string& value)
          std::isdigit(static_cast<unsigned char>(value[5])) && std::isdigit(static_cast<unsigned char>(value[6]));
 }
 
+static bool is_valid_ntn_signing_key_id(const std::string& value)
+{
+  const auto is_ascii_alnum = [](unsigned char c) {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+  };
+  if (value.empty() || value.size() > 256 || !is_ascii_alnum(static_cast<unsigned char>(value.front()))) {
+    return false;
+  }
+  return std::all_of(value.begin(), value.end(), [is_ascii_alnum](unsigned char c) {
+    return is_ascii_alnum(c) || c == '.' || c == '_' || c == ':' || c == '/' || c == '-';
+  });
+}
+
 static std::filesystem::path normalize_config_path(const std::string& value)
 {
   const std::filesystem::path path{value};
@@ -209,6 +222,10 @@ static bool validate_mobility_appconfig(gnb_id_t gnb_id, const cu_cp_unit_mobili
     fmt::print("Invalid CU-CP configuration. NTN DU calendar execution requires the onboard position plan\n");
     return false;
   }
+  if (position_plan_cfg.require_signed_plan && !position_plan_cfg.enabled) {
+    fmt::print("Invalid CU-CP configuration. Signed NTN position plans require the onboard position plan\n");
+    return false;
+  }
   if (position_plan_cfg.enabled) {
     if (!is_canonical_ntn_satellite_id(position_plan_cfg.satellite_id) || position_plan_cfg.plan_json_file.empty()) {
       fmt::print("Invalid CU-CP configuration. NTN onboard position plan requires canonical Pxx-Syy satellite_id and "
@@ -219,10 +236,42 @@ static bool validate_mobility_appconfig(gnb_id_t gnb_id, const cu_cp_unit_mobili
       fmt::print("Invalid CU-CP configuration. NTN DU calendar execution requires state_file\n");
       return false;
     }
-    if (!position_plan_cfg.state_file.empty() && normalize_config_path(position_plan_cfg.plan_json_file) ==
-                                                     normalize_config_path(position_plan_cfg.state_file)) {
-      fmt::print("Invalid CU-CP configuration. NTN plan_json_file and state_file must refer to distinct paths\n");
+    if (position_plan_cfg.du_execution_enabled && position_plan_cfg.require_signed_plan &&
+        position_plan_cfg.version_anchor_file.empty()) {
+      fmt::print("Invalid CU-CP configuration. Signed NTN DU calendar execution requires version_anchor_file\n");
       return false;
+    }
+    if (position_plan_cfg.require_signed_plan && position_plan_cfg.trusted_signing_keys.empty()) {
+      fmt::print("Invalid CU-CP configuration. Signed NTN position plans require at least one trusted signing key\n");
+      return false;
+    }
+
+    std::set<std::filesystem::path> configured_paths;
+    auto add_unique_path = [&configured_paths](const std::string& value) {
+      return value.empty() || configured_paths.emplace(normalize_config_path(value)).second;
+    };
+    if (!add_unique_path(position_plan_cfg.plan_json_file) || !add_unique_path(position_plan_cfg.state_file) ||
+        !add_unique_path(position_plan_cfg.version_anchor_file)) {
+      fmt::print("Invalid CU-CP configuration. NTN plan, state and version-anchor files must use distinct paths\n");
+      return false;
+    }
+
+    std::set<std::string> trusted_key_ids;
+    for (const cu_cp_unit_ntn_position_plan_trusted_key_config& key : position_plan_cfg.trusted_signing_keys) {
+      if (!is_valid_ntn_signing_key_id(key.key_id) || key.public_key_file.empty()) {
+        fmt::print("Invalid CU-CP configuration. Every NTN trusted signing key requires a valid key_id and "
+                   "public_key_file\n");
+        return false;
+      }
+      if (!trusted_key_ids.emplace(key.key_id).second) {
+        fmt::print("Invalid CU-CP configuration. NTN trusted signing key IDs must be unique\n");
+        return false;
+      }
+      if (!add_unique_path(key.public_key_file)) {
+        fmt::print("Invalid CU-CP configuration. NTN public-key, plan, state and version-anchor files must use distinct "
+                   "paths\n");
+        return false;
+      }
     }
     if (position_plan_cfg.cell_ncis.size() != 2 || position_plan_cfg.cell_pcis.size() != 2) {
       fmt::print("Invalid CU-CP configuration. NTN onboard position plan requires exactly two cell_ncis and cell_pcis\n");
@@ -240,9 +289,18 @@ static bool validate_mobility_appconfig(gnb_id_t gnb_id, const cu_cp_unit_mobili
                                                is_sha256_digest(position_plan_cfg.expected_identity_registry_hash) &&
                                                !position_plan_cfg.expected_access_profile_id.empty() &&
                                                is_sha256_digest(position_plan_cfg.expected_access_profile_hash);
-    if ((position_plan_cfg.du_execution_enabled || has_any_planning_context) && !has_complete_planning_context) {
-      fmt::print("Invalid CU-CP configuration. NTN schema-v2/v3 planning context requires complete catalog, identity "
+    if ((position_plan_cfg.du_execution_enabled || position_plan_cfg.require_signed_plan || has_any_planning_context) &&
+        !has_complete_planning_context) {
+      fmt::print("Invalid CU-CP configuration. NTN schema-v2/v3/v4 planning context requires complete catalog, identity "
                  "registry and access-profile identifiers with SHA-256 digests\n");
+      return false;
+    }
+    if (position_plan_cfg.require_signed_plan &&
+        (!is_valid_ntn_signing_key_id(position_plan_cfg.expected_catalog_id) ||
+         !is_valid_ntn_signing_key_id(position_plan_cfg.expected_identity_registry_version) ||
+         !is_valid_ntn_signing_key_id(position_plan_cfg.expected_access_profile_id))) {
+      fmt::print("Invalid CU-CP configuration. Signed NTN planning-context identifiers contain unsupported "
+                 "characters\n");
       return false;
     }
     if (position_plan_cfg.du_execution_enabled &&
