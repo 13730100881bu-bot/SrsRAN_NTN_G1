@@ -1,0 +1,55 @@
+{
+  "schema_version": 4,
+  "planning_run_id": "planning-run-2026-07-15",
+  "catalog": {
+    "id": "global-land-l1-v1",
+    "sha256": "sha256:b39fe9c3ee9a9355b3546036b7f16e0fb858c953f8558cc4295122f2169fbe7a"
+  },
+  "identity_registry": {
+    "version": "mc-ntn-onboard-cell-registry-v1",
+    "sha256": "sha256:7475821350e104b57a70d979d630f4b29a6cecb89ca0eca7b16dddf2ffee6a4a"
+  },
+  "access_profile": {
+    "id": "ntn-access-16a-64d-v1",
+    "sha256": "sha256:195786f4161e3b0fad6faa0605144948a7401c067a014bde684c1b29a8087d63"
+  },
+  "satellite_id": "P01-S01",
+  "catalog_version": 1,
+  "schedule_version": 1,
+  "content_hash": "sha256:6b0f70aff33b6e5e7cc71069a316184653155185cc76e4bf2f8173e18e1bd21a",
+  "valid_from_unix_ms": 640,
+  "valid_until_unix_ms": 64000,
+  "activation_epoch_unix_ms": 1920,
+  "onboard_cells": [
+    {
+      "nci": 4886691841,
+      "pci": 101
+    },
+    {
+      "nci": 4886691842,
+      "pci": 202
+    }
+  ],
+  "visible_l1_positions": [
+    {
+      "position_id": "G000001",
+      "latitude_deg": 10,
+      "longitude_deg": 20,
+      "child_mask": 127
+    },
+    {
+      "position_id": "G000002",
+      "latitude_deg": 10,
+      "longitude_deg": 20.05,
+      "child_mask": 127
+    }
+  ],
+  "assigned_l1_position_ids": [
+    "G000001"
+  ],
+  "authentication": {
+    "algorithm": "ecdsa-p256-sha256",
+    "key_id": "ntn-test-signing-key-v1",
+    "signature_base64": "MEQCICGY2vaeBkfRbmXf5obfO2NBzBOC0TeUjZOIhjrQQWrSAiAhiQ4u9dwEzNW1oWVlOd3TBWPZDUr0PRZYwSCLMTIrbw=="
+  }
+}

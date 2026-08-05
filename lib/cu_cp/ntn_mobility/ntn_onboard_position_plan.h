@@ -41,6 +41,13 @@ namespace srs_cu_cp {
 inline constexpr size_t max_ntn_position_plan_file_size               = 4U * 1024U * 1024U;
 inline constexpr size_t max_ntn_position_plan_positions               = 65536U;
 inline constexpr size_t max_ntn_position_plan_context_identifier_size = 256U;
+inline constexpr size_t max_ntn_position_plan_public_key_file_size     = 16U * 1024U;
+inline constexpr size_t max_ntn_position_plan_signature_size           = 256U;
+/// Largest integer represented exactly by both JavaScript Number and C++ uint64_t.
+inline constexpr uint64_t max_ntn_position_plan_cross_language_integer = 9007199254740991ULL;
+/// Explicit schema-v4 time range that remains representable by the supported system_clock implementations.
+inline constexpr int64_t max_ntn_position_plan_unix_time_ms             = 8000000000000LL;
+inline constexpr const char* ntn_position_plan_signature_algorithm     = "ecdsa-p256-sha256";
 
 /// Earth-fixed L1 position supplied by the management-center catalog. It intentionally carries no NCI or PCI.
 struct ntn_l1_position {
@@ -55,6 +62,21 @@ struct ntn_l1_position {
 struct ntn_onboard_cell_identity {
   nr_cell_identity nci = nr_cell_identity::min();
   pci_t            pci = INVALID_PCI;
+};
+
+/// Management-center authentication attached to a schema-v4 plan. The public key is selected only from local config.
+struct ntn_position_plan_authentication {
+  std::string algorithm;
+  std::string key_id;
+  /// ASN.1 DER ECDSA signature encoded as canonical base64.
+  std::string signature_base64;
+};
+
+/// Bounded locally configured public key. The source path is deliberately not retained in runtime status.
+struct ntn_position_plan_public_key {
+  std::string key_id;
+  std::string pem;
+  std::string fingerprint;
 };
 
 /// Versioned management-center input for one satellite.
@@ -80,6 +102,8 @@ struct ntn_versioned_position_plan {
   std::vector<ntn_l1_position>             visible_l1_positions;
   /// Schema-v3 subset that this satellite shall actually serve. Schema v1/v2 implicitly assign every visible L1.
   std::vector<std::string>                 assigned_l1_position_ids;
+  /// Present and mandatory only for schema v4.
+  std::optional<ntn_position_plan_authentication> authentication;
 };
 
 /// L1 assignment owned by one stable onboard cell identity.
@@ -142,6 +166,13 @@ enum class ntn_position_plan_reject_reason {
   invalid_satellite_id,
   non_monotonic_version,
   invalid_hash,
+  signature_required,
+  unsupported_signature_algorithm,
+  unknown_signing_key,
+  invalid_public_key,
+  invalid_signature,
+  version_replay,
+  version_anchor_unavailable,
   expired,
   invalid_validity_window,
   invalid_activation_epoch,
@@ -226,6 +257,11 @@ struct ntn_onboard_position_plan_config {
   bool                                      enabled = false;
   /// When enabled, a pending plan may become active only after matching DU/MAC applied feedback.
   bool                                      require_external_apply = false;
+  /// When set, only an authenticated schema-v4 plan can be accepted.
+  bool                                      require_signed_plan = false;
+  std::vector<ntn_position_plan_public_key> trusted_public_keys;
+  /// Stable setup failure code/detail populated while bounded local key files are loaded.
+  std::string                               authentication_setup_error;
   std::string                               satellite_id;
   /// Expected management-center planning context for schema-v2/v3 plans. Values are compared exactly, hashes
   /// case-insensitively after adding the optional sha256: prefix.
@@ -432,10 +468,19 @@ public:
   uint64_t                           recovery_schedule_version() const { return last_recovery_schedule_version; }
   uint64_t                           highest_catalog_version_seen() const { return highest_catalog_version; }
   uint64_t                           highest_schedule_version_seen() const { return highest_schedule_version; }
+  const std::string&                 highest_schedule_content_hash_seen() const
+  {
+    return highest_schedule_content_hash;
+  }
+  const std::optional<ntn_versioned_position_plan>& highest_accepted_plan_source() const
+  {
+    return highest_accepted_plan;
+  }
 
 private:
   ntn_position_plan_reject_reason validate_plan(const ntn_versioned_position_plan&    plan,
                                                 std::chrono::system_clock::time_point now) const;
+  ntn_position_plan_reject_reason validate_authentication(const ntn_versioned_position_plan& plan) const;
   ntn_position_plan_reject_reason validate_plan_for_restore(const ntn_versioned_position_plan&    plan,
                                                             std::chrono::system_clock::time_point now) const;
   expected<ntn_activated_position_plan, std::string>
@@ -457,6 +502,8 @@ private:
   std::chrono::system_clock::time_point      last_received_activation{};
   uint64_t                                   highest_catalog_version  = 0;
   uint64_t                                   highest_schedule_version = 0;
+  std::string                                highest_schedule_content_hash;
+  std::optional<ntn_versioned_position_plan> highest_accepted_plan;
   std::vector<ntn_l1_position>               last_candidate_inventory;
   std::vector<std::string>                    last_assigned_l1_position_ids;
   std::optional<ntn_activated_position_plan> active;
@@ -477,6 +524,13 @@ private:
 
 /// Computes the canonical SHA-256 content hash used by the plan validator.
 std::string compute_ntn_position_plan_content_hash(const ntn_versioned_position_plan& plan);
+
+/// Domain-separated canonical bytes verified by ECDSA for a schema-v4 plan.
+std::string compute_ntn_position_plan_signature_payload(const ntn_versioned_position_plan& plan);
+
+/// Loads one bounded regular PEM/SPKI public-key file and computes its canonical DER fingerprint.
+expected<ntn_position_plan_public_key, std::string>
+load_ntn_position_plan_public_key_file(const std::string& path, const std::string& key_id);
 
 /// Computes a canonical SHA-256 over the checked, executable calendar artifact.
 std::string compute_ntn_access_calendar_hash(uint64_t                                      schedule_version,

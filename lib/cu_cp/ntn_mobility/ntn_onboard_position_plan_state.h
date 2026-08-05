@@ -78,14 +78,23 @@ struct ntn_onboard_position_plan_received_observation {
   std::vector<std::string>              assigned_l1_position_ids;
 };
 
+/// Expected identity of the separate software-only version anchor stored beside schema-v4 recovery state.
+struct ntn_position_plan_version_anchor_snapshot {
+  std::string mode = "software_only";
+  uint64_t    catalog_version  = 0;
+  uint64_t    schedule_version = 0;
+  std::string content_hash;
+};
+
 /// Private recovery record for the onboard position-plan controller.
 ///
 /// recorded_deployment_stage is historical information only. In particular, a persisted value of applied is not live
 /// DU evidence after restart. Consumers must reconcile with the DU before exposing active/applied state.
 struct ntn_onboard_position_plan_persistent_state {
-  static constexpr unsigned current_schema_version = 3;
+  static constexpr unsigned current_schema_version = 4;
 
-  unsigned    schema_version = current_schema_version;
+  /// Existing unsigned callers continue to write schema v3; signed execution selects schema v4 explicitly.
+  unsigned    schema_version = 3;
   uint64_t    generation     = 0;
   std::string state_hash;
 
@@ -94,6 +103,11 @@ struct ntn_onboard_position_plan_persistent_state {
   std::array<ntn_onboard_cell_identity, 2>                onboard_cells{};
   uint64_t                                                highest_catalog_version  = 0;
   uint64_t                                                highest_schedule_version = 0;
+  std::string                                             highest_schedule_content_hash;
+  std::optional<ntn_position_plan_version_anchor_snapshot> version_anchor;
+  /// Complete authenticated source associated with the high-water mark. It remains available after active/pending
+  /// expiry so restart recovery can reverify the signature rather than trusting only locally persisted metadata.
+  std::optional<ntn_versioned_position_plan>               version_anchor_source;
   std::optional<ntn_onboard_position_plan_state_snapshot> active;
   std::optional<ntn_onboard_position_plan_state_snapshot> pending;
   std::optional<ntn_onboard_position_plan_received_observation> received_plan;

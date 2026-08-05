@@ -36,7 +36,10 @@
 #include <iomanip>
 #include <locale>
 #include <map>
+#include <mbedtls/base64.h>
+#include <mbedtls/ecp.h>
 #include <mbedtls/md.h>
+#include <mbedtls/pk.h>
 #include <set>
 #include <sstream>
 #include <tuple>
@@ -124,6 +127,101 @@ bool is_valid_satellite_id(const std::string& value)
   return value.size() == 7 && value[0] == 'P' && std::isdigit(static_cast<unsigned char>(value[1])) &&
          std::isdigit(static_cast<unsigned char>(value[2])) && value[3] == '-' && value[4] == 'S' &&
          std::isdigit(static_cast<unsigned char>(value[5])) && std::isdigit(static_cast<unsigned char>(value[6]));
+}
+
+bool is_valid_signing_key_id(const std::string& value)
+{
+  const auto is_ascii_alnum = [](unsigned char c) {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+  };
+  if (value.empty() || value.size() > max_ntn_position_plan_context_identifier_size ||
+      !is_ascii_alnum(static_cast<unsigned char>(value.front()))) {
+    return false;
+  }
+  return std::all_of(value.begin(), value.end(), [is_ascii_alnum](unsigned char c) {
+    return is_ascii_alnum(c) || c == '.' || c == '_' || c == ':' || c == '/' || c == '-';
+  });
+}
+
+ntn_position_plan_reject_reason validate_schema_v4_canonical_domain(const ntn_versioned_position_plan& plan)
+{
+  if (plan.schema_version != 4) {
+    return ntn_position_plan_reject_reason::none;
+  }
+  if (!is_valid_signing_key_id(plan.planning_run_id) || !is_valid_signing_key_id(plan.catalog_id) ||
+      !is_valid_signing_key_id(plan.identity_registry_version) || !is_valid_signing_key_id(plan.access_profile_id)) {
+    return ntn_position_plan_reject_reason::planning_context_mismatch;
+  }
+  if (plan.catalog_version > max_ntn_position_plan_cross_language_integer ||
+      plan.schedule_version > max_ntn_position_plan_cross_language_integer) {
+    return ntn_position_plan_reject_reason::non_monotonic_version;
+  }
+  const int64_t valid_from_ms  = to_unix_milliseconds(plan.valid_from);
+  const int64_t valid_until_ms = to_unix_milliseconds(plan.valid_until);
+  const int64_t activation_ms  = to_unix_milliseconds(plan.activation_epoch);
+  if (valid_from_ms < -max_ntn_position_plan_unix_time_ms ||
+      valid_from_ms > max_ntn_position_plan_unix_time_ms ||
+      valid_until_ms < -max_ntn_position_plan_unix_time_ms ||
+      valid_until_ms > max_ntn_position_plan_unix_time_ms) {
+    return ntn_position_plan_reject_reason::invalid_validity_window;
+  }
+  if (activation_ms < 0 || activation_ms > max_ntn_position_plan_unix_time_ms) {
+    return ntn_position_plan_reject_reason::invalid_activation_epoch;
+  }
+  for (const ntn_l1_position& position : plan.visible_l1_positions) {
+    if ((position.latitude_deg == 0.0 && std::signbit(position.latitude_deg)) ||
+        (position.longitude_deg == 0.0 && std::signbit(position.longitude_deg))) {
+      return ntn_position_plan_reject_reason::invalid_l1_position;
+    }
+  }
+  return ntn_position_plan_reject_reason::none;
+}
+
+expected<std::vector<unsigned char>, std::string> decode_canonical_base64(const std::string& value)
+{
+  if (value.empty() || value.size() > max_ntn_position_plan_signature_size || value.size() % 4U != 0U ||
+      !std::all_of(value.begin(), value.end(), [](unsigned char c) {
+        return std::isalnum(c) || c == '+' || c == '/' || c == '=';
+      })) {
+    return make_unexpected(std::string{"signature is not canonical base64"});
+  }
+  const size_t first_padding = value.find('=');
+  if (first_padding != std::string::npos &&
+      (value.size() - first_padding > 2U ||
+       !std::all_of(value.begin() + first_padding, value.end(), [](char c) { return c == '='; }))) {
+    return make_unexpected(std::string{"signature is not canonical base64"});
+  }
+
+  size_t decoded_size = 0;
+  int rc = mbedtls_base64_decode(nullptr,
+                                 0,
+                                 &decoded_size,
+                                 reinterpret_cast<const unsigned char*>(value.data()),
+                                 value.size());
+  if (rc != MBEDTLS_ERR_BASE64_BUFFER_TOO_SMALL || decoded_size == 0U) {
+    return make_unexpected(std::string{"signature base64 decoding failed"});
+  }
+  std::vector<unsigned char> decoded(decoded_size);
+  rc = mbedtls_base64_decode(decoded.data(),
+                            decoded.size(),
+                            &decoded_size,
+                            reinterpret_cast<const unsigned char*>(value.data()),
+                            value.size());
+  if (rc != 0 || decoded_size != decoded.size()) {
+    return make_unexpected(std::string{"signature base64 decoding failed"});
+  }
+
+  size_t encoded_size = 0;
+  rc = mbedtls_base64_encode(nullptr, 0, &encoded_size, decoded.data(), decoded.size());
+  if (rc != MBEDTLS_ERR_BASE64_BUFFER_TOO_SMALL || encoded_size == 0U) {
+    return make_unexpected(std::string{"signature base64 canonicalization failed"});
+  }
+  std::vector<unsigned char> encoded(encoded_size);
+  rc = mbedtls_base64_encode(encoded.data(), encoded.size(), &encoded_size, decoded.data(), decoded.size());
+  if (rc != 0 || std::string(reinterpret_cast<const char*>(encoded.data()), encoded_size) != value) {
+    return make_unexpected(std::string{"signature is not canonical base64"});
+  }
+  return decoded;
 }
 
 std::vector<std::string> effective_assigned_l1_ids(const ntn_versioned_position_plan& plan)
@@ -603,6 +701,20 @@ const char* srsran::srs_cu_cp::to_string(ntn_position_plan_reject_reason reason)
       return "non_monotonic_version";
     case ntn_position_plan_reject_reason::invalid_hash:
       return "invalid_hash";
+    case ntn_position_plan_reject_reason::signature_required:
+      return "signature_required";
+    case ntn_position_plan_reject_reason::unsupported_signature_algorithm:
+      return "unsupported_signature_algorithm";
+    case ntn_position_plan_reject_reason::unknown_signing_key:
+      return "unknown_signing_key";
+    case ntn_position_plan_reject_reason::invalid_public_key:
+      return "invalid_public_key";
+    case ntn_position_plan_reject_reason::invalid_signature:
+      return "invalid_signature";
+    case ntn_position_plan_reject_reason::version_replay:
+      return "version_replay";
+    case ntn_position_plan_reject_reason::version_anchor_unavailable:
+      return "version_anchor_unavailable";
     case ntn_position_plan_reject_reason::expired:
       return "expired";
     case ntn_position_plan_reject_reason::invalid_validity_window:
@@ -783,14 +895,86 @@ ntn_onboard_position_plan_controller::ntn_onboard_position_plan_controller(ntn_o
   recovery_reason              = cfg.require_external_apply ? "state_file_not_loaded" : "state_recovery_disabled";
 }
 
+ntn_position_plan_reject_reason
+ntn_onboard_position_plan_controller::validate_authentication(const ntn_versioned_position_plan& plan) const
+{
+  if (plan.schema_version < 4) {
+    return cfg.require_signed_plan ? ntn_position_plan_reject_reason::signature_required
+                                   : ntn_position_plan_reject_reason::none;
+  }
+  if (!plan.authentication.has_value()) {
+    return ntn_position_plan_reject_reason::signature_required;
+  }
+  if (!cfg.authentication_setup_error.empty()) {
+    return ntn_position_plan_reject_reason::invalid_public_key;
+  }
+  if (plan.authentication->algorithm != ntn_position_plan_signature_algorithm) {
+    return ntn_position_plan_reject_reason::unsupported_signature_algorithm;
+  }
+  if (!is_valid_signing_key_id(plan.authentication->key_id)) {
+    return ntn_position_plan_reject_reason::unknown_signing_key;
+  }
+  const auto key_it = std::find_if(cfg.trusted_public_keys.begin(),
+                                   cfg.trusted_public_keys.end(),
+                                   [&plan](const ntn_position_plan_public_key& key) {
+                                     return key.key_id == plan.authentication->key_id;
+                                   });
+  if (key_it == cfg.trusted_public_keys.end()) {
+    return ntn_position_plan_reject_reason::unknown_signing_key;
+  }
+
+  mbedtls_pk_context key_context;
+  mbedtls_pk_init(&key_context);
+  std::vector<unsigned char> pem(key_it->pem.begin(), key_it->pem.end());
+  pem.push_back('\0');
+  const int parse_result = mbedtls_pk_parse_public_key(&key_context, pem.data(), pem.size());
+  if (parse_result != 0 || !mbedtls_pk_can_do(&key_context, MBEDTLS_PK_ECDSA) ||
+      mbedtls_pk_ec(key_context)->grp.id != MBEDTLS_ECP_DP_SECP256R1) {
+    mbedtls_pk_free(&key_context);
+    return ntn_position_plan_reject_reason::invalid_public_key;
+  }
+
+  auto signature = decode_canonical_base64(plan.authentication->signature_base64);
+  if (!signature.has_value()) {
+    mbedtls_pk_free(&key_context);
+    return ntn_position_plan_reject_reason::invalid_signature;
+  }
+  const std::string payload = compute_ntn_position_plan_signature_payload(plan);
+  std::array<unsigned char, 32> digest{};
+  const mbedtls_md_info_t* md_info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+  const bool digest_failed = md_info == nullptr ||
+                             mbedtls_md(md_info,
+                                        reinterpret_cast<const unsigned char*>(payload.data()),
+                                        payload.size(),
+                                        digest.data()) != 0;
+  const int verify_result = digest_failed
+                                ? -1
+                                : mbedtls_pk_verify(&key_context,
+                                                    MBEDTLS_MD_SHA256,
+                                                    digest.data(),
+                                                    digest.size(),
+                                                    signature->data(),
+                                                    signature->size());
+  mbedtls_pk_free(&key_context);
+  return verify_result == 0 ? ntn_position_plan_reject_reason::none
+                            : ntn_position_plan_reject_reason::invalid_signature;
+}
+
 ntn_position_plan_reject_reason ntn_onboard_position_plan_controller::validate_plan(
     const ntn_versioned_position_plan& plan, std::chrono::system_clock::time_point now) const
 {
   if (!cfg.enabled) {
     return ntn_position_plan_reject_reason::feature_disabled;
   }
-  if (plan.schema_version != 1 && plan.schema_version != 2 && plan.schema_version != 3) {
+  if (plan.schema_version != 1 && plan.schema_version != 2 && plan.schema_version != 3 && plan.schema_version != 4) {
     return ntn_position_plan_reject_reason::unsupported_schema;
+  }
+  if (cfg.require_signed_plan && plan.schema_version < 4) {
+    return ntn_position_plan_reject_reason::signature_required;
+  }
+  if (const ntn_position_plan_reject_reason domain_error = validate_schema_v4_canonical_domain(plan);
+      domain_error != ntn_position_plan_reject_reason::none) {
+    return domain_error;
   }
   if (plan.schema_version == 1 && cfg.require_external_apply) {
     return ntn_position_plan_reject_reason::unbound_planning_context;
@@ -822,6 +1006,10 @@ ntn_position_plan_reject_reason ntn_onboard_position_plan_controller::validate_p
   }
   if (plan.content_hash.empty() || normalize_hash(plan.content_hash) != compute_ntn_position_plan_content_hash(plan)) {
     return ntn_position_plan_reject_reason::invalid_hash;
+  }
+  if (const ntn_position_plan_reject_reason authentication_error = validate_authentication(plan);
+      authentication_error != ntn_position_plan_reject_reason::none) {
+    return authentication_error;
   }
   if (plan.catalog_version == 0 || plan.schedule_version == 0) {
     return ntn_position_plan_reject_reason::non_monotonic_version;
@@ -1540,6 +1728,9 @@ ntn_onboard_position_plan_controller::restore_persistent_state(const ntn_onboard
   if (!cfg.enabled || !cfg.require_external_apply) {
     return make_unexpected(std::string{"state restore requires the execution profile"});
   }
+  if (cfg.require_signed_plan && state.schema_version < 4) {
+    return make_unexpected(std::string{"signed plan execution requires state schema v4"});
+  }
   const auto configured_cells = sorted_cell_identities(cfg.onboard_cells);
   const auto persisted_cells  = sorted_cell_identities(state.onboard_cells);
   const bool identities_match = cell_identity_equal(configured_cells[0], persisted_cells[0]) &&
@@ -1570,6 +1761,27 @@ ntn_onboard_position_plan_controller::restore_persistent_state(const ntn_onboard
   if (state.generation == 0 || state.highest_catalog_version < max_catalog_version ||
       state.highest_schedule_version < max_schedule_version) {
     return make_unexpected(std::string{"persisted version high-water is inconsistent"});
+  }
+  if (state.schema_version >= 4 && state.highest_schedule_version != 0 &&
+      !is_sha256_digest(state.highest_schedule_content_hash)) {
+    return make_unexpected(std::string{"persisted schedule high-water hash is invalid"});
+  }
+  if (state.schema_version >= 4) {
+    if (!state.version_anchor_source.has_value()) {
+      return make_unexpected(std::string{"persisted version anchor source is missing"});
+    }
+    const ntn_versioned_position_plan& anchor_source = *state.version_anchor_source;
+    if (anchor_source.catalog_version != state.highest_catalog_version ||
+        anchor_source.schedule_version != state.highest_schedule_version ||
+        normalize_hash(anchor_source.content_hash) != normalize_hash(state.highest_schedule_content_hash)) {
+      return make_unexpected(std::string{"persisted version anchor source does not match the high-water mark"});
+    }
+    const ntn_position_plan_reject_reason anchor_source_error =
+        validate_plan_for_restore(anchor_source, anchor_source.valid_from);
+    if (anchor_source_error != ntn_position_plan_reject_reason::none) {
+      return make_unexpected(
+          fmt::format("persisted version anchor source rejected: {}", to_string(anchor_source_error)));
+    }
   }
 
   std::optional<ntn_activated_position_plan> restored_active;
@@ -1638,6 +1850,10 @@ ntn_onboard_position_plan_controller::restore_persistent_state(const ntn_onboard
 
   highest_catalog_version  = state.highest_catalog_version;
   highest_schedule_version = state.highest_schedule_version;
+  highest_schedule_content_hash = state.schema_version >= 4 ? normalize_hash(state.highest_schedule_content_hash)
+                                                             : std::string{};
+  highest_accepted_plan = state.schema_version >= 4 ? state.version_anchor_source
+                                                     : std::optional<ntn_versioned_position_plan>{};
   sticky_partition         = std::move(restored_sticky);
   received_plan_present    = false;
   last_received_catalog    = 0;
@@ -1729,6 +1945,7 @@ ntn_onboard_position_plan_persistent_state
 ntn_onboard_position_plan_controller::make_persistent_state(uint64_t generation) const
 {
   ntn_onboard_position_plan_persistent_state result;
+  result.schema_version                             = cfg.require_signed_plan ? 4U : 3U;
   result.generation                                 = generation;
   result.satellite_id                               = cfg.satellite_id;
   result.planning_context.catalog_id                = cfg.expected_catalog_id;
@@ -1740,6 +1957,8 @@ ntn_onboard_position_plan_controller::make_persistent_state(uint64_t generation)
   result.onboard_cells                              = cfg.onboard_cells;
   result.highest_catalog_version                    = highest_catalog_version;
   result.highest_schedule_version                   = highest_schedule_version;
+  result.highest_schedule_content_hash              = highest_schedule_content_hash;
+  result.version_anchor_source                      = highest_accepted_plan;
   result.sticky_partition                           = sticky_partition;
   if (received_plan_present) {
     result.received_plan = ntn_onboard_position_plan_received_observation{last_received_catalog,
@@ -1952,6 +2171,23 @@ ntn_position_plan_submit_result ntn_onboard_position_plan_controller::submit(
     const ntn_versioned_position_plan& plan, std::chrono::system_clock::time_point now)
 {
   current_stage              = cfg.enabled ? ntn_position_plan_stage::received : ntn_position_plan_stage::disabled;
+  if (plan.schema_version >= 4 || cfg.require_signed_plan) {
+    if (const ntn_position_plan_reject_reason domain_error = validate_schema_v4_canonical_domain(plan);
+        domain_error != ntn_position_plan_reject_reason::none) {
+      return reject(domain_error, plan.schedule_version);
+    }
+    if (plan.content_hash.empty() || normalize_hash(plan.content_hash) != compute_ntn_position_plan_content_hash(plan)) {
+      return reject(ntn_position_plan_reject_reason::invalid_hash, plan.schedule_version);
+    }
+    if (const ntn_position_plan_reject_reason authentication_error = validate_authentication(plan);
+        authentication_error != ntn_position_plan_reject_reason::none) {
+      return reject(authentication_error, plan.schedule_version);
+    }
+    if (plan.schema_version >= 4 &&
+        (plan.catalog_version < highest_catalog_version || plan.schedule_version <= highest_schedule_version)) {
+      return reject(ntn_position_plan_reject_reason::version_replay, plan.schedule_version);
+    }
+  }
   received_plan_present      = true;
   last_candidate_inventory   = plan.visible_l1_positions;
   last_assigned_l1_position_ids = effective_assigned_l1_ids(plan);
@@ -1988,6 +2224,8 @@ ntn_position_plan_submit_result ntn_onboard_position_plan_controller::submit(
   pending         = std::move(candidate);
   highest_catalog_version  = std::max(highest_catalog_version, plan.catalog_version);
   highest_schedule_version = std::max(highest_schedule_version, plan.schedule_version);
+  highest_schedule_content_hash = normalize_hash(plan.content_hash);
+  highest_accepted_plan = plan;
   current_stage   = ntn_position_plan_stage::pending;
   deployment      = cfg.require_external_apply ? ntn_position_plan_deployment_stage::not_sent
                                                 : ntn_position_plan_deployment_stage::disabled;
@@ -2272,6 +2510,66 @@ std::string srsran::srs_cu_cp::compute_ntn_position_plan_content_hash(const ntn_
   return sha256_with_prefix(canonical.str());
 }
 
+std::string srsran::srs_cu_cp::compute_ntn_position_plan_signature_payload(
+    const ntn_versioned_position_plan& plan)
+{
+  if (plan.schema_version != 4 || !plan.authentication.has_value()) {
+    return {};
+  }
+
+  // Keep this byte-for-byte aligned with utils/ntn/versioned_position_plan_v4.mjs.
+  std::ostringstream payload;
+  payload.imbue(std::locale::classic());
+  payload << "signature_context=srsran-ntn-position-plan-v4-signature-v1\n";
+
+  ntn_versioned_position_plan canonical_plan = plan;
+  canonical_plan.content_hash.clear();
+  // Rebuild the canonical content directly because the hash helper intentionally returns only its digest.
+  payload << "schema_version=4\n";
+  payload << "planning_run_id=" << canonical_plan.planning_run_id << '\n';
+  payload << "catalog=" << canonical_plan.catalog_id << ',' << normalize_hash(canonical_plan.catalog_hash) << '\n';
+  payload << "identity_registry=" << canonical_plan.identity_registry_version << ','
+          << normalize_hash(canonical_plan.identity_registry_hash) << '\n';
+  payload << "access_profile=" << canonical_plan.access_profile_id << ','
+          << normalize_hash(canonical_plan.access_profile_hash) << '\n';
+  payload << "satellite_id=" << canonical_plan.satellite_id << '\n';
+  payload << "catalog_version=" << canonical_plan.catalog_version << '\n';
+  payload << "schedule_version=" << canonical_plan.schedule_version << '\n';
+  payload << "valid_from_unix_ms=" << to_unix_milliseconds(canonical_plan.valid_from) << '\n';
+  payload << "valid_until_unix_ms=" << to_unix_milliseconds(canonical_plan.valid_until) << '\n';
+  payload << "activation_epoch_unix_ms=" << to_unix_milliseconds(canonical_plan.activation_epoch) << '\n';
+
+  const auto cells = sorted_cell_identities(canonical_plan.onboard_cells);
+  for (const ntn_onboard_cell_identity& cell : cells) {
+    payload << "cell=" << cell.nci.value() << ',' << cell.pci << '\n';
+  }
+  std::vector<ntn_l1_position> positions = canonical_plan.visible_l1_positions;
+  std::sort(positions.begin(), positions.end(), [](const ntn_l1_position& lhs, const ntn_l1_position& rhs) {
+    if (lhs.position_id != rhs.position_id) {
+      return lhs.position_id < rhs.position_id;
+    }
+    if (lhs.latitude_deg != rhs.latitude_deg) {
+      return lhs.latitude_deg < rhs.latitude_deg;
+    }
+    return lhs.longitude_deg < rhs.longitude_deg;
+  });
+  payload << std::setprecision(std::numeric_limits<double>::max_digits10);
+  for (const ntn_l1_position& position : positions) {
+    payload << "l1=" << position.position_id << ',' << position.latitude_deg << ',' << position.longitude_deg << ','
+            << static_cast<unsigned>(position.child_mask) << '\n';
+  }
+  std::vector<std::string> assigned_ids = canonical_plan.assigned_l1_position_ids;
+  std::sort(assigned_ids.begin(), assigned_ids.end());
+  for (const std::string& position_id : assigned_ids) {
+    payload << "assigned_l1=" << position_id << '\n';
+  }
+
+  payload << "content_hash=" << normalize_hash(plan.content_hash) << '\n';
+  payload << "authentication_algorithm=" << plan.authentication->algorithm << '\n';
+  payload << "authentication_key_id=" << plan.authentication->key_id << '\n';
+  return payload.str();
+}
+
 std::string srsran::srs_cu_cp::compute_ntn_access_calendar_hash(
     uint64_t schedule_version, const std::vector<ntn_access_calendar_intent>& intents)
 {
@@ -2311,7 +2609,32 @@ srsran::srs_cu_cp::parse_ntn_position_plan_json(const std::string& json_text)
         fmt::format("plan document exceeds {} bytes", max_ntn_position_plan_file_size)));
   }
   try {
-    const nlohmann::json root = nlohmann::json::parse(json_text);
+    std::vector<std::set<std::string>> object_members;
+    bool                               duplicate_member_seen        = false;
+    bool                               duplicate_root_schema_member = false;
+    std::string                        duplicate_member;
+    const auto duplicate_aware_callback = [&](int,
+                                               nlohmann::json::parse_event_t event,
+                                               nlohmann::json&               parsed) {
+      if (event == nlohmann::json::parse_event_t::object_start) {
+        object_members.emplace_back();
+      } else if (event == nlohmann::json::parse_event_t::key) {
+        const std::string key = parsed.get<std::string>();
+        if (!object_members.empty() && !object_members.back().insert(key).second) {
+          duplicate_member_seen = true;
+          if (duplicate_member.empty()) {
+            duplicate_member = key;
+          }
+          if (object_members.size() == 1 && key == "schema_version") {
+            duplicate_root_schema_member = true;
+          }
+        }
+      } else if (event == nlohmann::json::parse_event_t::object_end && !object_members.empty()) {
+        object_members.pop_back();
+      }
+      return true;
+    };
+    const nlohmann::json root = nlohmann::json::parse(json_text, duplicate_aware_callback);
     if (!root.is_object()) {
       return make_unexpected(std::string{"root must be an object"});
     }
@@ -2325,7 +2648,11 @@ srsran::srs_cu_cp::parse_ntn_position_plan_json(const std::string& json_text)
       }
       result.schema_version = static_cast<unsigned>(schema_version.value());
     }
-    if (result.schema_version != 1 && result.schema_version != 2 && result.schema_version != 3) {
+    if ((result.schema_version == 4 && duplicate_member_seen) || duplicate_root_schema_member) {
+      return make_unexpected(fmt::format("duplicate JSON member '{}' is not allowed", duplicate_member));
+    }
+    if (result.schema_version != 1 && result.schema_version != 2 && result.schema_version != 3 &&
+        result.schema_version != 4) {
       return make_unexpected(fmt::format("unsupported schema_version {}", result.schema_version));
     }
 
@@ -2360,7 +2687,7 @@ srsran::srs_cu_cp::parse_ntn_position_plan_json(const std::string& json_text)
                                               "activation_epoch_unix_ms",
                                               "onboard_cells",
                                               "visible_l1_positions"});
-    } else {
+    } else if (result.schema_version == 3) {
       key_error = validate_exact_object_keys(root,
                                              "root",
                                              {"schema_version",
@@ -2378,6 +2705,25 @@ srsran::srs_cu_cp::parse_ntn_position_plan_json(const std::string& json_text)
                                               "onboard_cells",
                                               "visible_l1_positions",
                                               "assigned_l1_position_ids"});
+    } else {
+      key_error = validate_exact_object_keys(root,
+                                             "root",
+                                             {"schema_version",
+                                              "planning_run_id",
+                                              "catalog",
+                                              "identity_registry",
+                                              "access_profile",
+                                              "satellite_id",
+                                              "catalog_version",
+                                              "schedule_version",
+                                              "content_hash",
+                                              "valid_from_unix_ms",
+                                              "valid_until_unix_ms",
+                                              "activation_epoch_unix_ms",
+                                              "onboard_cells",
+                                              "visible_l1_positions",
+                                              "assigned_l1_position_ids",
+                                              "authentication"});
     }
     if (key_error.has_value()) {
       return make_unexpected(std::move(key_error.value()));
@@ -2421,6 +2767,43 @@ srsran::srs_cu_cp::parse_ntn_position_plan_json(const std::string& json_text)
       result.identity_registry_hash    = registry.at("sha256").get<std::string>();
       result.access_profile_id         = std::move(profile_id.value());
       result.access_profile_hash       = profile.at("sha256").get<std::string>();
+      if (result.schema_version == 4 &&
+          (!is_valid_signing_key_id(result.planning_run_id) ||
+           !is_valid_signing_key_id(result.catalog_id) ||
+           !is_valid_signing_key_id(result.identity_registry_version) ||
+           !is_valid_signing_key_id(result.access_profile_id))) {
+        return make_unexpected(
+            std::string{"schema-v4 planning context identifiers contain unsupported characters"});
+      }
+    }
+    if (result.schema_version == 4) {
+      const nlohmann::json& authentication = root.at("authentication");
+      if (auto error = validate_exact_object_keys(
+              authentication, "authentication", {"algorithm", "key_id", "signature_base64"});
+          error.has_value()) {
+        return make_unexpected(std::move(error.value()));
+      }
+      auto algorithm = parse_json_string(authentication.at("algorithm"), "authentication.algorithm");
+      auto key_id    = parse_context_identifier(authentication.at("key_id"), "authentication.key_id");
+      auto signature = parse_json_string(authentication.at("signature_base64"), "authentication.signature_base64");
+      if (!algorithm.has_value()) {
+        return make_unexpected(algorithm.error());
+      }
+      if (!key_id.has_value()) {
+        return make_unexpected(key_id.error());
+      }
+      if (!signature.has_value()) {
+        return make_unexpected(signature.error());
+      }
+      if (!is_valid_signing_key_id(key_id.value())) {
+        return make_unexpected(std::string{"authentication.key_id contains unsupported characters"});
+      }
+      if (signature->size() > max_ntn_position_plan_signature_size) {
+        return make_unexpected(make_input_too_large_error(
+            fmt::format("authentication.signature_base64 exceeds {} bytes", max_ntn_position_plan_signature_size)));
+      }
+      result.authentication = ntn_position_plan_authentication{
+          std::move(algorithm.value()), std::move(key_id.value()), std::move(signature.value())};
     }
     auto catalog_version  = parse_json_uint64(root.at("catalog_version"), "catalog_version");
     auto schedule_version = parse_json_uint64(root.at("schedule_version"), "schedule_version");
@@ -2441,6 +2824,19 @@ srsran::srs_cu_cp::parse_ntn_position_plan_json(const std::string& json_text)
     }
     if (!activation_epoch.has_value()) {
       return make_unexpected(activation_epoch.error());
+    }
+    if (result.schema_version == 4 &&
+        (catalog_version.value() > max_ntn_position_plan_cross_language_integer ||
+         schedule_version.value() > max_ntn_position_plan_cross_language_integer)) {
+      return make_unexpected(std::string{"schema-v4 versions exceed the cross-language exact integer range"});
+    }
+    if (result.schema_version == 4 &&
+        (valid_from.value() < -max_ntn_position_plan_unix_time_ms ||
+         valid_from.value() > max_ntn_position_plan_unix_time_ms ||
+         valid_until.value() < -max_ntn_position_plan_unix_time_ms ||
+         valid_until.value() > max_ntn_position_plan_unix_time_ms || activation_epoch.value() < 0 ||
+         activation_epoch.value() > max_ntn_position_plan_unix_time_ms)) {
+      return make_unexpected(std::string{"schema-v4 time is outside the supported millisecond range"});
     }
     auto satellite_id = parse_context_identifier(root.at("satellite_id"), "satellite_id");
     if (!satellite_id.has_value()) {
@@ -2501,6 +2897,11 @@ srsran::srs_cu_cp::parse_ntn_position_plan_json(const std::string& json_text)
       position.position_id  = positions[i].at("position_id").get<std::string>();
       position.latitude_deg = positions[i].at("latitude_deg").get<double>();
       position.longitude_deg = positions[i].at("longitude_deg").get<double>();
+      if (result.schema_version == 4 &&
+          ((position.latitude_deg == 0.0 && std::signbit(position.latitude_deg)) ||
+           (position.longitude_deg == 0.0 && std::signbit(position.longitude_deg)))) {
+        return make_unexpected(fmt::format("{} contains negative zero, which is not stable in JSON", context));
+      }
       if (result.schema_version >= 2) {
         auto child_mask = parse_json_uint64(positions[i].at("child_mask"), fmt::format("{}.child_mask", context));
         if (!child_mask.has_value()) {
@@ -2634,4 +3035,85 @@ srsran::srs_cu_cp::load_ntn_position_plan_json_file(const std::string& path)
                 parsed.error());
   }
   return std::move(parsed.value());
+}
+
+expected<ntn_position_plan_public_key, std::string>
+srsran::srs_cu_cp::load_ntn_position_plan_public_key_file(const std::string& path, const std::string& key_id)
+{
+  if (!is_valid_signing_key_id(key_id)) {
+    return make_unexpected(std::string{"invalid signing key id"});
+  }
+  int flags = O_RDONLY | O_NONBLOCK;
+#ifdef O_CLOEXEC
+  flags |= O_CLOEXEC;
+#endif
+#ifdef O_NOFOLLOW
+  flags |= O_NOFOLLOW;
+#endif
+  unique_fd fd(::open(path.c_str(), flags));
+  if (!fd.is_open()) {
+    return make_unexpected(fmt::format("cannot open public key file '{}': {}", path, std::strerror(errno)));
+  }
+  struct stat initial_status {};
+  if (::fstat(fd.value(), &initial_status) != 0 || !S_ISREG(initial_status.st_mode)) {
+    return make_unexpected(fmt::format("public key file '{}' is not a regular file", path));
+  }
+  if (initial_status.st_size <= 0 ||
+      static_cast<uint64_t>(initial_status.st_size) > max_ntn_position_plan_public_key_file_size) {
+    return make_unexpected(make_input_too_large_error(
+        fmt::format("public key file '{}' exceeds {} bytes", path, max_ntn_position_plan_public_key_file_size)));
+  }
+
+  const size_t initial_size = static_cast<size_t>(initial_status.st_size);
+  std::string  pem;
+  pem.reserve(initial_size);
+  std::array<char, 4096> buffer{};
+  while (true) {
+    const ssize_t count = ::read(fd.value(), buffer.data(), buffer.size());
+    if (count < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return make_unexpected(fmt::format("cannot read public key file '{}': {}", path, std::strerror(errno)));
+    }
+    if (count == 0) {
+      break;
+    }
+    const size_t bytes_read = static_cast<size_t>(count);
+    if (pem.size() > max_ntn_position_plan_public_key_file_size - bytes_read) {
+      return make_unexpected(make_input_too_large_error(fmt::format("public key file '{}' grew while read", path)));
+    }
+    pem.append(buffer.data(), bytes_read);
+  }
+  struct stat final_status {};
+  if (::fstat(fd.value(), &final_status) != 0 || final_status.st_size != initial_status.st_size ||
+      pem.size() != initial_size) {
+    return make_unexpected(std::string{"public key file changed while being read"});
+  }
+
+  mbedtls_pk_context key_context;
+  mbedtls_pk_init(&key_context);
+  std::vector<unsigned char> pem_bytes(pem.begin(), pem.end());
+  pem_bytes.push_back('\0');
+  const int parse_result = mbedtls_pk_parse_public_key(&key_context, pem_bytes.data(), pem_bytes.size());
+  if (parse_result != 0 || !mbedtls_pk_can_do(&key_context, MBEDTLS_PK_ECDSA) ||
+      mbedtls_pk_ec(key_context)->grp.id != MBEDTLS_ECP_DP_SECP256R1) {
+    mbedtls_pk_free(&key_context);
+    return make_unexpected(std::string{"public key must be PEM/SPKI ECDSA P-256"});
+  }
+
+  std::array<unsigned char, 1024> der_buffer{};
+  const int der_size = mbedtls_pk_write_pubkey_der(&key_context, der_buffer.data(), der_buffer.size());
+  if (der_size <= 0 || static_cast<size_t>(der_size) > der_buffer.size()) {
+    mbedtls_pk_free(&key_context);
+    return make_unexpected(std::string{"cannot canonicalize public key"});
+  }
+  const std::string der(reinterpret_cast<const char*>(der_buffer.data() + der_buffer.size() - der_size),
+                        static_cast<size_t>(der_size));
+  mbedtls_pk_free(&key_context);
+  const std::string fingerprint = sha256_with_prefix(der);
+  if (fingerprint.empty()) {
+    return make_unexpected(std::string{"cannot fingerprint public key"});
+  }
+  return ntn_position_plan_public_key{key_id, std::move(pem), fingerprint};
 }

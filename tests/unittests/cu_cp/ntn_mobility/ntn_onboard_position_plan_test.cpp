@@ -68,10 +68,39 @@ void write_plan_file(const std::filesystem::path& path, const std::string& text)
   output.write(text.data(), static_cast<std::streamsize>(text.size()));
 }
 
+std::string read_plan_file(const std::filesystem::path& path)
+{
+  std::ifstream input(path, std::ios::binary | std::ios::ate);
+  if (!input.is_open()) {
+    return {};
+  }
+  const std::streamsize size = input.tellg();
+  if (size < 0) {
+    return {};
+  }
+  std::string text(static_cast<size_t>(size), '\0');
+  input.seekg(0);
+  input.read(text.data(), size);
+  return input.good() || input.eof() ? text : std::string{};
+}
+
 void grow_plan_file_after_size_check(const std::string& path)
 {
   std::ofstream output(path, std::ios::binary | std::ios::app);
   output.put(' ');
+}
+
+std::filesystem::path ntn_testdata_path()
+{
+  std::filesystem::path current = std::filesystem::path{__FILE__}.parent_path();
+  while (!current.empty()) {
+    const std::filesystem::path candidate = current / "utils/ntn/testdata";
+    if (std::filesystem::exists(candidate)) {
+      return candidate;
+    }
+    current = current.parent_path();
+  }
+  return {};
 }
 
 std::chrono::system_clock::time_point at_ms(int64_t milliseconds)
@@ -556,13 +585,208 @@ TEST(ntn_onboard_position_plan, schema_v1_is_dry_run_only_and_schema_v2_binds_pl
   EXPECT_FALSE(mismatch_result.accepted);
   EXPECT_EQ(mismatch_result.reason, ntn_position_plan_reject_reason::planning_context_mismatch);
 
-  ntn_versioned_position_plan unsupported = make_plan(2);
-  unsupported.schema_version              = 4;
-  unsupported.content_hash                = compute_ntn_position_plan_content_hash(unsupported);
-  ntn_onboard_position_plan_controller unsupported_controller(make_config());
-  const auto                           unsupported_result = unsupported_controller.submit(unsupported, at_ms(1280));
-  EXPECT_FALSE(unsupported_result.accepted);
-  EXPECT_EQ(unsupported_result.reason, ntn_position_plan_reject_reason::unsupported_schema);
+  ntn_versioned_position_plan unsigned_v4 = make_schema_v3_plan(2, 1);
+  unsigned_v4.schema_version               = 4;
+  unsigned_v4.content_hash                 = compute_ntn_position_plan_content_hash(unsigned_v4);
+  ntn_onboard_position_plan_controller unsigned_v4_controller(make_config());
+  const auto unsigned_v4_result = unsigned_v4_controller.submit(unsigned_v4, at_ms(1280));
+  EXPECT_FALSE(unsigned_v4_result.accepted);
+  EXPECT_EQ(unsigned_v4_result.reason, ntn_position_plan_reject_reason::signature_required);
+}
+
+TEST(ntn_onboard_position_plan, schema_v4_node_golden_signature_verifies_and_replay_keeps_inventory)
+{
+  const std::filesystem::path testdata = ntn_testdata_path();
+  ASSERT_FALSE(testdata.empty());
+  auto plan = load_ntn_position_plan_json_file((testdata / "versioned-position-plan-v4-golden.json").string());
+  ASSERT_TRUE(plan.has_value()) << plan.error().detail;
+  EXPECT_EQ(plan->content_hash, "sha256:6b0f70aff33b6e5e7cc71069a316184653155185cc76e4bf2f8173e18e1bd21a");
+  EXPECT_EQ(compute_ntn_position_plan_content_hash(*plan), plan->content_hash);
+
+  auto public_key = load_ntn_position_plan_public_key_file(
+      (testdata / "versioned-position-plan-v4-public-key.pem").string(), "ntn-test-signing-key-v1");
+  ASSERT_TRUE(public_key.has_value()) << public_key.error();
+  EXPECT_EQ(public_key->fingerprint,
+            "sha256:1f30855499b0759a2341994ae997682567ba78f8de94d01bb5ac11bec75cad5d");
+
+  ntn_onboard_position_plan_config config = make_config();
+  config.require_signed_plan              = true;
+  config.trusted_public_keys.push_back(public_key.value());
+  ntn_onboard_position_plan_controller controller(config);
+  const auto accepted = controller.submit(*plan, at_ms(1280));
+  ASSERT_TRUE(accepted.accepted) << to_string(accepted.reason);
+  ASSERT_EQ(controller.candidate_inventory().size(), 2U);
+  ASSERT_EQ(controller.assigned_l1_position_ids().size(), 1U);
+
+  ntn_versioned_position_plan replay = *plan;
+  replay.visible_l1_positions.push_back({"G000003", 10.1, 20.1, 0x7f});
+  replay.content_hash = compute_ntn_position_plan_content_hash(replay);
+  const auto replay_result = controller.submit(replay, at_ms(1280));
+  EXPECT_FALSE(replay_result.accepted);
+  EXPECT_EQ(replay_result.reason, ntn_position_plan_reject_reason::invalid_signature);
+  EXPECT_EQ(controller.candidate_inventory().size(), 2U);
+
+  const auto exact_replay = controller.submit(*plan, at_ms(1280));
+  EXPECT_FALSE(exact_replay.accepted);
+  EXPECT_EQ(exact_replay.reason, ntn_position_plan_reject_reason::version_replay);
+  EXPECT_EQ(controller.candidate_inventory().size(), 2U);
+}
+
+TEST(ntn_onboard_position_plan, schema_v4_rejects_unknown_key_and_signed_mode_rejects_v3)
+{
+  const std::filesystem::path testdata = ntn_testdata_path();
+  ASSERT_FALSE(testdata.empty());
+  auto plan = load_ntn_position_plan_json_file((testdata / "versioned-position-plan-v4-golden.json").string());
+  ASSERT_TRUE(plan.has_value()) << plan.error().detail;
+  auto public_key = load_ntn_position_plan_public_key_file(
+      (testdata / "versioned-position-plan-v4-public-key.pem").string(), "ntn-test-signing-key-v1");
+  ASSERT_TRUE(public_key.has_value()) << public_key.error();
+
+  ntn_onboard_position_plan_config config = make_config();
+  config.require_signed_plan              = true;
+  config.trusted_public_keys.push_back(public_key.value());
+
+  ntn_versioned_position_plan unknown_key = *plan;
+  unknown_key.authentication->key_id      = "unknown-management-key";
+  ntn_onboard_position_plan_controller unknown_key_controller(config);
+  const auto unknown_result = unknown_key_controller.submit(unknown_key, at_ms(1280));
+  EXPECT_FALSE(unknown_result.accepted);
+  EXPECT_EQ(unknown_result.reason, ntn_position_plan_reject_reason::unknown_signing_key);
+
+  ntn_onboard_position_plan_controller legacy_controller(config);
+  const auto legacy_result = legacy_controller.submit(make_schema_v3_plan(2, 1), at_ms(1280));
+  EXPECT_FALSE(legacy_result.accepted);
+  EXPECT_EQ(legacy_result.reason, ntn_position_plan_reject_reason::signature_required);
+}
+
+TEST(ntn_onboard_position_plan, schema_v4_parser_rejects_ambiguous_text_and_cross_language_overflow)
+{
+  const std::filesystem::path testdata = ntn_testdata_path();
+  ASSERT_FALSE(testdata.empty());
+  const std::string golden_text = read_plan_file(testdata / "versioned-position-plan-v4-golden.json");
+  ASSERT_FALSE(golden_text.empty());
+  const nlohmann::json golden = nlohmann::json::parse(golden_text);
+
+  for (const auto& [field, value] :
+       std::vector<std::pair<std::string, std::string>>{{"planning_run_id", "run\ncatalog=alternate"},
+                                                        {"catalog", "catalog,alternate"},
+                                                        {"identity_registry", "registry=alternate"},
+                                                        {"access_profile", "profile\ralternate"}}) {
+    nlohmann::json unsafe = golden;
+    if (field == "planning_run_id") {
+      unsafe[field] = value;
+    } else if (field == "catalog") {
+      unsafe[field]["id"] = value;
+    } else if (field == "identity_registry") {
+      unsafe[field]["version"] = value;
+    } else {
+      unsafe[field]["id"] = value;
+    }
+    auto parsed = parse_ntn_position_plan_json(unsafe.dump());
+    ASSERT_FALSE(parsed.has_value()) << field;
+    EXPECT_NE(parsed.error().find("unsupported characters"), std::string::npos) << field;
+  }
+
+  std::string duplicate_root = golden_text;
+  const std::string root_member = "\"schema_version\": 4";
+  const size_t      root_offset = duplicate_root.find(root_member);
+  ASSERT_NE(root_offset, std::string::npos);
+  duplicate_root.replace(root_offset, root_member.size(), root_member + ",\n  " + root_member);
+  auto duplicate_root_result = parse_ntn_position_plan_json(duplicate_root);
+  ASSERT_FALSE(duplicate_root_result.has_value());
+  EXPECT_NE(duplicate_root_result.error().find("duplicate JSON member 'schema_version'"), std::string::npos);
+
+  std::string duplicate_authentication = golden_text;
+  const std::string algorithm_member = "\"algorithm\": \"ecdsa-p256-sha256\"";
+  const size_t      algorithm_offset = duplicate_authentication.find(algorithm_member);
+  ASSERT_NE(algorithm_offset, std::string::npos);
+  duplicate_authentication.replace(
+      algorithm_offset, algorithm_member.size(), algorithm_member + ",\n    " + algorithm_member);
+  auto duplicate_authentication_result = parse_ntn_position_plan_json(duplicate_authentication);
+  ASSERT_FALSE(duplicate_authentication_result.has_value());
+  EXPECT_NE(duplicate_authentication_result.error().find("duplicate JSON member 'algorithm'"), std::string::npos);
+
+  nlohmann::json oversized_version = golden;
+  oversized_version["catalog_version"] = max_ntn_position_plan_cross_language_integer + 1U;
+  auto oversized_version_result = parse_ntn_position_plan_json(oversized_version.dump());
+  ASSERT_FALSE(oversized_version_result.has_value());
+  EXPECT_NE(oversized_version_result.error().find("exact integer range"), std::string::npos);
+
+  nlohmann::json oversized_time = golden;
+  oversized_time["valid_until_unix_ms"] = max_ntn_position_plan_unix_time_ms + 1;
+  auto oversized_time_result = parse_ntn_position_plan_json(oversized_time.dump());
+  ASSERT_FALSE(oversized_time_result.has_value());
+  EXPECT_NE(oversized_time_result.error().find("supported millisecond range"), std::string::npos);
+
+  nlohmann::json negative_zero = golden;
+  negative_zero["visible_l1_positions"][0]["latitude_deg"] = -0.0;
+  auto negative_zero_result = parse_ntn_position_plan_json(negative_zero.dump());
+  ASSERT_FALSE(negative_zero_result.has_value());
+  EXPECT_NE(negative_zero_result.error().find("negative zero"), std::string::npos);
+}
+
+TEST(ntn_onboard_position_plan, schema_v4_recovery_state_reverifies_the_high_water_signature)
+{
+  const std::filesystem::path testdata = ntn_testdata_path();
+  ASSERT_FALSE(testdata.empty());
+  auto plan = load_ntn_position_plan_json_file((testdata / "versioned-position-plan-v4-golden.json").string());
+  ASSERT_TRUE(plan.has_value()) << plan.error().detail;
+  auto public_key = load_ntn_position_plan_public_key_file(
+      (testdata / "versioned-position-plan-v4-public-key.pem").string(), "ntn-test-signing-key-v1");
+  ASSERT_TRUE(public_key.has_value()) << public_key.error();
+
+  ntn_onboard_position_plan_config config = make_config();
+  config.require_external_apply           = true;
+  config.require_signed_plan              = true;
+  config.trusted_public_keys.push_back(public_key.value());
+  ntn_onboard_position_plan_controller controller(config);
+  ASSERT_TRUE(controller.submit(*plan, at_ms(1280)).accepted);
+
+  ntn_onboard_position_plan_persistent_state state = controller.make_persistent_state(1);
+  state.version_anchor = {"software_only", plan->catalog_version, plan->schedule_version, plan->content_hash};
+  const std::filesystem::path state_path = make_plan_path("signed-state");
+  temporary_plan_guard       state_guard(state_path);
+  auto stored = store_ntn_onboard_position_plan_state_atomic(state_path.string(), state);
+  ASSERT_TRUE(stored.has_value()) << stored.error();
+  ASSERT_TRUE(stored->durable) << stored->durability_error;
+  auto loaded = load_ntn_onboard_position_plan_state(state_path.string());
+  ASSERT_TRUE(loaded.has_value()) << loaded.error();
+  ASSERT_TRUE(loaded->has_value());
+
+  ntn_onboard_position_plan_controller restarted(config);
+  auto restored = restarted.restore_persistent_state(**loaded, at_ms(1280));
+  ASSERT_TRUE(restored.has_value()) << restored.error();
+  EXPECT_EQ(restarted.highest_schedule_version_seen(), 1U);
+  ASSERT_TRUE(restarted.highest_accepted_plan_source().has_value());
+  ASSERT_TRUE(restarted.highest_accepted_plan_source()->authentication.has_value());
+  EXPECT_EQ(restarted.highest_accepted_plan_source()->authentication->key_id, "ntn-test-signing-key-v1");
+
+  ntn_onboard_position_plan_controller expired_restart(config);
+  auto expired_restored = expired_restart.restore_persistent_state(**loaded, at_ms(64000));
+  ASSERT_TRUE(expired_restored.has_value()) << expired_restored.error();
+  EXPECT_FALSE(expired_restart.active_plan().has_value());
+  EXPECT_FALSE(expired_restart.pending_plan().has_value());
+  EXPECT_EQ(expired_restart.highest_schedule_version_seen(), 1U);
+  ASSERT_TRUE(expired_restart.highest_accepted_plan_source().has_value());
+  ASSERT_TRUE(expired_restart.highest_accepted_plan_source()->authentication.has_value());
+  const auto expired_replay = expired_restart.submit(*plan, at_ms(64000));
+  EXPECT_FALSE(expired_replay.accepted);
+  EXPECT_EQ(expired_replay.reason, ntn_position_plan_reject_reason::version_replay);
+
+  ntn_onboard_position_plan_persistent_state tampered = **loaded;
+  tampered.version_anchor_source->authentication->signature_base64[10] =
+      tampered.version_anchor_source->authentication->signature_base64[10] == 'A' ? 'B' : 'A';
+  const std::filesystem::path tampered_path = make_plan_path("signed-state-tampered");
+  temporary_plan_guard       tampered_guard(tampered_path);
+  auto tampered_store = store_ntn_onboard_position_plan_state_atomic(tampered_path.string(), tampered);
+  ASSERT_TRUE(tampered_store.has_value()) << tampered_store.error();
+  auto tampered_loaded = load_ntn_onboard_position_plan_state(tampered_path.string());
+  ASSERT_TRUE(tampered_loaded.has_value()) << tampered_loaded.error();
+  ASSERT_TRUE(tampered_loaded->has_value());
+  ntn_onboard_position_plan_controller rejected_restart(config);
+  auto rejected = rejected_restart.restore_persistent_state(**tampered_loaded, at_ms(1280));
+  EXPECT_FALSE(rejected.has_value());
+  EXPECT_NE(rejected.error().find("invalid_signature"), std::string::npos);
 }
 
 TEST(ntn_onboard_position_plan, access_profile_hash_binds_the_complete_local_resource_model)

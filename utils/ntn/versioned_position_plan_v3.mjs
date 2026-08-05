@@ -353,7 +353,7 @@ export function makeGoldenPlanV3() {
   });
 }
 
-function readUtf8FileBounded(path) {
+export function readPositionPlanUtf8FileBounded(path) {
   let descriptor;
   try {
     descriptor = openSync(path, 'r');
@@ -396,7 +396,7 @@ function readUtf8FileBounded(path) {
 }
 
 function readJson(path) {
-  return JSON.parse(readUtf8FileBounded(path));
+  return JSON.parse(readPositionPlanUtf8FileBounded(path));
 }
 
 function serializedPlanJson(plan) {
@@ -431,6 +431,16 @@ function syncDirectoryBestEffort(directory, operations) {
 
 export function writePlanFileV3(plan, outputPath, operationOverrides = {}) {
   const text = serializedPlanJson(plan);
+  writePositionPlanTextAtomic(text, outputPath, operationOverrides);
+}
+
+export function writePositionPlanTextAtomic(text, outputPath, operationOverrides = {}) {
+  const size = Buffer.byteLength(text, 'utf8');
+  if (size > MAX_POSITION_PLAN_FILE_BYTES) {
+    failInputTooLarge(
+      `serialized plan is ${size} UTF-8 bytes; maximum is ${MAX_POSITION_PLAN_FILE_BYTES}`
+    );
+  }
   const operations = {...DEFAULT_ATOMIC_FILE_OPERATIONS, ...operationOverrides};
   const directory = dirname(outputPath);
   const temporaryPath = join(

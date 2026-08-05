@@ -238,6 +238,11 @@ json encode_source_plan(const ntn_versioned_position_plan& plan)
   if (plan.schema_version >= 3) {
     root["assigned_l1_position_ids"] = plan.assigned_l1_position_ids;
   }
+  if (plan.schema_version >= 4 && plan.authentication.has_value()) {
+    root["authentication"] = {{"algorithm", plan.authentication->algorithm},
+                              {"key_id", plan.authentication->key_id},
+                              {"signature_base64", plan.authentication->signature_base64}};
+  }
   return root;
 }
 
@@ -319,6 +324,21 @@ json encode_state_payload(const ntn_onboard_position_plan_persistent_state& stat
     payload["received_plan"] = state.received_plan.has_value()
                                    ? encode_received_observation(*state.received_plan, state.schema_version)
                                    : json(nullptr);
+  }
+  if (state.schema_version >= 4) {
+    payload["high_water"]["content_hash"] = state.highest_schedule_content_hash.empty()
+                                                ? json(nullptr)
+                                                : json(state.highest_schedule_content_hash);
+    payload["version_anchor"] =
+        state.version_anchor.has_value()
+            ? json{{"mode", state.version_anchor->mode},
+                   {"catalog_version", state.version_anchor->catalog_version},
+                   {"schedule_version", state.version_anchor->schedule_version},
+                   {"content_hash", state.version_anchor->content_hash}}
+            : json(nullptr);
+    payload["version_anchor_source"] = state.version_anchor_source.has_value()
+                                             ? encode_source_plan(*state.version_anchor_source)
+                                             : json(nullptr);
   }
   payload["outstanding_clears"] = json::array();
   for (const ntn_onboard_position_plan_clear_obligation& obligation : state.outstanding_clears) {
@@ -611,7 +631,7 @@ expected<ntn_onboard_position_plan_persistent_state, std::string> decode_state(c
   if (schema.value() > std::numeric_limits<unsigned>::max()) {
     return make_unexpected(std::string{"state_schema_version exceeds unsigned range"});
   }
-  if (schema.value() != 1 && schema.value() != 2 &&
+  if (schema.value() != 1 && schema.value() != 2 && schema.value() != 3 &&
       schema.value() != ntn_onboard_position_plan_persistent_state::current_schema_version) {
     return make_unexpected(fmt::format("unsupported_state_schema_version_{}", schema.value()));
   }
@@ -631,7 +651,8 @@ expected<ntn_onboard_position_plan_persistent_state, std::string> decode_state(c
                                         "sticky_partition",
                                         "outstanding_clears",
                                         "deployment"})
-          : validate_exact_object_keys(root,
+          : schema.value() < 4
+                ? validate_exact_object_keys(root,
                                        "root",
                                        {"state_schema_version",
                                         "generation",
@@ -645,7 +666,24 @@ expected<ntn_onboard_position_plan_persistent_state, std::string> decode_state(c
                                         "received_plan",
                                         "sticky_partition",
                                         "outstanding_clears",
-                                        "deployment"});
+                                        "deployment"})
+                : validate_exact_object_keys(root,
+                                             "root",
+                                             {"state_schema_version",
+                                              "generation",
+                                              "state_hash",
+                                              "satellite_id",
+                                              "planning_context",
+                                              "onboard_cells",
+                                              "high_water",
+                                              "active",
+                                              "pending",
+                                              "received_plan",
+                                              "sticky_partition",
+                                              "outstanding_clears",
+                                              "deployment",
+                                              "version_anchor",
+                                              "version_anchor_source"});
   if (exact_key_error.has_value()) {
     return make_unexpected(std::move(*exact_key_error));
   }
@@ -705,9 +743,13 @@ expected<ntn_onboard_position_plan_persistent_state, std::string> decode_state(c
   result.onboard_cells = onboard_cells.value();
 
   const json& high_water = root.at("high_water");
-  if (auto error = validate_exact_object_keys(high_water, "high_water", {"catalog_version", "schedule_version"});
-      error.has_value()) {
-    return make_unexpected(std::move(*error));
+  const auto high_water_error = result.schema_version >= 4
+                                    ? validate_exact_object_keys(
+                                          high_water, "high_water", {"catalog_version", "schedule_version", "content_hash"})
+                                    : validate_exact_object_keys(
+                                          high_water, "high_water", {"catalog_version", "schedule_version"});
+  if (high_water_error.has_value()) {
+    return make_unexpected(std::move(*high_water_error));
   }
   auto catalog_version  = parse_uint64(high_water.at("catalog_version"), "high_water.catalog_version");
   auto schedule_version = parse_uint64(high_water.at("schedule_version"), "high_water.schedule_version");
@@ -719,6 +761,41 @@ expected<ntn_onboard_position_plan_persistent_state, std::string> decode_state(c
   }
   result.highest_catalog_version  = catalog_version.value();
   result.highest_schedule_version = schedule_version.value();
+  if (result.schema_version >= 4 && !high_water.at("content_hash").is_null()) {
+    auto content_hash = parse_string(high_water.at("content_hash"), "high_water.content_hash");
+    if (!content_hash.has_value()) {
+      return make_unexpected(content_hash.error());
+    }
+    result.highest_schedule_content_hash = std::move(content_hash.value());
+  }
+
+  if (result.schema_version >= 4 && !root.at("version_anchor").is_null()) {
+    const json& anchor = root.at("version_anchor");
+    if (auto error = validate_exact_object_keys(
+            anchor, "version_anchor", {"mode", "catalog_version", "schedule_version", "content_hash"});
+        error.has_value()) {
+      return make_unexpected(std::move(*error));
+    }
+    auto mode = parse_string(anchor.at("mode"), "version_anchor.mode");
+    auto anchor_catalog = parse_uint64(anchor.at("catalog_version"), "version_anchor.catalog_version");
+    auto anchor_schedule = parse_uint64(anchor.at("schedule_version"), "version_anchor.schedule_version");
+    auto anchor_hash = parse_string(anchor.at("content_hash"), "version_anchor.content_hash");
+    if (!mode.has_value() || !anchor_catalog.has_value() || !anchor_schedule.has_value() ||
+        !anchor_hash.has_value()) {
+      return make_unexpected(std::string{"version_anchor contains an invalid field"});
+    }
+    result.version_anchor = ntn_position_plan_version_anchor_snapshot{std::move(mode.value()),
+                                                                      anchor_catalog.value(),
+                                                                      anchor_schedule.value(),
+                                                                      std::move(anchor_hash.value())};
+  }
+  if (result.schema_version >= 4 && !root.at("version_anchor_source").is_null()) {
+    auto source = parse_ntn_position_plan_json(root.at("version_anchor_source").dump());
+    if (!source.has_value()) {
+      return make_unexpected(fmt::format("version_anchor_source: {}", source.error()));
+    }
+    result.version_anchor_source = std::move(source.value());
+  }
 
   if (!root.at("active").is_null()) {
     auto active = decode_snapshot(root.at("active"), "active");
@@ -841,7 +918,7 @@ std::optional<std::string> validate_snapshot(const ntn_onboard_position_plan_sta
                                              const char*                                       context)
 {
   const ntn_versioned_position_plan& plan = snapshot.source;
-  if (plan.schema_version != 2 && plan.schema_version != 3) {
+  if (plan.schema_version != 2 && plan.schema_version != 3 && plan.schema_version != 4) {
     return fmt::format("{}_source_schema_unsupported", context);
   }
   if (plan.satellite_id != state.satellite_id || !context_matches_plan(state.planning_context, plan) ||
@@ -857,6 +934,14 @@ std::optional<std::string> validate_snapshot(const ntn_onboard_position_plan_sta
   }
   if (!is_sha256_digest(snapshot.calendar_hash)) {
     return fmt::format("{}_calendar_hash_invalid", context);
+  }
+  if (plan.schema_version >= 4 &&
+      (!plan.authentication.has_value() || plan.authentication->algorithm != ntn_position_plan_signature_algorithm ||
+       plan.authentication->key_id.empty() ||
+       plan.authentication->key_id.size() > max_ntn_position_plan_context_identifier_size ||
+       plan.authentication->signature_base64.empty() ||
+       plan.authentication->signature_base64.size() > max_ntn_position_plan_signature_size)) {
+    return fmt::format("{}_authentication_invalid", context);
   }
 
   std::set<std::string> inventory;
@@ -887,12 +972,32 @@ std::optional<std::string> validate_snapshot(const ntn_onboard_position_plan_sta
 
 std::optional<std::string> validate_state(const ntn_onboard_position_plan_persistent_state& state)
 {
-  if (state.schema_version != 1 && state.schema_version != 2 &&
+  if (state.schema_version != 1 && state.schema_version != 2 && state.schema_version != 3 &&
       state.schema_version != ntn_onboard_position_plan_persistent_state::current_schema_version) {
     return fmt::format("unsupported_state_schema_version_{}", state.schema_version);
   }
   if (state.schema_version == 1 && state.received_plan.has_value()) {
     return std::string{"received_plan_requires_state_schema_v2"};
+  }
+  if (state.schema_version >= 4) {
+    if (state.highest_schedule_version == 0 || !is_sha256_digest(state.highest_schedule_content_hash)) {
+      return std::string{"invalid_high_water_content_hash"};
+    }
+    if (!state.version_anchor.has_value() || state.version_anchor->mode != "software_only" ||
+        state.version_anchor->catalog_version != state.highest_catalog_version ||
+        state.version_anchor->schedule_version != state.highest_schedule_version ||
+        normalize_hash(state.version_anchor->content_hash) != normalize_hash(state.highest_schedule_content_hash)) {
+      return std::string{"version_anchor_high_water_mismatch"};
+    }
+    if (!state.version_anchor_source.has_value() || state.version_anchor_source->schema_version != 4 ||
+        state.version_anchor_source->catalog_version != state.highest_catalog_version ||
+        state.version_anchor_source->schedule_version != state.highest_schedule_version ||
+        normalize_hash(state.version_anchor_source->content_hash) != normalize_hash(state.highest_schedule_content_hash)) {
+      return std::string{"version_anchor_source_high_water_mismatch"};
+    }
+  } else if (state.version_anchor.has_value() || state.version_anchor_source.has_value() ||
+             !state.highest_schedule_content_hash.empty()) {
+    return std::string{"version_anchor_requires_state_schema_v4"};
   }
   if (state.generation == 0) {
     return std::string{"invalid_state_generation"};
