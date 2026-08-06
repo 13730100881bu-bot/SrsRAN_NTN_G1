@@ -841,6 +841,16 @@ public:
                position_plan.pending_content_hash,
                position_plan.pending_calendar_hash,
                position_plan.pending_activation_epoch_unix_ms);
+    fmt::print("NTN onboard runtime mapping: stage={} detail={} schedule_version={} calendar_hash={} "
+               "mapped_l1={} paging={} valid_idle_contexts={} initial_access_position_check={}\n",
+               position_plan.runtime_mapping_stage,
+               position_plan.runtime_mapping_detail,
+               position_plan.runtime_mapping_schedule_version,
+               position_plan.runtime_mapping_calendar_hash,
+               position_plan.runtime_mapped_l1_positions,
+               position_plan.paging_state,
+               position_plan.valid_idle_paging_contexts,
+               position_plan.initial_access_position_check);
     fmt::print("NTN access calendar intent: schedule_version={} intents={} ssb={} prach_ro={} prach_ul_beam={} "
                "max_ssb_interval_ms={} max_prach_interval_ms={} "
                "prach_ro_without_beam={} resource_conflicts={} deployment_detail={} evidence={}\n",
@@ -883,14 +893,18 @@ public:
                  preflight.first_unmatched);
     }
     for (const auto& cell : position_plan.cells) {
-      fmt::print("NTN onboard cell: nci={:#x} pci={} active_l1={} pending_l1={} capacity={} "
-                 "analog_ports={}/{} digital_planning_capacity={} "
+      fmt::print("NTN onboard cell: nci={:#x} pci={} active_l1={} pending_l1={} mapped_l1={} capacity={} "
+                 "plmn={} tac={} tai_status={} analog_ports={}/{} digital_planning_capacity={} "
                  "digital_binding={}\n",
                  cell.nci,
                  cell.pci,
                  cell.active_l1_positions,
                  cell.pending_l1_positions,
+                 cell.mapped_l1_positions,
                  cell.capacity,
+                 cell.runtime_plmn,
+                 cell.runtime_tac,
+                 cell.runtime_tai_status,
                  cell.analog_ports_used,
                  cell.analog_port_capacity,
                  cell.digital_planning_capacity,

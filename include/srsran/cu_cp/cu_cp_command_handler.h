@@ -175,6 +175,10 @@ struct cu_cp_ntn_onboard_cell_plan_status {
   unsigned         analog_port_capacity      = 0;
   unsigned         digital_planning_capacity = 0;
   std::string      digital_binding_state     = "not_bound_to_service_runtime";
+  unsigned         mapped_l1_positions       = 0;
+  std::string      runtime_plmn               = "none";
+  tac_t            runtime_tac                = INVALID_TAC;
+  std::string      runtime_tai_status         = "unavailable";
 };
 
 /// Static scheduler opportunity evidence for one onboard cell. This does not prove position, antenna or RF execution.
@@ -232,6 +236,14 @@ struct cu_cp_ntn_position_plan_status {
   std::string deployment_stage    = "disabled";
   std::string deployment_detail   = "external_execution_disabled";
   std::string execution_evidence  = "intent_only";
+  std::string runtime_mapping_stage  = "disabled";
+  std::string runtime_mapping_detail = "feature_disabled";
+  uint64_t    runtime_mapping_schedule_version = 0;
+  std::string runtime_mapping_calendar_hash     = "none";
+  unsigned    runtime_mapped_l1_positions       = 0;
+  std::string paging_state                      = "disabled";
+  unsigned    valid_idle_paging_contexts        = 0;
+  std::string initial_access_position_check     = "not_in_production_path";
   unsigned    clear_queue_depth   = 0;
   bool        clear_in_flight     = false;
   uint64_t    clear_queue_head_schedule_version = 0;

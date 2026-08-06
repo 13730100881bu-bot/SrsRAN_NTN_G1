@@ -38,6 +38,7 @@
 #include "ntn_mobility/ntn_beam_placement_planner.h"
 #include "ntn_mobility/ntn_beam_service_resource_manager.h"
 #include "ntn_mobility/ntn_beam_tac.h"
+#include "ntn_mobility/ntn_onboard_runtime_mapping.h"
 #include "ntn_mobility/ntn_onboard_position_plan.h"
 #include "ntn_mobility/ntn_onboard_position_plan_state.h"
 #include "ntn_mobility/ntn_plan_version_anchor.h"
@@ -715,6 +716,14 @@ private:
       const ntn_onboard_position_plan_controller&       controller_checkpoint,
       const std::vector<ntn_position_plan_clear_entry>& clear_queue_checkpoint,
       std::chrono::system_clock::time_point             now);
+  void refresh_ntn_onboard_runtime_mapping(std::chrono::system_clock::time_point now, const char* reason);
+  void invalidate_ntn_onboard_runtime_mapping_locked(ntn_onboard_runtime_mapping_stage stage, const char* detail);
+  expected<std::shared_ptr<const ntn_onboard_runtime_mapping_snapshot>, std::string>
+  build_ntn_onboard_runtime_mapping_snapshot(const ntn_activated_position_plan&    plan,
+                                             const std::set<du_index_t>&           disconnected_dus,
+                                             const std::map<du_index_t, uint64_t>& du_generations);
+  std::shared_ptr<const ntn_onboard_runtime_mapping_snapshot>
+  get_ready_ntn_onboard_runtime_mapping(std::chrono::system_clock::time_point now) const;
   void try_prepare_ntn_onboard_position_plan();
   void query_ntn_onboard_position_plan_application();
   bool queue_ntn_onboard_position_plan_clear_locked(const ntn_activated_position_plan& plan, std::string reason);
@@ -739,6 +748,10 @@ private:
   std::optional<ntn_served_beam_scheduler> ntn_served_beam_sched;
   mutable std::mutex                                    ntn_onboard_position_plan_mutex;
   std::optional<ntn_onboard_position_plan_controller> ntn_onboard_position_plan_ctrl;
+  std::shared_ptr<const ntn_onboard_runtime_mapping_snapshot> ntn_onboard_runtime_mapping;
+  ntn_onboard_runtime_mapping_stage                          current_ntn_onboard_runtime_mapping_stage =
+      ntn_onboard_runtime_mapping_stage::disabled;
+  std::string current_ntn_onboard_runtime_mapping_detail = "feature_disabled";
   std::string                                           last_ntn_position_plan_file_signature;
   std::optional<std::chrono::steady_clock::time_point>  ntn_position_plan_reload_deadline;
   bool                                                   ntn_position_plan_query_in_flight = false;

@@ -1578,6 +1578,13 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_versioned_onboard_position_plan
   plan.deployment_stage         = "ready";
   plan.deployment_detail        = "du_ready";
   plan.execution_evidence       = "intent_or_control_plane_only";
+  plan.runtime_mapping_stage    = "ready";
+  plan.runtime_mapping_detail   = "active_plan_and_live_du_match";
+  plan.runtime_mapping_schedule_version = 20;
+  plan.runtime_mapping_calendar_hash     = "sha256:active-calendar";
+  plan.runtime_mapped_l1_positions       = 87;
+  plan.paging_state                      = "ready";
+  plan.valid_idle_paging_contexts        = 3;
   plan.satellite_id                                  = "P01-S01";
   plan.active_catalog_version   = 10;
   plan.active_schedule_version  = 20;
@@ -1612,6 +1619,14 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_versioned_onboard_position_plan
   plan.clear_queue_head_reason            = "expired_deployment_recovered_after_restart";
   plan.cells[0] = {nr_cell_identity::create(0x123450001ULL).value(), 101, 128, 128, 128, 16, 16, 64};
   plan.cells[1] = {nr_cell_identity::create(0x123450002ULL).value(), 202, 128, 128, 128, 16, 16, 64};
+  plan.cells[0].mapped_l1_positions = 44;
+  plan.cells[0].runtime_plmn         = "00f110";
+  plan.cells[0].runtime_tac          = 7;
+  plan.cells[0].runtime_tai_status   = "ready";
+  plan.cells[1].mapped_l1_positions = 43;
+  plan.cells[1].runtime_plmn         = "00f110";
+  plan.cells[1].runtime_tac          = 7;
+  plan.cells[1].runtime_tai_status   = "ready";
   plan.static_preflight_schedule_version             = 21;
   plan.static_opportunities[0].performed             = true;
   plan.static_opportunities[0].passed                = true;
@@ -1655,6 +1670,10 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_versioned_onboard_position_plan
   EXPECT_NE(output.find("NTN onboard position plan pending: catalog_version=11 schedule_version=21 "
                         "content_hash=sha256:pending calendar_hash=sha256:calendar activation_epoch_unix_ms=640000"),
             std::string::npos);
+  EXPECT_NE(output.find("NTN onboard runtime mapping: stage=ready detail=active_plan_and_live_du_match "
+                        "schedule_version=20 calendar_hash=sha256:active-calendar mapped_l1=87 paging=ready "
+                        "valid_idle_contexts=3 initial_access_position_check=not_in_production_path"),
+            std::string::npos);
   EXPECT_NE(output.find("NTN access calendar intent: schedule_version=21 intents=2560 ssb=2048 prach_ro=256 "
                         "prach_ul_beam=256 max_ssb_interval_ms=80 "
                          "max_prach_interval_ms=640 "
@@ -1669,9 +1688,11 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_versioned_onboard_position_plan
                         "performed=yes passed=yes numerology=1 ssb=1024/1024 prach=128/128 "
                         "max_ssb_gap_slots=160 max_prach_gap_slots=1280"),
             std::string::npos);
-  EXPECT_NE(output.find("NTN onboard cell: nci=0x123450001 pci=101 active_l1=128 pending_l1=128 capacity=128"),
+  EXPECT_NE(output.find("NTN onboard cell: nci=0x123450001 pci=101 active_l1=128 pending_l1=128 mapped_l1=44 "
+                        "capacity=128 plmn=00f110 tac=7 tai_status=ready"),
             std::string::npos);
-  EXPECT_NE(output.find("NTN onboard cell: nci=0x123450002 pci=202 active_l1=128 pending_l1=128 capacity=128"),
+  EXPECT_NE(output.find("NTN onboard cell: nci=0x123450002 pci=202 active_l1=128 pending_l1=128 mapped_l1=43 "
+                        "capacity=128 plmn=00f110 tac=7 tai_status=ready"),
             std::string::npos);
 }
 
@@ -1694,6 +1715,10 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_disabled_onboard_state_defaults
             std::string::npos);
   EXPECT_NE(output.find("NTN onboard position plan active: catalog_version=0 schedule_version=0 content_hash=none "
                         "calendar_hash=none activation_epoch_unix_ms=-1"),
+            std::string::npos);
+  EXPECT_NE(output.find("NTN onboard runtime mapping: stage=disabled detail=feature_disabled schedule_version=0 "
+                        "calendar_hash=none mapped_l1=0 paging=disabled valid_idle_contexts=0 "
+                        "initial_access_position_check=not_in_production_path"),
             std::string::npos);
   EXPECT_NE(output.find("NTN calendar clear queue: depth=0 in_flight=no head_schedule_version=0 "
                         "head_calendar_hash=none head_reason=none"),

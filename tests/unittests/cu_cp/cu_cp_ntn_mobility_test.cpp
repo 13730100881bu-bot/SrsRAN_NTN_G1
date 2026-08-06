@@ -2310,7 +2310,7 @@ TEST(cu_cp_ntn_mobility_test, restart_preserves_rejected_257_position_inventory_
 }
 
 TEST(cu_cp_ntn_mobility_test,
-     when_schema_v3_has_300_visible_and_87_assigned_then_only_assigned_calendar_is_applied_and_recovered)
+     onboard_runtime_mapping_activates_87_of_300_positions_and_recovers_after_restart)
 {
   const nr_cell_identity first_nci  = make_default_env_nci(0);
   const nr_cell_identity second_nci = make_default_env_nci(1);
@@ -2347,6 +2347,15 @@ TEST(cu_cp_ntn_mobility_test,
     ASSERT_TRUE(env.run_f1_setup(
         du_idx.value(), int_to_gnb_du_id(0x31), make_onboard_served_cells(first_nci, second_nci, shared_pci)));
 
+    const auto pending_status = env.get_cu_cp()
+                                    .get_command_handler()
+                                    .get_ntn_command_handler()
+                                    .get_current_ntn_runtime_status()
+                                    .onboard_position_plan;
+    EXPECT_NE(pending_status.runtime_mapping_stage, "ready");
+    EXPECT_EQ(pending_status.runtime_mapping_schedule_version, 0U);
+    EXPECT_EQ(pending_status.runtime_mapped_l1_positions, 0U);
+
     f1ap_message prepare_request;
     ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
         du_idx.value(), prepare_request, std::chrono::milliseconds{1500}));
@@ -2376,6 +2385,22 @@ TEST(cu_cp_ntn_mobility_test,
     make_recovered_calendar_feedback(*prepare, recovered_intents, recovered_preflight);
     EXPECT_EQ(recovered_intents[0] + recovered_intents[1], 870U);
     env.respond_to_f1ap_resource_coordination_request(du_idx.value(), prepare_request);
+
+    ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{500}, [&]() {
+      return env.get_cu_cp()
+                 .get_command_handler()
+                 .get_ntn_command_handler()
+                 .get_current_ntn_runtime_status()
+                 .onboard_position_plan.deployment_stage == "ready";
+    }));
+    const auto prepared_status = env.get_cu_cp()
+                                     .get_command_handler()
+                                     .get_ntn_command_handler()
+                                     .get_current_ntn_runtime_status()
+                                     .onboard_position_plan;
+    EXPECT_NE(prepared_status.runtime_mapping_stage, "ready");
+    EXPECT_EQ(prepared_status.runtime_mapping_schedule_version, 0U);
+    EXPECT_EQ(prepared_status.runtime_mapped_l1_positions, 0U);
 
     f1ap_message query_request;
     ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
@@ -2410,6 +2435,22 @@ TEST(cu_cp_ntn_mobility_test,
     EXPECT_EQ(status.cells[1].nci, second_nci);
     EXPECT_EQ(status.cells[1].pci, shared_pci);
     EXPECT_EQ(status.cells[0].active_l1_positions + status.cells[1].active_l1_positions, 87U);
+    EXPECT_EQ(status.runtime_mapping_stage, "ready");
+    EXPECT_EQ(status.runtime_mapping_detail, "active_plan_and_live_du_match");
+    EXPECT_EQ(status.runtime_mapping_schedule_version, plan.schedule_version);
+    EXPECT_EQ(status.runtime_mapping_calendar_hash, status.active_calendar_hash);
+    EXPECT_EQ(status.runtime_mapped_l1_positions, 87U);
+    EXPECT_EQ(status.cells[0].mapped_l1_positions, 44U);
+    EXPECT_EQ(status.cells[1].mapped_l1_positions, 43U);
+    EXPECT_EQ(status.cells[0].runtime_plmn, plmn_identity::test_value().to_string());
+    EXPECT_EQ(status.cells[1].runtime_plmn, plmn_identity::test_value().to_string());
+    EXPECT_EQ(status.cells[0].runtime_tac, 7U);
+    EXPECT_EQ(status.cells[1].runtime_tac, 7U);
+    EXPECT_EQ(status.cells[0].runtime_tai_status, "ready");
+    EXPECT_EQ(status.cells[1].runtime_tai_status, "ready");
+    EXPECT_EQ(status.cells[0].mapped_l1_positions, status.cells[0].active_l1_positions);
+    EXPECT_EQ(status.cells[1].mapped_l1_positions, status.cells[1].active_l1_positions);
+    EXPECT_EQ(status.cells[0].mapped_l1_positions + status.cells[1].mapped_l1_positions, 87U);
     EXPECT_EQ(status.calendar_intents, 870U);
     EXPECT_EQ(status.ssb_intents, 87U * 8U);
     EXPECT_EQ(status.prach_ro_intents, 87U);
@@ -2432,6 +2473,9 @@ TEST(cu_cp_ntn_mobility_test,
   EXPECT_EQ(hidden_status.recovery_schedule_version, plan.schedule_version);
   EXPECT_EQ(hidden_status.candidate_l1_positions, 300U);
   EXPECT_EQ(hidden_status.assigned_l1_positions, 87U);
+  EXPECT_EQ(hidden_status.runtime_mapping_stage, "awaiting_live_du");
+  EXPECT_EQ(hidden_status.runtime_mapping_schedule_version, 0U);
+  EXPECT_EQ(hidden_status.runtime_mapped_l1_positions, 0U);
 
   const auto restarted_du = restarted.connect_new_du();
   ASSERT_TRUE(restarted_du.has_value());
@@ -2446,6 +2490,13 @@ TEST(cu_cp_ntn_mobility_test,
   EXPECT_EQ(query->operation, f1ap_ntn_access_calendar_operation::query);
   EXPECT_EQ(query->schedule_version, plan.schedule_version);
   EXPECT_TRUE(query->cells.empty());
+  const auto before_recovery_query_response = restarted.get_cu_cp()
+                                                  .get_command_handler()
+                                                  .get_ntn_command_handler()
+                                                  .get_current_ntn_runtime_status()
+                                                  .onboard_position_plan;
+  EXPECT_EQ(before_recovery_query_response.runtime_mapping_stage, "awaiting_live_du");
+  EXPECT_EQ(before_recovery_query_response.runtime_mapped_l1_positions, 0U);
   restarted.respond_to_f1ap_resource_coordination_request(restarted_du.value(), recovery_query);
 
   ASSERT_TRUE(restarted.tick_until(std::chrono::milliseconds{1500}, [&]() {
@@ -2469,10 +2520,21 @@ TEST(cu_cp_ntn_mobility_test,
   EXPECT_EQ(recovered_status.cells[1].nci, second_nci);
   EXPECT_EQ(recovered_status.cells[1].pci, shared_pci);
   EXPECT_EQ(recovered_status.cells[0].active_l1_positions + recovered_status.cells[1].active_l1_positions, 87U);
+  EXPECT_EQ(recovered_status.runtime_mapping_stage, "ready");
+  EXPECT_EQ(recovered_status.runtime_mapping_schedule_version, plan.schedule_version);
+  EXPECT_EQ(recovered_status.runtime_mapping_calendar_hash, recovered_status.active_calendar_hash);
+  EXPECT_EQ(recovered_status.runtime_mapped_l1_positions, 87U);
+  EXPECT_EQ(recovered_status.cells[0].mapped_l1_positions, 44U);
+  EXPECT_EQ(recovered_status.cells[1].mapped_l1_positions, 43U);
+  EXPECT_EQ(recovered_status.cells[0].mapped_l1_positions,
+            recovered_status.cells[0].active_l1_positions);
+  EXPECT_EQ(recovered_status.cells[1].mapped_l1_positions,
+            recovered_status.cells[1].active_l1_positions);
+  EXPECT_EQ(recovered_status.cells[0].mapped_l1_positions + recovered_status.cells[1].mapped_l1_positions, 87U);
   EXPECT_EQ(recovered_status.calendar_intents, 870U);
 }
 
-TEST(cu_cp_ntn_mobility_test, when_schema_v3_has_257_assigned_then_old_active_calendar_remains)
+TEST(cu_cp_ntn_mobility_test, onboard_runtime_mapping_failed_overflow_update_keeps_old_snapshot)
 {
   const nr_cell_identity first_nci  = make_default_env_nci(0);
   const nr_cell_identity second_nci = make_default_env_nci(1);
@@ -2592,9 +2654,17 @@ TEST(cu_cp_ntn_mobility_test, when_schema_v3_has_257_assigned_then_old_active_ca
   EXPECT_EQ(status.candidate_l1_positions, 300U);
   EXPECT_EQ(status.assigned_l1_positions, 257U);
   EXPECT_EQ(status.cells[0].active_l1_positions + status.cells[1].active_l1_positions, 4U);
+  EXPECT_EQ(status.runtime_mapping_stage, "ready");
+  EXPECT_EQ(status.runtime_mapping_schedule_version, active_plan.schedule_version);
+  EXPECT_EQ(status.runtime_mapping_calendar_hash, active_calendar_hash);
+  EXPECT_EQ(status.runtime_mapped_l1_positions, 4U);
+  EXPECT_EQ(status.cells[0].mapped_l1_positions, 2U);
+  EXPECT_EQ(status.cells[1].mapped_l1_positions, 2U);
+  EXPECT_EQ(status.cells[0].mapped_l1_positions, status.cells[0].active_l1_positions);
+  EXPECT_EQ(status.cells[1].mapped_l1_positions, status.cells[1].active_l1_positions);
 }
 
-TEST(cu_cp_ntn_mobility_test, when_schema_v3_assignment_is_empty_then_two_cell_deny_all_calendar_is_applied)
+TEST(cu_cp_ntn_mobility_test, onboard_runtime_mapping_empty_assignment_is_ready_with_zero_positions)
 {
   const nr_cell_identity first_nci  = make_default_env_nci(0);
   const nr_cell_identity second_nci = make_default_env_nci(1);
@@ -2671,6 +2741,12 @@ TEST(cu_cp_ntn_mobility_test, when_schema_v3_assignment_is_empty_then_two_cell_d
   EXPECT_EQ(status.calendar_intents, 0U);
   EXPECT_EQ(status.cells[0].active_l1_positions, 0U);
   EXPECT_EQ(status.cells[1].active_l1_positions, 0U);
+  EXPECT_EQ(status.runtime_mapping_stage, "ready");
+  EXPECT_EQ(status.runtime_mapping_schedule_version, plan.schedule_version);
+  EXPECT_EQ(status.runtime_mapping_calendar_hash, status.active_calendar_hash);
+  EXPECT_EQ(status.runtime_mapped_l1_positions, 0U);
+  EXPECT_EQ(status.cells[0].mapped_l1_positions, 0U);
+  EXPECT_EQ(status.cells[1].mapped_l1_positions, 0U);
 }
 
 TEST(cu_cp_ntn_mobility_test, when_position_plan_feature_is_disabled_then_configured_file_is_not_read)
@@ -2916,7 +2992,7 @@ TEST(cu_cp_ntn_mobility_test, restart_queries_du_before_reexposing_persisted_act
   EXPECT_EQ(status.schedule_version_high_water, plan.schedule_version);
 }
 
-TEST(cu_cp_ntn_mobility_test, du_disconnect_hides_applied_calendar_until_the_reconnected_du_confirms_it)
+TEST(cu_cp_ntn_mobility_test, onboard_runtime_mapping_du_disconnect_hides_snapshot_until_query_succeeds)
 {
   persisted_recovery_calendar_test_data data = make_persisted_recovery_calendar_test_data(34, 44);
   temporary_plan_file_guard             plan_file_guard(data.plan_path);
@@ -2946,6 +3022,17 @@ TEST(cu_cp_ntn_mobility_test, du_disconnect_hides_applied_calendar_until_the_rec
                .get_current_ntn_runtime_status()
                .onboard_position_plan.active_schedule_version == data.plan.schedule_version;
   }));
+  const auto initially_ready = env.get_cu_cp()
+                                   .get_command_handler()
+                                   .get_ntn_command_handler()
+                                   .get_current_ntn_runtime_status()
+                                   .onboard_position_plan;
+  ASSERT_EQ(initially_ready.runtime_mapping_stage, "ready");
+  ASSERT_EQ(initially_ready.runtime_mapping_schedule_version, data.plan.schedule_version);
+  ASSERT_EQ(initially_ready.runtime_mapped_l1_positions,
+            static_cast<unsigned>(data.plan.visible_l1_positions.size()));
+  ASSERT_EQ(initially_ready.cells[0].mapped_l1_positions, 1U);
+  ASSERT_EQ(initially_ready.cells[1].mapped_l1_positions, 1U);
 
   ASSERT_TRUE(env.drop_du_connection(first_du.value()));
   const auto disconnected = env.get_cu_cp()
@@ -2959,6 +3046,10 @@ TEST(cu_cp_ntn_mobility_test, du_disconnect_hides_applied_calendar_until_the_rec
   EXPECT_EQ(disconnected.active_schedule_version, 0U);
   EXPECT_EQ(disconnected.active_calendar_hash, "none");
   EXPECT_EQ(disconnected.execution_evidence, "intent_or_control_plane_only");
+  EXPECT_EQ(disconnected.runtime_mapping_stage, "awaiting_live_du");
+  EXPECT_EQ(disconnected.runtime_mapping_detail, "du_disconnected");
+  EXPECT_EQ(disconnected.runtime_mapping_schedule_version, 0U);
+  EXPECT_EQ(disconnected.runtime_mapped_l1_positions, 0U);
 
   const auto reconnected_du = env.connect_new_du();
   ASSERT_TRUE(reconnected_du.has_value());
@@ -2977,6 +3068,12 @@ TEST(cu_cp_ntn_mobility_test, du_disconnect_hides_applied_calendar_until_the_rec
                 .get_current_ntn_runtime_status()
                 .onboard_position_plan.active_schedule_version,
             0U);
+  EXPECT_EQ(env.get_cu_cp()
+                .get_command_handler()
+                .get_ntn_command_handler()
+                .get_current_ntn_runtime_status()
+                .onboard_position_plan.runtime_mapping_stage,
+            "awaiting_live_du");
 
   env.respond_to_f1ap_resource_coordination_request(reconnected_du.value(), query_request);
   ASSERT_TRUE(wait_for_test_condition([&env, &data]() {
@@ -2994,6 +3091,12 @@ TEST(cu_cp_ntn_mobility_test, du_disconnect_hides_applied_calendar_until_the_rec
                                .onboard_position_plan;
   EXPECT_EQ(reconnected.active_calendar_hash, query_update->calendar_hash);
   EXPECT_EQ(reconnected.execution_evidence, "ssb_prach_software_gate_applied_no_position_or_rf_evidence");
+  EXPECT_EQ(reconnected.runtime_mapping_stage, "ready");
+  EXPECT_EQ(reconnected.runtime_mapping_schedule_version, data.plan.schedule_version);
+  EXPECT_EQ(reconnected.runtime_mapping_calendar_hash, query_update->calendar_hash);
+  EXPECT_EQ(reconnected.runtime_mapped_l1_positions, initially_ready.runtime_mapped_l1_positions);
+  EXPECT_EQ(reconnected.cells[0].mapped_l1_positions, initially_ready.cells[0].mapped_l1_positions);
+  EXPECT_EQ(reconnected.cells[1].mapped_l1_positions, initially_ready.cells[1].mapped_l1_positions);
 }
 
 TEST(cu_cp_ntn_mobility_test, disconnect_during_recovery_query_keeps_plan_hidden_and_retries_on_new_connection)

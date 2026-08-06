@@ -1957,8 +1957,10 @@ ntn_onboard_position_plan_controller::make_persistent_state(uint64_t generation)
   result.onboard_cells                              = cfg.onboard_cells;
   result.highest_catalog_version                    = highest_catalog_version;
   result.highest_schedule_version                   = highest_schedule_version;
-  result.highest_schedule_content_hash              = highest_schedule_content_hash;
-  result.version_anchor_source                      = highest_accepted_plan;
+  if (cfg.require_signed_plan) {
+    result.highest_schedule_content_hash = highest_schedule_content_hash;
+    result.version_anchor_source         = highest_accepted_plan;
+  }
   result.sticky_partition                           = sticky_partition;
   if (received_plan_present) {
     result.received_plan = ntn_onboard_position_plan_received_observation{last_received_catalog,

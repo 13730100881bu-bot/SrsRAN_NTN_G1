@@ -1209,6 +1209,35 @@ resolve_ntn_onboard_du_cells(du_processor_repository&                           
   return ntn_onboard_detail::resolve_ntn_onboard_du_cells(candidates, planned_cells, disconnected_du_indexes);
 }
 
+static ntn_onboard_tai_status classify_ntn_onboard_cell_tai(const cu_cp_configuration&    cfg,
+                                                            const du_cell_configuration& cell)
+{
+  unsigned exact_matches = 0;
+  bool     plmn_seen     = false;
+
+  for (const auto& ngap_cfg : cfg.ngap.ngaps) {
+    for (const supported_tracking_area& supported_ta : ngap_cfg.supported_tas) {
+      const bool same_tac = supported_ta.tac == cell.tac;
+      for (const plmn_item& item : supported_ta.plmn_list) {
+        const bool same_plmn = item.plmn_id == cell.cgi.plmn_id;
+        plmn_seen            = plmn_seen || same_plmn;
+        if (same_tac && same_plmn) {
+          ++exact_matches;
+        }
+      }
+    }
+  }
+
+  if (exact_matches == 1) {
+    return ntn_onboard_tai_status::ready;
+  }
+  if (exact_matches > 1) {
+    return ntn_onboard_tai_status::supported_tai_duplicate;
+  }
+  return plmn_seen ? ntn_onboard_tai_status::plmn_tac_mismatch
+                   : ntn_onboard_tai_status::supported_tai_missing;
+}
+
 static bool du_serves_ntn_onboard_cells(du_processor_repository&                            du_db,
                                         du_index_t                                         du_index,
                                         const std::array<ntn_onboard_cell_position_set, 2>& planned_cells)
@@ -2805,6 +2834,7 @@ cu_cp_impl::cu_cp_impl(const cu_cp_configuration& config_) :
     ntn_position_plan_reload_timer = cfg.services.timers->create_unique_timer(*cfg.services.cu_cp_executor);
     ntn_position_plan_activation_timer = cfg.services.timers->create_unique_timer(*cfg.services.cu_cp_executor);
     restore_ntn_onboard_position_plan_state();
+    refresh_ntn_onboard_runtime_mapping(std::chrono::system_clock::now(), "startup");
     bool recovery_required = false;
     {
       std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
@@ -8268,6 +8298,9 @@ cu_cp_ntn_runtime_status cu_cp_impl::get_current_ntn_runtime_status() const
   position_status.satellite_id = cfg.mobility.onboard_position_plan.satellite_id.empty()
                                      ? "none"
                                      : cfg.mobility.onboard_position_plan.satellite_id;
+  const auto runtime_mapping_now = std::chrono::system_clock::now();
+  const std::shared_ptr<const ntn_onboard_runtime_mapping_snapshot> validated_runtime_mapping =
+      get_ready_ntn_onboard_runtime_mapping(runtime_mapping_now);
   {
     std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
     position_status.state_schema_version = ntn_position_plan_state_schema_version;
@@ -8282,6 +8315,35 @@ cu_cp_ntn_runtime_status cu_cp_impl::get_current_ntn_runtime_status() const
     position_status.version_anchor_hash     = ntn_position_plan_version_anchor_hash.empty()
                                                   ? "none"
                                                   : ntn_position_plan_version_anchor_hash;
+    ntn_onboard_runtime_mapping_stage projected_mapping_stage = current_ntn_onboard_runtime_mapping_stage;
+    std::string projected_mapping_detail = current_ntn_onboard_runtime_mapping_detail;
+    if (projected_mapping_stage == ntn_onboard_runtime_mapping_stage::ready &&
+        ntn_onboard_runtime_mapping != nullptr &&
+        runtime_mapping_now >= ntn_onboard_runtime_mapping->valid_until()) {
+      projected_mapping_stage  = ntn_onboard_runtime_mapping_stage::stale;
+      projected_mapping_detail = "mapping_validity_expired";
+    } else if (projected_mapping_stage == ntn_onboard_runtime_mapping_stage::ready &&
+               (validated_runtime_mapping == nullptr || validated_runtime_mapping != ntn_onboard_runtime_mapping)) {
+      projected_mapping_stage  = ntn_onboard_runtime_mapping_stage::awaiting_live_du;
+      projected_mapping_detail = "served_cell_route_changed";
+    }
+    position_status.runtime_mapping_stage  = to_string(projected_mapping_stage);
+    position_status.runtime_mapping_detail = projected_mapping_detail;
+    if (projected_mapping_stage == ntn_onboard_runtime_mapping_stage::ready &&
+        validated_runtime_mapping != nullptr) {
+      position_status.runtime_mapping_schedule_version = validated_runtime_mapping->schedule_version();
+      position_status.runtime_mapping_calendar_hash     = validated_runtime_mapping->calendar_hash();
+      position_status.runtime_mapped_l1_positions =
+          static_cast<unsigned>(validated_runtime_mapping->nof_positions());
+      for (unsigned i = 0; i != position_status.cells.size(); ++i) {
+        const ntn_onboard_runtime_cell_route& route = validated_runtime_mapping->cell_routes()[i];
+        position_status.cells[i].mapped_l1_positions = static_cast<unsigned>(
+            validated_runtime_mapping->positions_for_nci(route.identity.nci).size());
+        position_status.cells[i].runtime_plmn       = route.ncgi.plmn_id.to_string();
+        position_status.cells[i].runtime_tac        = route.tac;
+        position_status.cells[i].runtime_tai_status = to_string(route.tai_status);
+      }
+    }
     if (ntn_position_plan_version_anchor.has_value()) {
       position_status.version_anchor_generation = ntn_position_plan_version_anchor->generation;
       if (ntn_position_plan_version_anchor->committed.has_value()) {
@@ -11289,6 +11351,9 @@ void cu_cp_impl::handle_du_connection_established(du_index_t du_index)
   }
   std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
   ntn_position_plan_disconnected_dus.erase(du_index);
+  if (current_ntn_onboard_runtime_mapping_stage == ntn_onboard_runtime_mapping_stage::awaiting_live_du) {
+    current_ntn_onboard_runtime_mapping_detail = "du_connected_awaiting_calendar_query";
+  }
 }
 
 void cu_cp_impl::handle_du_disconnection(du_index_t du_index)
@@ -11303,6 +11368,13 @@ void cu_cp_impl::handle_du_disconnection(du_index_t du_index)
     std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
     ++ntn_position_plan_du_connection_generations[du_index];
     ntn_position_plan_disconnected_dus.insert(du_index);
+    if (ntn_onboard_runtime_mapping != nullptr &&
+        std::any_of(ntn_onboard_runtime_mapping->cell_routes().begin(),
+                    ntn_onboard_runtime_mapping->cell_routes().end(),
+                    [du_index](const ntn_onboard_runtime_cell_route& route) { return route.du_index == du_index; })) {
+      invalidate_ntn_onboard_runtime_mapping_locked(ntn_onboard_runtime_mapping_stage::awaiting_live_du,
+                                                    "du_disconnected");
+    }
 
     if (ntn_position_plan_query_du_index == du_index) {
       ++ntn_position_plan_query_request_id;
@@ -11411,6 +11483,220 @@ bool cu_cp_impl::schedule_ue_task(ue_index_t ue_index, async_task<void> task)
   }
 
   return ue_mng.find_ue_task_scheduler(ue_index)->schedule_async_task(std::move(task));
+}
+
+void cu_cp_impl::invalidate_ntn_onboard_runtime_mapping_locked(ntn_onboard_runtime_mapping_stage stage,
+                                                               const char*                       detail)
+{
+  ntn_onboard_runtime_mapping.reset();
+  current_ntn_onboard_runtime_mapping_stage  = stage;
+  current_ntn_onboard_runtime_mapping_detail = detail != nullptr ? detail : "unavailable";
+}
+
+expected<std::shared_ptr<const ntn_onboard_runtime_mapping_snapshot>, std::string>
+cu_cp_impl::build_ntn_onboard_runtime_mapping_snapshot(const ntn_activated_position_plan&    plan,
+                                                       const std::set<du_index_t>&           disconnected_dus,
+                                                       const std::map<du_index_t, uint64_t>& du_generations)
+{
+  const ntn_onboard_detail::ntn_onboard_du_cell_resolution resolution =
+      resolve_ntn_onboard_du_cells(du_db, plan.cell_positions, disconnected_dus);
+  if (resolution.status != ntn_onboard_detail::ntn_onboard_du_cell_resolution_status::resolved) {
+    return make_unexpected(
+        std::string{ntn_onboard_detail::get_ntn_onboard_du_cell_resolution_detail(resolution.status)});
+  }
+
+  const auto generation_it = du_generations.find(resolution.du_index);
+  if (generation_it == du_generations.end()) {
+    return make_unexpected(std::string{"du_connection_generation_unavailable"});
+  }
+
+  std::array<ntn_onboard_runtime_cell_route, 2> routes{};
+  for (unsigned i = 0; i != routes.size(); ++i) {
+    const du_cell_configuration& cell = *resolution.cells[i];
+    routes[i].identity                 = plan.cell_positions[i].identity;
+    routes[i].ncgi                     = cell.cgi;
+    routes[i].tac                      = cell.tac;
+    routes[i].du_index                 = resolution.du_index;
+    routes[i].du_cell_index            = cell.cell_index;
+    routes[i].du_connection_generation = generation_it->second;
+    routes[i].tai_status               = classify_ntn_onboard_cell_tai(cfg, cell);
+  }
+
+  return ntn_onboard_runtime_mapping_snapshot::create(plan, routes);
+}
+
+void cu_cp_impl::refresh_ntn_onboard_runtime_mapping(std::chrono::system_clock::time_point now, const char* reason)
+{
+  std::optional<ntn_activated_position_plan> active_plan;
+  std::set<du_index_t>                       disconnected_dus;
+  std::map<du_index_t, uint64_t>             du_generations;
+  {
+    std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
+    if (!cfg.mobility.onboard_position_plan.enabled || !cfg.mobility.onboard_position_plan.du_execution_enabled) {
+      invalidate_ntn_onboard_runtime_mapping_locked(ntn_onboard_runtime_mapping_stage::disabled, "feature_disabled");
+      return;
+    }
+    if (!ntn_onboard_position_plan_ctrl.has_value()) {
+      invalidate_ntn_onboard_runtime_mapping_locked(ntn_onboard_runtime_mapping_stage::awaiting_active_plan,
+                                                    "controller_unavailable");
+      return;
+    }
+    if (!ntn_onboard_position_plan_ctrl->active_plan().has_value()) {
+      const bool recovering = ntn_onboard_position_plan_ctrl->recovery_plan().has_value();
+      invalidate_ntn_onboard_runtime_mapping_locked(
+          recovering ? ntn_onboard_runtime_mapping_stage::awaiting_live_du
+                     : ntn_onboard_runtime_mapping_stage::awaiting_active_plan,
+          recovering ? "recovery_requires_live_du_query" : "no_active_plan");
+      return;
+    }
+
+    active_plan = *ntn_onboard_position_plan_ctrl->active_plan();
+    if (now < active_plan->source.activation_epoch || now < active_plan->source.valid_from ||
+        now >= active_plan->source.valid_until) {
+      invalidate_ntn_onboard_runtime_mapping_locked(ntn_onboard_runtime_mapping_stage::stale,
+                                                    "active_plan_outside_validity");
+      return;
+    }
+    if (!ntn_onboard_position_plan_ctrl->active_has_external_apply_evidence()) {
+      invalidate_ntn_onboard_runtime_mapping_locked(ntn_onboard_runtime_mapping_stage::awaiting_live_du,
+                                                    "active_calendar_requires_live_du_query");
+      return;
+    }
+    if (ntn_onboard_runtime_mapping != nullptr &&
+        (ntn_onboard_runtime_mapping->schedule_version() != active_plan->source.schedule_version ||
+         normalize_ntn_calendar_hash_for_comparison(ntn_onboard_runtime_mapping->calendar_hash()) !=
+             normalize_ntn_calendar_hash_for_comparison(active_plan->calendar_hash))) {
+      invalidate_ntn_onboard_runtime_mapping_locked(ntn_onboard_runtime_mapping_stage::awaiting_live_du,
+                                                    "building_active_mapping");
+    }
+    disconnected_dus = ntn_position_plan_disconnected_dus;
+    du_generations    = ntn_position_plan_du_connection_generations;
+  }
+
+  auto snapshot = build_ntn_onboard_runtime_mapping_snapshot(*active_plan, disconnected_dus, du_generations);
+  if (!snapshot.has_value()) {
+    logger.error("Failed to build NTN onboard runtime position mapping schedule_version={} reason={} detail={}",
+                 active_plan->source.schedule_version,
+                 reason != nullptr ? reason : "unknown",
+                 snapshot.error());
+    std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
+    if (ntn_onboard_position_plan_ctrl.has_value() && ntn_onboard_position_plan_ctrl->active_plan().has_value() &&
+        ntn_onboard_position_plan_ctrl->active_plan()->source.schedule_version == active_plan->source.schedule_version &&
+        ntn_onboard_position_plan_ctrl->active_plan()->calendar_hash == active_plan->calendar_hash) {
+      invalidate_ntn_onboard_runtime_mapping_locked(ntn_onboard_runtime_mapping_stage::awaiting_live_du,
+                                                    snapshot.error().c_str());
+    }
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
+  if (!ntn_onboard_position_plan_ctrl.has_value() || !ntn_onboard_position_plan_ctrl->active_plan().has_value() ||
+      !ntn_onboard_position_plan_ctrl->active_has_external_apply_evidence()) {
+    return;
+  }
+  const ntn_activated_position_plan& current_active = *ntn_onboard_position_plan_ctrl->active_plan();
+  if (current_active.source.schedule_version != active_plan->source.schedule_version ||
+      normalize_ntn_calendar_hash_for_comparison(current_active.calendar_hash) !=
+          normalize_ntn_calendar_hash_for_comparison(active_plan->calendar_hash) ||
+      now >= current_active.source.valid_until) {
+    return;
+  }
+  for (const ntn_onboard_runtime_cell_route& route : snapshot.value()->cell_routes()) {
+    const auto current_generation = ntn_position_plan_du_connection_generations.find(route.du_index);
+    if (ntn_position_plan_disconnected_dus.count(route.du_index) != 0 ||
+        current_generation == ntn_position_plan_du_connection_generations.end() ||
+        current_generation->second != route.du_connection_generation) {
+      return;
+    }
+  }
+
+  ntn_onboard_runtime_mapping                = std::move(snapshot.value());
+  current_ntn_onboard_runtime_mapping_stage  = ntn_onboard_runtime_mapping_stage::ready;
+  current_ntn_onboard_runtime_mapping_detail = "active_plan_and_live_du_match";
+}
+
+std::shared_ptr<const ntn_onboard_runtime_mapping_snapshot>
+cu_cp_impl::get_ready_ntn_onboard_runtime_mapping(std::chrono::system_clock::time_point now) const
+{
+  std::shared_ptr<const ntn_onboard_runtime_mapping_snapshot> candidate;
+  std::set<du_index_t>                                       disconnected_dus;
+  {
+    std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
+    if (current_ntn_onboard_runtime_mapping_stage != ntn_onboard_runtime_mapping_stage::ready ||
+        ntn_onboard_runtime_mapping == nullptr || !ntn_onboard_position_plan_ctrl.has_value() ||
+        !ntn_onboard_position_plan_ctrl->active_plan().has_value() ||
+        !ntn_onboard_position_plan_ctrl->active_has_external_apply_evidence()) {
+      return {};
+    }
+
+    const auto& active_plan = *ntn_onboard_position_plan_ctrl->active_plan();
+    if (now < ntn_onboard_runtime_mapping->valid_from() || now < ntn_onboard_runtime_mapping->activation_epoch() ||
+        now >= ntn_onboard_runtime_mapping->valid_until() ||
+        active_plan.source.schedule_version != ntn_onboard_runtime_mapping->schedule_version() ||
+        normalize_ntn_calendar_hash_for_comparison(active_plan.calendar_hash) !=
+            normalize_ntn_calendar_hash_for_comparison(ntn_onboard_runtime_mapping->calendar_hash())) {
+      return {};
+    }
+
+    for (const ntn_onboard_runtime_cell_route& route : ntn_onboard_runtime_mapping->cell_routes()) {
+      const auto generation = ntn_position_plan_du_connection_generations.find(route.du_index);
+      if (ntn_position_plan_disconnected_dus.count(route.du_index) != 0 ||
+          generation == ntn_position_plan_du_connection_generations.end() ||
+          generation->second != route.du_connection_generation) {
+        return {};
+      }
+    }
+    candidate         = ntn_onboard_runtime_mapping;
+    disconnected_dus = ntn_position_plan_disconnected_dus;
+  }
+
+  // A DU Configuration Update can change the served-cell table without changing the connection generation. Recheck
+  // the two copied routes before exposing the snapshot so removed, duplicated or changed cells are hidden immediately.
+  std::array<ntn_onboard_cell_position_set, 2> planned_cells{};
+  for (unsigned i = 0; i != planned_cells.size(); ++i) {
+    planned_cells[i].identity = candidate->cell_routes()[i].identity;
+  }
+  // The repository currently exposes no const lookup overload. Resolution only reads processor contexts, so retain
+  // this logically const query without widening the DU repository API for a CU-CP-private feature.
+  const auto resolution = resolve_ntn_onboard_du_cells(
+      const_cast<du_processor_repository&>(du_db), planned_cells, disconnected_dus);
+  if (resolution.status != ntn_onboard_detail::ntn_onboard_du_cell_resolution_status::resolved) {
+    return {};
+  }
+  std::array<ntn_onboard_runtime_cell_route, 2> live_routes{};
+  for (unsigned i = 0; i != candidate->cell_routes().size(); ++i) {
+    const du_cell_configuration& cell = *resolution.cells[i];
+    live_routes[i].identity                 = planned_cells[i].identity;
+    live_routes[i].ncgi                     = cell.cgi;
+    live_routes[i].tac                      = cell.tac;
+    live_routes[i].du_index                 = resolution.du_index;
+    live_routes[i].du_cell_index            = cell.cell_index;
+    live_routes[i].du_connection_generation = candidate->cell_routes()[i].du_connection_generation;
+    live_routes[i].tai_status               = classify_ntn_onboard_cell_tai(cfg, cell);
+  }
+  if (!candidate->matches_cell_routes(live_routes)) {
+    return {};
+  }
+
+  // Do not return a route that was superseded while the live DU table was being inspected.
+  {
+    std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
+    if (current_ntn_onboard_runtime_mapping_stage != ntn_onboard_runtime_mapping_stage::ready ||
+        ntn_onboard_runtime_mapping != candidate || !ntn_onboard_position_plan_ctrl.has_value() ||
+        !ntn_onboard_position_plan_ctrl->active_plan().has_value() ||
+        !ntn_onboard_position_plan_ctrl->active_has_external_apply_evidence()) {
+      return {};
+    }
+    for (const ntn_onboard_runtime_cell_route& route : candidate->cell_routes()) {
+      const auto generation = ntn_position_plan_du_connection_generations.find(route.du_index);
+      if (ntn_position_plan_disconnected_dus.count(route.du_index) != 0 ||
+          generation == ntn_position_plan_du_connection_generations.end() ||
+          generation->second != route.du_connection_generation) {
+        return {};
+      }
+    }
+  }
+  return candidate;
 }
 
 void cu_cp_impl::restore_ntn_onboard_position_plan_state()
@@ -12007,6 +12293,7 @@ void cu_cp_impl::reload_ntn_onboard_position_plan()
       last_ntn_position_plan_file_signature = signature;
     }
   }
+  refresh_ntn_onboard_runtime_mapping(std::chrono::system_clock::now(), "plan_reload");
   if (!result.accepted) {
     logger.warning("Rejected NTN onboard position plan satellite_id={} catalog_version={} schedule_version={} reason={}",
                    plan->satellite_id,
@@ -12384,6 +12671,7 @@ void cu_cp_impl::try_prepare_ntn_onboard_position_plan()
             }
           }
         }
+        refresh_ntn_onboard_runtime_mapping(std::chrono::system_clock::now(), "du_prepare_response");
         if (should_clear_orphan) {
           try_clear_ntn_onboard_position_plan_deployment();
         }
@@ -12861,6 +13149,9 @@ void cu_cp_impl::query_ntn_onboard_position_plan_application()
             }
           }
         }
+        refresh_ntn_onboard_runtime_mapping(std::chrono::system_clock::now(),
+                                            query_for_recovery ? "du_recovery_query_response"
+                                                               : "du_application_query_response");
         if (clear_was_queued) {
           try_clear_ntn_onboard_position_plan_deployment();
         }
@@ -13191,6 +13482,43 @@ void cu_cp_impl::on_ntn_onboard_position_plan_activation_timer_expired()
   std::optional<ntn_activated_position_plan> expired_active_to_clear;
   std::optional<ntn_activated_position_plan> expired_fallback_to_clear;
   std::string                                plan_clear_reason;
+  bool                                       runtime_mapping_finalized_in_lock = false;
+
+  // Resolving DU cells may inspect DU-owned state, so build the candidate before entering the activation critical
+  // section. The candidate is still checked against the active plan and DU connection generation before publication.
+  std::optional<ntn_activated_position_plan> mapping_activation_plan;
+  std::set<du_index_t>                       mapping_disconnected_dus;
+  std::map<du_index_t, uint64_t>             mapping_du_generations;
+  {
+    std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
+    if (cfg.mobility.onboard_position_plan.du_execution_enabled && !ntn_position_plan_state_write_blocked &&
+        ntn_onboard_position_plan_ctrl.has_value() &&
+        !ntn_onboard_position_plan_ctrl->recovery_plan().has_value() &&
+        ntn_onboard_position_plan_ctrl->pending_plan().has_value() &&
+        ntn_onboard_position_plan_ctrl->deployment_stage() == ntn_position_plan_deployment_stage::applied) {
+      const ntn_activated_position_plan& pending = *ntn_onboard_position_plan_ctrl->pending_plan();
+      if (now >= pending.source.activation_epoch && now >= pending.source.valid_from &&
+          now < pending.source.valid_until) {
+        mapping_activation_plan = pending;
+        mapping_disconnected_dus = ntn_position_plan_disconnected_dus;
+        mapping_du_generations    = ntn_position_plan_du_connection_generations;
+      }
+    }
+  }
+
+  std::shared_ptr<const ntn_onboard_runtime_mapping_snapshot> mapping_activation_candidate;
+  std::string mapping_activation_candidate_error = "activation_mapping_candidate_not_built";
+  if (mapping_activation_plan.has_value()) {
+    auto candidate = build_ntn_onboard_runtime_mapping_snapshot(
+        *mapping_activation_plan, mapping_disconnected_dus, mapping_du_generations);
+    if (candidate.has_value()) {
+      mapping_activation_candidate       = std::move(candidate.value());
+      mapping_activation_candidate_error = "none";
+    } else {
+      mapping_activation_candidate_error = candidate.error();
+    }
+  }
+
   {
     std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
     if (!ntn_onboard_position_plan_ctrl.has_value()) {
@@ -13336,6 +13664,9 @@ void cu_cp_impl::on_ntn_onboard_position_plan_activation_timer_expired()
         } else if (persist_outcome == ntn_state_persist_outcome::committed_not_durable) {
           ntn_onboard_position_plan_ctrl->require_du_reconciliation_after_connection_loss(
               "state_commit_not_durable_reconciliation_required");
+          invalidate_ntn_onboard_runtime_mapping_locked(ntn_onboard_runtime_mapping_stage::awaiting_live_du,
+                                                        "state_commit_not_durable_reconciliation_required");
+          runtime_mapping_finalized_in_lock = true;
           should_prepare = false;
           should_query   = false;
         }
@@ -13344,6 +13675,46 @@ void cu_cp_impl::on_ntn_onboard_position_plan_activation_timer_expired()
         }
       }
     }
+
+    if (cfg.mobility.onboard_position_plan.du_execution_enabled && activated_version.has_value() &&
+        ntn_onboard_position_plan_ctrl->active_plan().has_value()) {
+      const ntn_activated_position_plan& active = *ntn_onboard_position_plan_ctrl->active_plan();
+      bool candidate_matches = mapping_activation_candidate != nullptr &&
+                               ntn_onboard_position_plan_ctrl->active_has_external_apply_evidence() &&
+                               mapping_activation_candidate->schedule_version() == active.source.schedule_version &&
+                               normalize_ntn_calendar_hash_for_comparison(
+                                   mapping_activation_candidate->calendar_hash()) ==
+                                   normalize_ntn_calendar_hash_for_comparison(active.calendar_hash) &&
+                               now >= mapping_activation_candidate->valid_from() &&
+                               now >= mapping_activation_candidate->activation_epoch() &&
+                               now < mapping_activation_candidate->valid_until();
+      if (candidate_matches) {
+        for (const ntn_onboard_runtime_cell_route& route : mapping_activation_candidate->cell_routes()) {
+          const auto generation = ntn_position_plan_du_connection_generations.find(route.du_index);
+          if (ntn_position_plan_disconnected_dus.count(route.du_index) != 0 ||
+              generation == ntn_position_plan_du_connection_generations.end() ||
+              generation->second != route.du_connection_generation) {
+            candidate_matches = false;
+            mapping_activation_candidate_error = "activation_mapping_candidate_stale";
+            break;
+          }
+        }
+      }
+
+      if (candidate_matches) {
+        ntn_onboard_runtime_mapping                = std::move(mapping_activation_candidate);
+        current_ntn_onboard_runtime_mapping_stage  = ntn_onboard_runtime_mapping_stage::ready;
+        current_ntn_onboard_runtime_mapping_detail = "active_plan_and_live_du_match";
+      } else {
+        invalidate_ntn_onboard_runtime_mapping_locked(ntn_onboard_runtime_mapping_stage::awaiting_live_du,
+                                                      mapping_activation_candidate_error.c_str());
+      }
+      runtime_mapping_finalized_in_lock = true;
+    }
+  }
+
+  if (!runtime_mapping_finalized_in_lock) {
+    refresh_ntn_onboard_runtime_mapping(now, "activation_timer");
   }
 
   if (activated_version.has_value()) {

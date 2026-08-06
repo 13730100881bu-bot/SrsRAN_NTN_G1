@@ -28,6 +28,7 @@ add_library(srsran_cu_cp_ntn_mobility STATIC
   ntn_qos_policy.cpp
   ntn_onboard_position_plan.cpp
   ntn_onboard_position_plan_state.cpp
+  ntn_onboard_runtime_mapping.cpp
   ntn_plan_version_anchor.cpp
   ntn_satellite_state_updater.cpp
   ntn_service_switch_over_controller.cpp
