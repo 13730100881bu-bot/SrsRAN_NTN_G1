@@ -26,6 +26,7 @@
 #include "lib/cu_cp/ntn_mobility/ntn_onboard_position_plan_state.h"
 #include "lib/cu_cp/ntn_mobility/ntn_plan_version_anchor.h"
 #include "lib/f1ap/asn1_helpers.h"
+#include "lib/ngap/ngap_asn1_helpers.h"
 #include "lib/ngap/ngap_asn1_converters.h"
 #include "lib/rrc/ue/rrc_measurement_types_asn1_converters.h"
 #include "nlohmann/json.hpp"
@@ -633,8 +634,11 @@ make_persisted_active_with_future_pending(std::chrono::milliseconds active_valid
   return data;
 }
 
-persisted_recovery_calendar_test_data make_persisted_recovery_calendar_test_data(uint64_t catalog_version,
-                                                                                 uint64_t schedule_version)
+persisted_recovery_calendar_test_data
+make_persisted_recovery_calendar_test_data(uint64_t                catalog_version,
+                                           uint64_t                schedule_version,
+                                           std::optional<unsigned> assigned_positions = std::nullopt,
+                                           std::chrono::milliseconds valid_for = std::chrono::seconds{30})
 {
   persisted_recovery_calendar_test_data data;
   const nr_cell_identity                first_nci  = make_default_env_nci(0);
@@ -650,11 +654,21 @@ persisted_recovery_calendar_test_data make_persisted_recovery_calendar_test_data
   data.plan.schedule_version = schedule_version;
   data.plan.valid_from       = std::chrono::system_clock::time_point{std::chrono::milliseconds{activation_ms - 640}};
   data.plan.activation_epoch = std::chrono::system_clock::time_point{std::chrono::milliseconds{activation_ms}};
-  data.plan.valid_until      = std::chrono::system_clock::time_point{std::chrono::milliseconds{now_ms + 30000}};
+  data.plan.valid_until =
+      std::chrono::system_clock::time_point{std::chrono::milliseconds{now_ms + valid_for.count()}};
   data.plan.onboard_cells[0] = {first_nci, shared_pci};
   data.plan.onboard_cells[1] = {second_nci, shared_pci};
   data.plan.visible_l1_positions = {{"G000001", 10.0, 20.0}, {"G000002", 10.1, 20.1}};
   bind_onboard_planning_context(data.plan);
+  if (assigned_positions.has_value()) {
+    srsran_assert(*assigned_positions <= data.plan.visible_l1_positions.size(),
+                  "Persisted recovery test assignment cannot exceed the visible inventory");
+    data.plan.schema_version = 3;
+    data.plan.assigned_l1_position_ids.clear();
+    for (unsigned i = 0; i != *assigned_positions; ++i) {
+      data.plan.assigned_l1_position_ids.push_back(data.plan.visible_l1_positions[i].position_id);
+    }
+  }
   data.plan.content_hash = compute_ntn_position_plan_content_hash(data.plan);
   data.plan_path         = write_onboard_position_plan_for_runtime_test(data.plan);
 
@@ -694,13 +708,17 @@ persisted_recovery_calendar_test_data make_persisted_recovery_calendar_test_data
                                                                    persisted_controller.make_persistent_state(9));
   srsran_assert(stored.has_value(), "Failed to store persisted NTN recovery test state");
 
+  // A cell with no intents is a valid deny-all calendar. Model the DU preflight as completed even when there are no
+  // SSB or PRACH opportunities to match.
+  for (auto& report : data.recovered_preflight) {
+    report.performed  = true;
+    report.passed     = true;
+    report.numerology = 1;
+  }
   for (const ntn_access_calendar_intent& intent : persisted_controller.active_plan()->access_calendar) {
     const unsigned cell_index = intent.nci == first_nci ? 0U : 1U;
     ++data.recovered_intents[cell_index];
     auto& report      = data.recovered_preflight[cell_index];
-    report.performed  = true;
-    report.passed     = true;
-    report.numerology = 1;
     if (intent.purpose == ntn_access_calendar_purpose::ssb_sib_paging ||
         intent.purpose == ntn_access_calendar_purpose::ssb_sib_paging_rar) {
       ++report.expected_ssb;
@@ -1829,11 +1847,13 @@ cu_cp_five_g_s_tmsi make_test_paging_five_g_s_tmsi()
   return cu_cp_five_g_s_tmsi{1, 0, 4211117727};
 }
 
-ngap_message make_paging_message_with_recommended_cell(nr_cell_identity nci, unsigned tac = 7)
+ngap_message make_paging_message_with_recommended_cells(const cu_cp_tai&                 tai,
+                                                        span<const nr_cell_global_id_t> recommended_cgis)
 {
   ngap_message paging_msg = generate_valid_minimal_paging_message();
   auto&        paging     = paging_msg.pdu.init_msg().value.paging();
-  paging->tai_list_for_paging[0].tai.tac.from_number(tac);
+  paging->tai_list_for_paging[0].tai.plmn_id = tai.plmn_id.to_bytes();
+  paging->tai_list_for_paging[0].tai.tac.from_number(tai.tac);
 
   paging->assist_data_for_paging_present                                   = true;
   paging->assist_data_for_paging.assist_data_for_recommended_cells_present = true;
@@ -1841,12 +1861,133 @@ ngap_message make_paging_message_with_recommended_cell(nr_cell_identity nci, uns
                                 .recommended_cells_for_paging.recommended_cell_list;
   recommended_cells.clear();
 
-  asn1::ngap::recommended_cell_item_s recommended_cell;
-  auto&                               nr_cgi = recommended_cell.ngran_cgi.set_nr_cgi();
-  nr_cgi.plmn_id.from_string("00f110");
-  nr_cgi.nr_cell_id.from_number(nci.value());
-  recommended_cells.push_back(recommended_cell);
+  for (const nr_cell_global_id_t& cgi : recommended_cgis) {
+    asn1::ngap::recommended_cell_item_s recommended_cell;
+    auto&                               nr_cgi = recommended_cell.ngran_cgi.set_nr_cgi();
+    nr_cgi.plmn_id = cgi.plmn_id.to_bytes();
+    nr_cgi.nr_cell_id.from_number(cgi.nci.value());
+    recommended_cells.push_back(recommended_cell);
+  }
   return paging_msg;
+}
+
+ngap_message make_paging_message_with_recommended_cell(nr_cell_identity nci, unsigned tac = 7)
+{
+  const std::array<nr_cell_global_id_t, 1> recommended_cgis = {
+      nr_cell_global_id_t{plmn_identity::test_value(), nci}};
+  return make_paging_message_with_recommended_cells(
+      cu_cp_tai{plmn_identity::test_value(), static_cast<tac_t>(tac)}, recommended_cgis);
+}
+
+std::optional<unsigned> reconcile_persisted_onboard_mapping(cu_cp_test_environment&                         env,
+                                                             const persisted_recovery_calendar_test_data& data,
+                                                             gnb_du_id_t gnb_du_id = int_to_gnb_du_id(0x51),
+                                                             bool        establish_ng = true,
+                                                             std::optional<std::vector<test_helpers::served_cell_item_info>>
+                                                                 served_cells = std::nullopt)
+{
+  if (establish_ng) {
+    env.run_ng_setup();
+  }
+  const std::optional<unsigned> du_idx = env.connect_new_du();
+  if (!du_idx.has_value()) {
+    ADD_FAILURE() << "Failed to connect mock DU for onboard mapping recovery";
+    return std::nullopt;
+  }
+  if (!served_cells.has_value()) {
+    served_cells = make_onboard_served_cells(data.plan.onboard_cells[0].nci,
+                                             data.plan.onboard_cells[1].nci,
+                                             data.plan.onboard_cells[0].pci);
+  }
+  if (!env.run_f1_setup(du_idx.value(), gnb_du_id, served_cells.value())) {
+    ADD_FAILURE() << "Failed to complete F1 setup for onboard mapping recovery";
+    return std::nullopt;
+  }
+
+  f1ap_message query_request;
+  if (!env.wait_for_f1ap_tx_pdu_without_auto_response(
+          du_idx.value(), query_request, std::chrono::milliseconds{1500})) {
+    ADD_FAILURE() << "Timed out waiting for recovered onboard calendar query";
+    return std::nullopt;
+  }
+  const std::optional<f1ap_ntn_access_calendar_update> query = decode_ntn_calendar_update(query_request);
+  if (!query.has_value() || query->operation != f1ap_ntn_access_calendar_operation::query) {
+    ADD_FAILURE() << "Expected an onboard calendar query during recovery";
+    return std::nullopt;
+  }
+  EXPECT_EQ(query->schedule_version, data.plan.schedule_version);
+  env.respond_to_f1ap_resource_coordination_request(du_idx.value(), query_request);
+
+  if (!env.tick_until(std::chrono::milliseconds{1000}, [&env, &data]() {
+        const auto status = env.get_cu_cp()
+                                .get_command_handler()
+                                .get_ntn_command_handler()
+                                .get_current_ntn_runtime_status()
+                                .onboard_position_plan;
+        return status.active_schedule_version == data.plan.schedule_version &&
+               status.runtime_mapping_stage == "ready";
+      })) {
+    ADD_FAILURE() << "Recovered onboard mapping did not become ready";
+    return std::nullopt;
+  }
+  return du_idx;
+}
+
+std::optional<connected_ngap_ntn_ue>
+connect_onboard_ngap_ue(cu_cp_test_environment&           env,
+                        unsigned                          du_idx,
+                        nr_cell_identity                  serving_nci,
+                        const cu_cp_five_g_s_tmsi&        five_g_s_tmsi,
+                        unsigned                          ue_ordinal = 0)
+{
+  if (!connect_cu_up_for_ue_admission(env)) {
+    return std::nullopt;
+  }
+
+  const gnb_du_ue_f1ap_id_t du_ue_id = int_to_gnb_du_ue_f1ap_id(ue_ordinal);
+  if (!env.connect_new_ue(
+          du_idx,
+          du_ue_id,
+          to_rnti(static_cast<uint16_t>(0x4601 + ue_ordinal)),
+          plmn_identity::test_value(),
+          five_g_s_tmsi,
+          serving_nci) ||
+      !env.authenticate_ue(du_idx, du_ue_id, uint_to_amf_ue_id(ue_ordinal))) {
+    return std::nullopt;
+  }
+
+  const cu_cp_test_environment::ue_context* ue_ctx = env.find_ue_context(du_idx, du_ue_id);
+  if (ue_ctx == nullptr || !ue_ctx->cu_ue_id.has_value() || !ue_ctx->ran_ue_id.has_value() ||
+      !ue_ctx->amf_ue_id.has_value()) {
+    return std::nullopt;
+  }
+  return connected_ngap_ntn_ue{du_idx,
+                               uint_to_ue_index(gnb_cu_ue_f1ap_id_to_uint(ue_ctx->cu_ue_id.value())),
+                               ue_ctx->ran_ue_id.value(),
+                               ue_ctx->amf_ue_id.value()};
+}
+
+void complete_onboard_ngap_ue_release(cu_cp_test_environment&        env,
+                                      const connected_ngap_ntn_ue& ue,
+                                      ngap_message&                  release_complete)
+{
+  env.get_amf().push_tx_pdu(generate_valid_ue_context_release_command_with_amf_ue_ngap_id(ue.amf_ue_id));
+
+  f1ap_message f1ap_pdu;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu(ue.du_idx, f1ap_pdu, std::chrono::milliseconds{1000}));
+  ASSERT_TRUE(test_helpers::is_valid_ue_context_release_command(f1ap_pdu));
+  const auto& release_cmd = f1ap_pdu.pdu.init_msg().value.ue_context_release_cmd();
+  env.get_du(ue.du_idx)
+      .push_ul_pdu(test_helpers::generate_ue_context_release_complete(
+          int_to_gnb_cu_ue_f1ap_id(release_cmd->gnb_cu_ue_f1ap_id),
+          int_to_gnb_du_ue_f1ap_id(release_cmd->gnb_du_ue_f1ap_id)));
+
+  ASSERT_TRUE(env.wait_for_ngap_tx_pdu(release_complete, std::chrono::milliseconds{1000}));
+  ASSERT_TRUE(test_helpers::is_valid_ue_context_release_complete(release_complete));
+  ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{1000}, [&env]() {
+    return env.get_cu_cp().get_metrics_handler().request_metrics_report().ues.empty();
+  }));
+  env.drain_f1ap_resource_coordination_requests(ue.du_idx);
 }
 
 void complete_service_bound_ue_release(cu_cp_test_environment& env, const service_bound_ntn_ue_context& ue)
@@ -2050,7 +2191,9 @@ TEST(cu_cp_ntn_mobility_test, schema_v4_signed_calendar_is_applied_persisted_and
   const int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                              std::chrono::system_clock::now().time_since_epoch())
                              .count();
-  const int64_t activation_ms = ((now_ms + 1000 + 639) / 640) * 640;
+  // Signing, CU setup and the two calendar exchanges run in one wall-clock test. Keep activation far enough ahead
+  // that larger CTest selections cannot consume the original one-second margin.
+  const int64_t activation_ms = ((now_ms + 5000 + 639) / 640) * 640;
   const auto activation_epoch =
       std::chrono::system_clock::time_point{std::chrono::milliseconds{activation_ms}};
   ntn_versioned_position_plan plan = make_schema_v3_runtime_plan(12,
@@ -2072,6 +2215,7 @@ TEST(cu_cp_ntn_mobility_test, schema_v4_signed_calendar_is_applied_persisted_and
 
   auto source                    = make_schema_v3_runtime_source(plan, plan_path);
   source.require_signed_plan     = true;
+  source.du_apply_timeout        = std::chrono::seconds{5};
   source.version_anchor_file     = plan_path.string() + ".anchor";
   source.trusted_signing_keys    = {{signing_key_id, public_key_path.string()}};
 
@@ -2086,7 +2230,7 @@ TEST(cu_cp_ntn_mobility_test, schema_v4_signed_calendar_is_applied_persisted_and
         du_idx.value(), int_to_gnb_du_id(0x41), make_onboard_served_cells(first_nci, second_nci, shared_pci)));
 
     f1ap_message ignored;
-    (void)env.wait_for_f1ap_tx_pdu(du_idx.value(), ignored, std::chrono::milliseconds{2600});
+    (void)env.wait_for_f1ap_tx_pdu(du_idx.value(), ignored, std::chrono::milliseconds{8000});
     const auto status = env.get_cu_cp()
                             .get_command_handler()
                             .get_ntn_command_handler()
@@ -2104,6 +2248,12 @@ TEST(cu_cp_ntn_mobility_test, schema_v4_signed_calendar_is_applied_persisted_and
     EXPECT_EQ(status.version_anchor_status, "committed");
     EXPECT_EQ(status.version_anchor_schedule_version, plan.schedule_version);
     EXPECT_FALSE(status.state_write_blocked);
+    EXPECT_EQ(status.schema_version, 4U);
+    EXPECT_EQ(status.runtime_mapping_stage, "ready");
+    EXPECT_EQ(status.runtime_mapping_schedule_version, plan.schedule_version);
+    EXPECT_EQ(status.runtime_mapping_calendar_hash, status.active_calendar_hash);
+    EXPECT_EQ(status.runtime_mapped_l1_positions, 6U);
+    EXPECT_EQ(status.cells[0].mapped_l1_positions + status.cells[1].mapped_l1_positions, 6U);
   }
 
   auto persisted_state = load_ntn_onboard_position_plan_state(source.state_file);
@@ -2130,6 +2280,10 @@ TEST(cu_cp_ntn_mobility_test, schema_v4_signed_calendar_is_applied_persisted_and
   EXPECT_EQ(restarted_status.signature_status, "verified");
   EXPECT_EQ(restarted_status.version_anchor_status, "committed");
   EXPECT_FALSE(restarted_status.state_write_blocked);
+  EXPECT_EQ(restarted_status.state_schema_version, 4U);
+  EXPECT_EQ(restarted_status.runtime_mapping_stage, "awaiting_live_du");
+  EXPECT_EQ(restarted_status.runtime_mapping_schedule_version, 0U);
+  EXPECT_EQ(restarted_status.runtime_mapped_l1_positions, 0U);
 }
 
 TEST(cu_cp_ntn_mobility_test, schema_v4_restart_rejects_a_state_file_rolled_back_below_the_version_anchor)
@@ -2749,6 +2903,645 @@ TEST(cu_cp_ntn_mobility_test, onboard_runtime_mapping_empty_assignment_is_ready_
   EXPECT_EQ(status.cells[1].mapped_l1_positions, 0U);
 }
 
+TEST(cu_cp_ntn_mobility_test,
+     onboard_paging_release_uses_exact_stable_cell_and_fresh_context_without_legacy_profile)
+{
+  persisted_recovery_calendar_test_data data = make_persisted_recovery_calendar_test_data(60, 70);
+  temporary_plan_file_guard             plan_file_guard(data.plan_path);
+
+  cu_cp_test_env_params params;
+  params.ntn_onboard_position_plan                = data.source;
+  params.ntn_recovered_calendar_intents_per_cell  = data.recovered_intents;
+  params.ntn_recovered_calendar_preflight_reports = data.recovered_preflight;
+  cu_cp_test_environment env(std::move(params));
+
+  const std::optional<unsigned> du_idx = reconcile_persisted_onboard_mapping(env, data);
+  ASSERT_TRUE(du_idx.has_value());
+  ASSERT_FALSE(env.get_test_env_params().ntn_location_mobility.has_value());
+
+  const nr_cell_identity       serving_nci = data.plan.onboard_cells[0].nci;
+  const cu_cp_five_g_s_tmsi five_g_s_tmsi = make_test_paging_five_g_s_tmsi();
+  const std::optional<connected_ngap_ntn_ue> ue =
+      connect_onboard_ngap_ue(env, du_idx.value(), serving_nci, five_g_s_tmsi);
+  ASSERT_TRUE(ue.has_value());
+
+  ngap_message release_complete_pdu;
+  complete_onboard_ngap_ue_release(env, ue.value(), release_complete_pdu);
+  const auto& release_complete =
+      release_complete_pdu.pdu.successful_outcome().value.ue_context_release_complete();
+
+  ASSERT_TRUE(release_complete->info_on_recommended_cells_and_ran_nodes_for_paging_present);
+  const auto& recommended_cells =
+      release_complete->info_on_recommended_cells_and_ran_nodes_for_paging.recommended_cells_for_paging
+          .recommended_cell_list;
+  ASSERT_EQ(recommended_cells.size(), 1U);
+  ASSERT_EQ(recommended_cells[0].ngran_cgi.type().value, asn1::ngap::ngran_cgi_c::types_opts::nr_cgi);
+  const auto& recommended_nr_cgi = recommended_cells[0].ngran_cgi.nr_cgi();
+  EXPECT_EQ(recommended_nr_cgi.nr_cell_id.to_number(), serving_nci.value());
+  EXPECT_EQ(plmn_identity::from_bytes(recommended_nr_cgi.plmn_id.to_bytes()).value(), plmn_identity::test_value());
+
+  ASSERT_TRUE(release_complete->user_location_info_present);
+  ASSERT_EQ(release_complete->user_location_info.type().value,
+            asn1::ngap::user_location_info_c::types_opts::user_location_info_nr);
+  const auto& nr_info = release_complete->user_location_info.user_location_info_nr();
+  EXPECT_EQ(nr_info.nr_cgi.nr_cell_id.to_number(), serving_nci.value());
+  EXPECT_EQ(plmn_identity::from_bytes(nr_info.nr_cgi.plmn_id.to_bytes()).value(), plmn_identity::test_value());
+  EXPECT_EQ(plmn_identity::from_bytes(nr_info.tai.plmn_id.to_bytes()).value(), plmn_identity::test_value());
+  EXPECT_EQ(nr_info.tai.tac.to_number(), 7U);
+  ASSERT_TRUE(nr_info.time_stamp_present);
+  EXPECT_GT(nr_info.time_stamp.to_number(), 0U);
+  EXPECT_FALSE(nr_info.ie_exts_present);
+
+  const auto after_release = env.get_cu_cp()
+                                 .get_command_handler()
+                                 .get_ntn_command_handler()
+                                 .get_current_ntn_runtime_status()
+                                 .onboard_position_plan;
+  EXPECT_EQ(after_release.schema_version, 2U);
+  EXPECT_EQ(after_release.paging_state, "ready");
+  EXPECT_EQ(after_release.valid_idle_paging_contexts, 1U);
+
+  env.get_amf().push_tx_pdu(generate_valid_minimal_paging_message());
+  f1ap_message paging;
+  ASSERT_TRUE(wait_for_f1ap_paging(env, du_idx.value(), paging));
+  const std::array<nr_cell_identity, 1> expected_ncis = {serving_nci};
+  expect_paging_cells(paging, expected_ncis);
+}
+
+TEST(cu_cp_ntn_mobility_test, onboard_paging_disables_narrowing_when_the_cell_tai_is_not_supported)
+{
+  const supported_tracking_area mismatched_tai{8, {default_plmn_item}};
+  persisted_recovery_calendar_test_data data = make_persisted_recovery_calendar_test_data(61, 71);
+  temporary_plan_file_guard             plan_file_guard(data.plan_path);
+
+  cu_cp_test_env_params params;
+  params.amf_configs.at(0).supported_tas             = {mismatched_tai};
+  params.ntn_onboard_position_plan                   = data.source;
+  params.ntn_recovered_calendar_intents_per_cell     = data.recovered_intents;
+  params.ntn_recovered_calendar_preflight_reports    = data.recovered_preflight;
+  cu_cp_test_environment env(std::move(params));
+
+  const std::optional<unsigned> du_idx =
+      reconcile_persisted_onboard_mapping(env, data, int_to_gnb_du_id(0x52));
+  ASSERT_TRUE(du_idx.has_value());
+  const auto status = env.get_cu_cp()
+                          .get_command_handler()
+                          .get_ntn_command_handler()
+                          .get_current_ntn_runtime_status()
+                          .onboard_position_plan;
+  ASSERT_EQ(status.runtime_mapping_stage, "ready");
+  EXPECT_EQ(status.paging_state, "tai_unavailable");
+  for (const cu_cp_ntn_onboard_cell_plan_status& cell : status.cells) {
+    EXPECT_EQ(cell.runtime_plmn, plmn_identity::test_value().to_string());
+    EXPECT_EQ(cell.runtime_tac, 7U);
+    EXPECT_EQ(cell.runtime_tai_status, "plmn_tac_mismatch");
+  }
+}
+
+TEST(cu_cp_ntn_mobility_test, onboard_paging_empty_assignment_does_not_create_context_or_narrow)
+{
+  persisted_recovery_calendar_test_data data = make_persisted_recovery_calendar_test_data(66, 76, 0);
+  temporary_plan_file_guard             plan_file_guard(data.plan_path);
+
+  cu_cp_test_env_params params;
+  params.ntn_onboard_position_plan                = data.source;
+  params.ntn_recovered_calendar_intents_per_cell  = data.recovered_intents;
+  params.ntn_recovered_calendar_preflight_reports = data.recovered_preflight;
+  cu_cp_test_environment env(std::move(params));
+
+  const std::optional<unsigned> du_idx =
+      reconcile_persisted_onboard_mapping(env, data, int_to_gnb_du_id(0x56));
+  ASSERT_TRUE(du_idx.has_value());
+  auto status = env.get_cu_cp()
+                    .get_command_handler()
+                    .get_ntn_command_handler()
+                    .get_current_ntn_runtime_status()
+                    .onboard_position_plan;
+  ASSERT_EQ(status.runtime_mapping_stage, "ready");
+  EXPECT_EQ(status.runtime_mapped_l1_positions, 0U);
+  EXPECT_EQ(status.paging_state, "no_assigned_positions");
+
+  const std::optional<connected_ngap_ntn_ue> ue = connect_onboard_ngap_ue(
+      env, du_idx.value(), data.plan.onboard_cells[0].nci, make_test_paging_five_g_s_tmsi());
+  ASSERT_TRUE(ue.has_value());
+  ngap_message release_complete_pdu;
+  complete_onboard_ngap_ue_release(env, ue.value(), release_complete_pdu);
+  const auto& release_complete =
+      release_complete_pdu.pdu.successful_outcome().value.ue_context_release_complete();
+  EXPECT_FALSE(release_complete->info_on_recommended_cells_and_ran_nodes_for_paging_present);
+
+  status = env.get_cu_cp()
+               .get_command_handler()
+               .get_ntn_command_handler()
+               .get_current_ntn_runtime_status()
+               .onboard_position_plan;
+  EXPECT_EQ(status.valid_idle_paging_contexts, 0U);
+
+  env.get_amf().push_tx_pdu(generate_valid_minimal_paging_message());
+  f1ap_message paging;
+  ASSERT_TRUE(wait_for_f1ap_paging(env, du_idx.value(), paging));
+  const std::array<nr_cell_identity, 2> expected_ncis = {
+      data.plan.onboard_cells[0].nci, data.plan.onboard_cells[1].nci};
+  expect_paging_cells(paging, expected_ncis);
+  EXPECT_EQ(env.get_cu_cp()
+                .get_command_handler()
+                .get_ntn_command_handler()
+                .get_current_ntn_runtime_status()
+                .last_ntn_idle_paging_reason,
+            "onboard_no_assigned_positions");
+}
+
+TEST(cu_cp_ntn_mobility_test, onboard_paging_does_not_use_a_cell_route_from_another_plmn)
+{
+  persisted_recovery_calendar_test_data data = make_persisted_recovery_calendar_test_data(69, 79);
+  temporary_plan_file_guard             plan_file_guard(data.plan_path);
+
+  const plmn_identity alternate_plmn = plmn_identity::parse("99999").value();
+  const plmn_item alternate_plmn_item{alternate_plmn, std::vector<s_nssai_t>{default_s_nssai}};
+
+  cu_cp_test_env_params params;
+  params.amf_configs.at(0).supported_tas = {
+      supported_tracking_area{7, {default_plmn_item, alternate_plmn_item}}};
+  params.ntn_onboard_position_plan                = data.source;
+  params.ntn_recovered_calendar_intents_per_cell  = data.recovered_intents;
+  params.ntn_recovered_calendar_preflight_reports = data.recovered_preflight;
+  cu_cp_test_environment env(std::move(params));
+
+  const std::optional<unsigned> du_idx =
+      reconcile_persisted_onboard_mapping(env, data, int_to_gnb_du_id(0x59));
+  ASSERT_TRUE(du_idx.has_value());
+  ASSERT_EQ(env.get_cu_cp()
+                .get_command_handler()
+                .get_ntn_command_handler()
+                .get_current_ntn_runtime_status()
+                .onboard_position_plan.paging_state,
+            "ready");
+
+  const std::optional<connected_ngap_ntn_ue> ue = connect_onboard_ngap_ue(
+      env, du_idx.value(), data.plan.onboard_cells[0].nci, make_test_paging_five_g_s_tmsi());
+  ASSERT_TRUE(ue.has_value());
+  cu_cp_impl_interface* cu_cp = get_cu_cp_impl(env);
+  ASSERT_NE(cu_cp, nullptr);
+  ASSERT_TRUE(cu_cp->handle_ue_plmn_selected(ue->ue_index, alternate_plmn));
+
+  ngap_message release_complete_pdu;
+  complete_onboard_ngap_ue_release(env, ue.value(), release_complete_pdu);
+  const auto& release_complete =
+      release_complete_pdu.pdu.successful_outcome().value.ue_context_release_complete();
+  // The ordinary RRC release location remains present. The missing timestamp shows that the onboard route did not
+  // replace it with an NTN-authoritative location for the UE's different PLMN.
+  ASSERT_TRUE(release_complete->user_location_info_present);
+  ASSERT_EQ(release_complete->user_location_info.type().value,
+            asn1::ngap::user_location_info_c::types_opts::user_location_info_nr);
+  EXPECT_FALSE(release_complete->user_location_info.user_location_info_nr().time_stamp_present);
+  EXPECT_FALSE(release_complete->info_on_recommended_cells_and_ran_nodes_for_paging_present);
+  EXPECT_EQ(env.get_cu_cp()
+                .get_command_handler()
+                .get_ntn_command_handler()
+                .get_current_ntn_runtime_status()
+                .onboard_position_plan.valid_idle_paging_contexts,
+            0U);
+}
+
+TEST(cu_cp_ntn_mobility_test, onboard_paging_invalidates_idle_context_when_the_live_cell_tai_changes)
+{
+  persisted_recovery_calendar_test_data data = make_persisted_recovery_calendar_test_data(70, 80);
+  temporary_plan_file_guard             plan_file_guard(data.plan_path);
+
+  cu_cp_test_env_params params;
+  params.amf_configs.at(0).supported_tas = {
+      default_supported_tracking_area, supported_tracking_area{8, {default_plmn_item}}};
+  params.ntn_onboard_position_plan                = data.source;
+  params.ntn_recovered_calendar_intents_per_cell  = data.recovered_intents;
+  params.ntn_recovered_calendar_preflight_reports = data.recovered_preflight;
+  cu_cp_test_environment env(std::move(params));
+
+  const std::optional<unsigned> first_du =
+      reconcile_persisted_onboard_mapping(env, data, int_to_gnb_du_id(0x5a));
+  ASSERT_TRUE(first_du.has_value());
+  const nr_cell_identity serving_nci = data.plan.onboard_cells[0].nci;
+  const std::optional<connected_ngap_ntn_ue> ue =
+      connect_onboard_ngap_ue(env, first_du.value(), serving_nci, make_test_paging_five_g_s_tmsi());
+  ASSERT_TRUE(ue.has_value());
+  ngap_message release_complete_pdu;
+  complete_onboard_ngap_ue_release(env, ue.value(), release_complete_pdu);
+  ASSERT_EQ(env.get_cu_cp()
+                .get_command_handler()
+                .get_ntn_command_handler()
+                .get_current_ntn_runtime_status()
+                .onboard_position_plan.valid_idle_paging_contexts,
+            1U);
+
+  ASSERT_TRUE(env.drop_du_connection(first_du.value()));
+  const std::optional<unsigned> second_du = env.connect_new_du();
+  ASSERT_TRUE(second_du.has_value());
+  std::vector<test_helpers::served_cell_item_info> changed_cells =
+      make_onboard_served_cells(data.plan.onboard_cells[0].nci,
+                                data.plan.onboard_cells[1].nci,
+                                data.plan.onboard_cells[0].pci);
+  changed_cells[0].tac = 8;
+  changed_cells[1].tac = 8;
+  ASSERT_TRUE(env.run_f1_setup(second_du.value(), int_to_gnb_du_id(0x5a), changed_cells));
+
+  f1ap_message query_request;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      second_du.value(), query_request, std::chrono::milliseconds{1500}));
+  const auto query = decode_ntn_calendar_update(query_request);
+  ASSERT_TRUE(query.has_value());
+  ASSERT_EQ(query->operation, f1ap_ntn_access_calendar_operation::query);
+
+  // While the DU query is outstanding, the old AMF recommendation must not bypass the hidden mapping.
+  env.get_amf().push_tx_pdu(make_paging_message_with_recommended_cell(serving_nci, 8));
+  f1ap_message paging_before_query;
+  ASSERT_TRUE(wait_for_f1ap_paging(env, second_du.value(), paging_before_query));
+  const std::array<nr_cell_identity, 2> both_ncis = {
+      data.plan.onboard_cells[0].nci, data.plan.onboard_cells[1].nci};
+  expect_paging_cells(paging_before_query, both_ncis);
+  EXPECT_EQ(env.get_cu_cp()
+                .get_command_handler()
+                .get_ntn_command_handler()
+                .get_current_ntn_runtime_status()
+                .last_ntn_idle_paging_reason,
+            "onboard_mapping_unavailable");
+
+  env.respond_to_f1ap_resource_coordination_request(second_du.value(), query_request);
+  ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{1500}, [&env]() {
+    const auto status = env.get_cu_cp()
+                            .get_command_handler()
+                            .get_ntn_command_handler()
+                            .get_current_ntn_runtime_status()
+                            .onboard_position_plan;
+    return status.runtime_mapping_stage == "ready" && status.cells[0].runtime_tac == 8 &&
+           status.cells[1].runtime_tac == 8;
+  }));
+  EXPECT_EQ(env.get_cu_cp()
+                .get_command_handler()
+                .get_ntn_command_handler()
+                .get_current_ntn_runtime_status()
+                .onboard_position_plan.valid_idle_paging_contexts,
+            0U);
+
+  ngap_message ordinary_paging = generate_valid_minimal_paging_message();
+  ordinary_paging.pdu.init_msg().value.paging()->tai_list_for_paging[0].tai.tac.from_number(8);
+  env.get_amf().push_tx_pdu(ordinary_paging);
+  f1ap_message paging_after_query;
+  ASSERT_TRUE(wait_for_f1ap_paging(env, second_du.value(), paging_after_query));
+  expect_paging_cells(paging_after_query, both_ncis);
+  EXPECT_EQ(env.get_cu_cp()
+                .get_command_handler()
+                .get_ntn_command_handler()
+                .get_current_ntn_runtime_status()
+                .last_ntn_idle_paging_reason,
+            "onboard_context_cell_route_changed");
+}
+
+TEST(cu_cp_ntn_mobility_test, onboard_paging_replaces_an_old_tmsi_context_with_an_unpageable_release)
+{
+  persisted_recovery_calendar_test_data data = make_persisted_recovery_calendar_test_data(71, 81, 1);
+  temporary_plan_file_guard             plan_file_guard(data.plan_path);
+
+  cu_cp_test_env_params params;
+  params.ntn_onboard_position_plan                = data.source;
+  params.ntn_recovered_calendar_intents_per_cell  = data.recovered_intents;
+  params.ntn_recovered_calendar_preflight_reports = data.recovered_preflight;
+  cu_cp_test_environment env(std::move(params));
+
+  const std::optional<unsigned> du_idx =
+      reconcile_persisted_onboard_mapping(env, data, int_to_gnb_du_id(0x5b));
+  ASSERT_TRUE(du_idx.has_value());
+  const auto mapping = env.get_cu_cp()
+                           .get_command_handler()
+                           .get_ntn_command_handler()
+                           .get_current_ntn_runtime_status()
+                           .onboard_position_plan;
+  ASSERT_EQ(mapping.runtime_mapped_l1_positions, 1U);
+  ASSERT_EQ(mapping.cells[0].mapped_l1_positions + mapping.cells[1].mapped_l1_positions, 1U);
+  const nr_cell_identity page_owner = mapping.cells[0].mapped_l1_positions == 1 ? mapping.cells[0].nci
+                                                                                : mapping.cells[1].nci;
+  const nr_cell_identity empty_cell = mapping.cells[0].mapped_l1_positions == 0 ? mapping.cells[0].nci
+                                                                                : mapping.cells[1].nci;
+  const cu_cp_five_g_s_tmsi tmsi = make_test_paging_five_g_s_tmsi();
+
+  const std::optional<connected_ngap_ntn_ue> first_ue =
+      connect_onboard_ngap_ue(env, du_idx.value(), page_owner, tmsi, 0);
+  ASSERT_TRUE(first_ue.has_value());
+  ngap_message first_release;
+  complete_onboard_ngap_ue_release(env, first_ue.value(), first_release);
+  ASSERT_EQ(env.get_cu_cp()
+                .get_command_handler()
+                .get_ntn_command_handler()
+                .get_current_ntn_runtime_status()
+                .onboard_position_plan.valid_idle_paging_contexts,
+            1U);
+
+  const std::optional<connected_ngap_ntn_ue> second_ue =
+      connect_onboard_ngap_ue(env, du_idx.value(), empty_cell, tmsi, 1);
+  ASSERT_TRUE(second_ue.has_value());
+  ngap_message second_release;
+  complete_onboard_ngap_ue_release(env, second_ue.value(), second_release);
+  EXPECT_EQ(env.get_cu_cp()
+                .get_command_handler()
+                .get_ntn_command_handler()
+                .get_current_ntn_runtime_status()
+                .onboard_position_plan.valid_idle_paging_contexts,
+            0U);
+
+  env.get_amf().push_tx_pdu(generate_valid_minimal_paging_message());
+  f1ap_message paging;
+  ASSERT_TRUE(wait_for_f1ap_paging(env, du_idx.value(), paging));
+  const std::array<nr_cell_identity, 2> both_ncis = {
+      data.plan.onboard_cells[0].nci, data.plan.onboard_cells[1].nci};
+  expect_paging_cells(paging, both_ncis);
+}
+
+TEST(cu_cp_ntn_mobility_test, onboard_paging_filters_mixed_amf_recommendations_by_complete_tai)
+{
+  persisted_recovery_calendar_test_data data = make_persisted_recovery_calendar_test_data(72, 82);
+  temporary_plan_file_guard             plan_file_guard(data.plan_path);
+  const plmn_identity alternate_plmn = plmn_identity::parse("99999").value();
+  const plmn_item alternate_plmn_item{alternate_plmn, std::vector<s_nssai_t>{default_s_nssai}};
+
+  cu_cp_test_env_params params;
+  params.amf_configs.at(0).supported_tas = {
+      supported_tracking_area{7, {default_plmn_item, alternate_plmn_item}}};
+  params.ntn_onboard_position_plan                = data.source;
+  params.ntn_recovered_calendar_intents_per_cell  = data.recovered_intents;
+  params.ntn_recovered_calendar_preflight_reports = data.recovered_preflight;
+  cu_cp_test_environment env(std::move(params));
+
+  std::vector<test_helpers::served_cell_item_info> served_cells =
+      make_onboard_served_cells(data.plan.onboard_cells[0].nci,
+                                data.plan.onboard_cells[1].nci,
+                                data.plan.onboard_cells[0].pci);
+  served_cells[1].plmn_id  = alternate_plmn;
+  served_cells[1].sib1_str = srsran::test_helpers::create_sib1_hex_string(alternate_plmn);
+  const std::optional<unsigned> du_idx = reconcile_persisted_onboard_mapping(
+      env, data, int_to_gnb_du_id(0x5c), true, served_cells);
+  ASSERT_TRUE(du_idx.has_value());
+
+  const std::optional<connected_ngap_ntn_ue> ue = connect_onboard_ngap_ue(
+      env, du_idx.value(), data.plan.onboard_cells[0].nci, make_test_paging_five_g_s_tmsi());
+  ASSERT_TRUE(ue.has_value());
+  ngap_message release_complete;
+  complete_onboard_ngap_ue_release(env, ue.value(), release_complete);
+  ASSERT_EQ(env.get_cu_cp()
+                .get_command_handler()
+                .get_ntn_command_handler()
+                .get_current_ntn_runtime_status()
+                .onboard_position_plan.valid_idle_paging_contexts,
+            1U);
+
+  const std::array<nr_cell_global_id_t, 2> mixed_recommendations = {
+      nr_cell_global_id_t{plmn_identity::test_value(), data.plan.onboard_cells[0].nci},
+      nr_cell_global_id_t{alternate_plmn, data.plan.onboard_cells[1].nci}};
+  env.get_amf().push_tx_pdu(make_paging_message_with_recommended_cells(
+      cu_cp_tai{alternate_plmn, static_cast<tac_t>(7)}, mixed_recommendations));
+  f1ap_message paging;
+  ASSERT_TRUE(wait_for_f1ap_paging(env, du_idx.value(), paging));
+  const std::array<nr_cell_identity, 1> expected_ncis = {data.plan.onboard_cells[1].nci};
+  expect_paging_cells(paging, expected_ncis);
+  EXPECT_EQ(env.get_cu_cp()
+                .get_command_handler()
+                .get_ntn_command_handler()
+                .get_current_ntn_runtime_status()
+                .last_ntn_idle_paging_reason,
+            "onboard_amf_recommended_preserved");
+}
+
+TEST(cu_cp_ntn_mobility_test, onboard_paging_does_not_reuse_context_from_an_older_active_plan)
+{
+  persisted_recovery_calendar_test_data data = make_persisted_recovery_calendar_test_data(73, 83);
+  temporary_plan_file_guard             plan_file_guard(data.plan_path);
+  data.source.reload_period = std::chrono::milliseconds{50};
+  data.source.du_apply_timeout = std::chrono::seconds{5};
+
+  cu_cp_test_env_params params;
+  params.ntn_onboard_position_plan                = data.source;
+  params.ntn_recovered_calendar_intents_per_cell  = data.recovered_intents;
+  params.ntn_recovered_calendar_preflight_reports = data.recovered_preflight;
+  params.ntn_calendar_prepare_reports_ready       = true;
+  params.ntn_calendar_query_reports_applied_early = true;
+  cu_cp_test_environment env(std::move(params));
+
+  const std::optional<unsigned> du_idx =
+      reconcile_persisted_onboard_mapping(env, data, int_to_gnb_du_id(0x5d));
+  ASSERT_TRUE(du_idx.has_value());
+  const std::optional<connected_ngap_ntn_ue> ue = connect_onboard_ngap_ue(
+      env, du_idx.value(), data.plan.onboard_cells[0].nci, make_test_paging_five_g_s_tmsi());
+  ASSERT_TRUE(ue.has_value());
+  ngap_message release_complete;
+  complete_onboard_ngap_ue_release(env, ue.value(), release_complete);
+  ASSERT_EQ(env.get_cu_cp()
+                .get_command_handler()
+                .get_ntn_command_handler()
+                .get_current_ntn_runtime_status()
+                .onboard_position_plan.valid_idle_paging_contexts,
+            1U);
+
+  ntn_versioned_position_plan next_plan = data.plan;
+  next_plan.catalog_version              = data.plan.catalog_version + 1;
+  next_plan.schedule_version             = data.plan.schedule_version + 1;
+  const int64_t now_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+          .count();
+  // Leave enough wall-clock margin for the reload, prepare response and activation timer even when this case runs
+  // as one item in a larger CTest selection.
+  const int64_t activation_ms = ((now_ms + 5000 + 639) / 640) * 640;
+  next_plan.valid_from =
+      std::chrono::system_clock::time_point{std::chrono::milliseconds{now_ms - 640}};
+  next_plan.activation_epoch =
+      std::chrono::system_clock::time_point{std::chrono::milliseconds{activation_ms}};
+  next_plan.valid_until = next_plan.activation_epoch + std::chrono::seconds{30};
+  next_plan.content_hash = compute_ntn_position_plan_content_hash(next_plan);
+  const std::filesystem::path next_plan_path = write_onboard_position_plan_for_runtime_test(next_plan);
+  temporary_plan_file_guard   next_plan_guard(next_plan_path);
+  write_runtime_test_file(data.plan_path, read_runtime_test_file(next_plan_path));
+
+  f1ap_message prepare_request;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      du_idx.value(), prepare_request, std::chrono::milliseconds{1800}));
+  const auto prepare = decode_ntn_calendar_update(prepare_request);
+  ASSERT_TRUE(prepare.has_value());
+  ASSERT_EQ(prepare->operation, f1ap_ntn_access_calendar_operation::prepare);
+  ASSERT_EQ(prepare->schedule_version, next_plan.schedule_version);
+  env.respond_to_f1ap_resource_coordination_request(du_idx.value(), prepare_request);
+
+  f1ap_message query_request;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      du_idx.value(), query_request, std::chrono::milliseconds{8000}));
+  const auto query = decode_ntn_calendar_update(query_request);
+  ASSERT_TRUE(query.has_value());
+  ASSERT_EQ(query->operation, f1ap_ntn_access_calendar_operation::query);
+  ASSERT_EQ(query->schedule_version, next_plan.schedule_version);
+  env.respond_to_f1ap_resource_coordination_request(du_idx.value(), query_request);
+
+  ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{1500}, [&env, &next_plan]() {
+    const auto status = env.get_cu_cp()
+                            .get_command_handler()
+                            .get_ntn_command_handler()
+                            .get_current_ntn_runtime_status()
+                            .onboard_position_plan;
+    return status.active_schedule_version == next_plan.schedule_version && status.runtime_mapping_stage == "ready";
+  }));
+  EXPECT_EQ(env.get_cu_cp()
+                .get_command_handler()
+                .get_ntn_command_handler()
+                .get_current_ntn_runtime_status()
+                .onboard_position_plan.valid_idle_paging_contexts,
+            0U);
+
+  env.get_amf().push_tx_pdu(generate_valid_minimal_paging_message());
+  f1ap_message paging;
+  ASSERT_TRUE(wait_for_f1ap_paging(env, du_idx.value(), paging));
+  const std::array<nr_cell_identity, 2> both_ncis = {
+      data.plan.onboard_cells[0].nci, data.plan.onboard_cells[1].nci};
+  expect_paging_cells(paging, both_ncis);
+  EXPECT_EQ(env.get_cu_cp()
+                .get_command_handler()
+                .get_ntn_command_handler()
+                .get_current_ntn_runtime_status()
+                .last_ntn_idle_paging_reason,
+            "onboard_context_plan_changed");
+}
+
+TEST(cu_cp_ntn_mobility_test, onboard_paging_expired_plan_context_does_not_narrow_ordinary_tai_paging)
+{
+  persisted_recovery_calendar_test_data data = make_persisted_recovery_calendar_test_data(
+      67, 77, std::nullopt, std::chrono::milliseconds{6000});
+  temporary_plan_file_guard plan_file_guard(data.plan_path);
+
+  cu_cp_test_env_params params;
+  params.ntn_onboard_position_plan                = data.source;
+  params.ntn_recovered_calendar_intents_per_cell  = data.recovered_intents;
+  params.ntn_recovered_calendar_preflight_reports = data.recovered_preflight;
+  cu_cp_test_environment env(std::move(params));
+
+  const std::optional<unsigned> du_idx =
+      reconcile_persisted_onboard_mapping(env, data, int_to_gnb_du_id(0x57));
+  ASSERT_TRUE(du_idx.has_value());
+  const std::optional<connected_ngap_ntn_ue> ue = connect_onboard_ngap_ue(
+      env, du_idx.value(), data.plan.onboard_cells[0].nci, make_test_paging_five_g_s_tmsi());
+  ASSERT_TRUE(ue.has_value());
+  ngap_message release_complete_pdu;
+  complete_onboard_ngap_ue_release(env, ue.value(), release_complete_pdu);
+  ASSERT_EQ(env.get_cu_cp()
+                .get_command_handler()
+                .get_ntn_command_handler()
+                .get_current_ntn_runtime_status()
+                .onboard_position_plan.valid_idle_paging_contexts,
+            1U);
+
+  ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{7500}, [&env]() {
+    return env.get_cu_cp()
+               .get_command_handler()
+               .get_ntn_command_handler()
+               .get_current_ntn_runtime_status()
+               .onboard_position_plan.runtime_mapping_stage != "ready";
+  }));
+  EXPECT_EQ(env.get_cu_cp()
+                .get_command_handler()
+                .get_ntn_command_handler()
+                .get_current_ntn_runtime_status()
+                .onboard_position_plan.valid_idle_paging_contexts,
+            0U);
+
+  // The context expires during this Paging call. Its old exact NCGI must still be removed before ordinary TAI
+  // routing, otherwise the stale recommendation could incorrectly narrow the target to one cell.
+  env.get_amf().push_tx_pdu(
+      make_paging_message_with_recommended_cell(data.plan.onboard_cells[0].nci));
+  f1ap_message paging;
+  ASSERT_TRUE(wait_for_f1ap_paging(env, du_idx.value(), paging));
+  const std::array<nr_cell_identity, 2> expected_ncis = {
+      data.plan.onboard_cells[0].nci, data.plan.onboard_cells[1].nci};
+  expect_paging_cells(paging, expected_ncis);
+}
+
+TEST(cu_cp_ntn_mobility_test, onboard_paging_keeps_another_plmn_reusing_the_same_nci_in_the_ordinary_message)
+{
+  persisted_recovery_calendar_test_data data = make_persisted_recovery_calendar_test_data(74, 84);
+  temporary_plan_file_guard             plan_file_guard(data.plan_path);
+
+  cu_cp_test_env_params params;
+  params.ntn_onboard_position_plan                = data.source;
+  params.ntn_recovered_calendar_intents_per_cell  = data.recovered_intents;
+  params.ntn_recovered_calendar_preflight_reports = data.recovered_preflight;
+  cu_cp_test_environment env(std::move(params));
+
+  const std::optional<unsigned> du_idx =
+      reconcile_persisted_onboard_mapping(env, data, int_to_gnb_du_id(0x5e));
+  ASSERT_TRUE(du_idx.has_value());
+
+  const plmn_identity alternate_plmn = plmn_identity::parse("99999").value();
+  const nr_cell_global_id_t ordinary_recommendation{alternate_plmn, data.plan.onboard_cells[0].nci};
+  const std::array<nr_cell_global_id_t, 1> recommendations = {ordinary_recommendation};
+  const ngap_message asn1_paging = make_paging_message_with_recommended_cells(
+      cu_cp_tai{plmn_identity::test_value(), static_cast<tac_t>(7)}, recommendations);
+  cu_cp_paging_message paging;
+  fill_cu_cp_paging_message(paging, asn1_paging.pdu.init_msg().value.paging());
+
+  ASSERT_NE(alternate_plmn, plmn_identity::test_value());
+  ASSERT_TRUE(paging.assist_data_for_paging.has_value());
+  ASSERT_TRUE(paging.assist_data_for_paging->assist_data_for_recommended_cells.has_value());
+  ASSERT_EQ(paging.assist_data_for_paging->assist_data_for_recommended_cells
+                ->recommended_cells_for_paging.recommended_cell_list.size(),
+            1U);
+  ASSERT_EQ(paging.assist_data_for_paging->assist_data_for_recommended_cells
+                ->recommended_cells_for_paging.recommended_cell_list.front().ngran_cgi,
+            ordinary_recommendation);
+  const auto status_before = env.get_cu_cp()
+                                 .get_command_handler()
+                                 .get_ntn_command_handler()
+                                 .get_current_ntn_runtime_status()
+                                 .onboard_position_plan;
+  ASSERT_EQ(status_before.runtime_mapping_stage, "ready");
+  ASSERT_EQ(status_before.cells[0].runtime_plmn, plmn_identity::test_value().to_string());
+  ASSERT_EQ(status_before.cells[1].runtime_plmn, plmn_identity::test_value().to_string());
+
+  get_cu_cp_impl(env)->handle_paging_message(paging);
+
+  ASSERT_TRUE(paging.assist_data_for_paging.has_value());
+  ASSERT_TRUE(paging.assist_data_for_paging->assist_data_for_recommended_cells.has_value());
+  const auto& retained = paging.assist_data_for_paging->assist_data_for_recommended_cells
+                             ->recommended_cells_for_paging.recommended_cell_list;
+  ASSERT_EQ(retained.size(), 1U);
+  EXPECT_EQ(retained.front().ngran_cgi, ordinary_recommendation);
+  EXPECT_EQ(env.get_cu_cp()
+                .get_command_handler()
+                .get_ntn_command_handler()
+                .get_current_ntn_runtime_status()
+                .last_ntn_idle_paging_reason,
+            "onboard_no_valid_cell_context");
+}
+
+TEST(cu_cp_ntn_mobility_test, onboard_paging_preserves_current_exact_amf_ncgi_and_tai_recommendation)
+{
+  persisted_recovery_calendar_test_data data = make_persisted_recovery_calendar_test_data(68, 78);
+  temporary_plan_file_guard             plan_file_guard(data.plan_path);
+
+  cu_cp_test_env_params params;
+  params.ntn_onboard_position_plan                = data.source;
+  params.ntn_recovered_calendar_intents_per_cell  = data.recovered_intents;
+  params.ntn_recovered_calendar_preflight_reports = data.recovered_preflight;
+  cu_cp_test_environment env(std::move(params));
+
+  const std::optional<unsigned> du_idx =
+      reconcile_persisted_onboard_mapping(env, data, int_to_gnb_du_id(0x58));
+  ASSERT_TRUE(du_idx.has_value());
+  const nr_cell_identity recommended_nci = data.plan.onboard_cells[1].nci;
+  env.get_amf().push_tx_pdu(make_paging_message_with_recommended_cell(recommended_nci));
+
+  f1ap_message paging;
+  ASSERT_TRUE(wait_for_f1ap_paging(env, du_idx.value(), paging));
+  const std::array<nr_cell_identity, 1> expected_ncis = {recommended_nci};
+  expect_paging_cells(paging, expected_ncis);
+  const cu_cp_ntn_runtime_status runtime = env.get_cu_cp()
+                                                .get_command_handler()
+                                                .get_ntn_command_handler()
+                                                .get_current_ntn_runtime_status();
+  EXPECT_EQ(runtime.onboard_position_plan.valid_idle_paging_contexts, 0U);
+  EXPECT_EQ(runtime.last_ntn_idle_paging_reason, "onboard_amf_recommended_preserved");
+}
+
 TEST(cu_cp_ntn_mobility_test, when_position_plan_feature_is_disabled_then_configured_file_is_not_read)
 {
   const auto unique_suffix = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -3015,12 +3808,14 @@ TEST(cu_cp_ntn_mobility_test, onboard_runtime_mapping_du_disconnect_hides_snapsh
   ASSERT_TRUE(env.run_f1_setup(first_du.value(), int_to_gnb_du_id(0x21), served_cells));
   f1ap_message ignored;
   (void)env.wait_for_f1ap_tx_pdu(first_du.value(), ignored, std::chrono::milliseconds{1600});
-  ASSERT_TRUE(wait_for_test_condition([&env, &data]() {
-    return env.get_cu_cp()
-               .get_command_handler()
-               .get_ntn_command_handler()
-               .get_current_ntn_runtime_status()
-               .onboard_position_plan.active_schedule_version == data.plan.schedule_version;
+  ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{1500}, [&env, &data]() {
+    const auto status = env.get_cu_cp()
+                            .get_command_handler()
+                            .get_ntn_command_handler()
+                            .get_current_ntn_runtime_status()
+                            .onboard_position_plan;
+    return status.active_schedule_version == data.plan.schedule_version &&
+           status.runtime_mapping_stage == "ready";
   }));
   const auto initially_ready = env.get_cu_cp()
                                    .get_command_handler()
@@ -3076,13 +3871,14 @@ TEST(cu_cp_ntn_mobility_test, onboard_runtime_mapping_du_disconnect_hides_snapsh
             "awaiting_live_du");
 
   env.respond_to_f1ap_resource_coordination_request(reconnected_du.value(), query_request);
-  ASSERT_TRUE(wait_for_test_condition([&env, &data]() {
+  ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{1500}, [&env, &data]() {
     const auto status = env.get_cu_cp()
                             .get_command_handler()
                             .get_ntn_command_handler()
                             .get_current_ntn_runtime_status()
                             .onboard_position_plan;
-    return status.active_schedule_version == data.plan.schedule_version && status.recovery_stage == "reconciled";
+    return status.active_schedule_version == data.plan.schedule_version && status.recovery_stage == "reconciled" &&
+           status.runtime_mapping_stage == "ready";
   }));
   const auto reconnected = env.get_cu_cp()
                                .get_command_handler()

@@ -59,6 +59,9 @@ const char* to_string(ntn_onboard_runtime_mapping_stage stage);
 const char* to_string(ntn_onboard_tai_status status);
 const char* to_string(ntn_position_transition transition);
 
+/// Classifies one cell's complete PLMN+TAC against the configured NGAP supported-TA entries.
+ntn_onboard_tai_status classify_ntn_onboard_tai(span<const cu_cp_tai> supported_tais, const cu_cp_tai& cell_tai);
+
 /// Copy of the stable DU cell route used by one runtime snapshot. It does not retain a DU context pointer.
 struct ntn_onboard_runtime_cell_route {
   ntn_onboard_cell_identity identity;

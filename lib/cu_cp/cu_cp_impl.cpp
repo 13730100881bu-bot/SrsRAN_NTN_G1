@@ -662,6 +662,14 @@ static bool ntn_paging_tai_list_contains_tac(span<const cu_cp_tai_list_for_pagin
   });
 }
 
+static bool ntn_paging_tai_list_contains_exact_tai(span<const cu_cp_tai_list_for_paging_item> tai_list,
+                                                   const cu_cp_tai&                           tai)
+{
+  return std::any_of(tai_list.begin(), tai_list.end(), [&tai](const cu_cp_tai_list_for_paging_item& item) {
+    return item.tai.plmn_id == tai.plmn_id && item.tai.tac == tai.tac;
+  });
+}
+
 static const ntn_beam_position* find_ntn_beam_cfg(const std::vector<ntn_beam_position>& beams,
                                                   const std::string&                    beam_id)
 {
@@ -1212,30 +1220,15 @@ resolve_ntn_onboard_du_cells(du_processor_repository&                           
 static ntn_onboard_tai_status classify_ntn_onboard_cell_tai(const cu_cp_configuration&    cfg,
                                                             const du_cell_configuration& cell)
 {
-  unsigned exact_matches = 0;
-  bool     plmn_seen     = false;
-
+  std::vector<cu_cp_tai> supported_tais;
   for (const auto& ngap_cfg : cfg.ngap.ngaps) {
     for (const supported_tracking_area& supported_ta : ngap_cfg.supported_tas) {
-      const bool same_tac = supported_ta.tac == cell.tac;
       for (const plmn_item& item : supported_ta.plmn_list) {
-        const bool same_plmn = item.plmn_id == cell.cgi.plmn_id;
-        plmn_seen            = plmn_seen || same_plmn;
-        if (same_tac && same_plmn) {
-          ++exact_matches;
-        }
+        supported_tais.push_back({item.plmn_id, supported_ta.tac});
       }
     }
   }
-
-  if (exact_matches == 1) {
-    return ntn_onboard_tai_status::ready;
-  }
-  if (exact_matches > 1) {
-    return ntn_onboard_tai_status::supported_tai_duplicate;
-  }
-  return plmn_seen ? ntn_onboard_tai_status::plmn_tac_mismatch
-                   : ntn_onboard_tai_status::supported_tai_missing;
+  return classify_ntn_onboard_tai(supported_tais, cu_cp_tai{cell.cgi.plmn_id, cell.tac});
 }
 
 static bool du_serves_ntn_onboard_cells(du_processor_repository&                            du_db,
@@ -5202,8 +5195,53 @@ cu_cp_impl::build_ntn_core_user_location_info(const ntn_ue_location_report& repo
   return user_location;
 }
 
+std::optional<cu_cp_impl::ntn_onboard_ue_cell_view>
+cu_cp_impl::resolve_ntn_onboard_ue_cell(ue_index_t ue_index, std::chrono::system_clock::time_point now)
+{
+  const std::shared_ptr<const ntn_onboard_runtime_mapping_snapshot> mapping =
+      get_ready_ntn_onboard_runtime_mapping(now);
+  if (mapping == nullptr) {
+    return std::nullopt;
+  }
+
+  cu_cp_ue* ue = ue_mng.find_ue(ue_index);
+  if (ue == nullptr || ue->get_du_index() == du_index_t::invalid ||
+      ue->get_pcell_index() == srs_cu_cp::du_cell_index_t::invalid || ue->get_pci() == INVALID_PCI) {
+    return std::nullopt;
+  }
+
+  for (const ntn_onboard_runtime_cell_route& route : mapping->cell_routes()) {
+    if (route.du_index == ue->get_du_index() && route.du_cell_index == ue->get_pcell_index() &&
+        route.identity.pci == ue->get_pci() && route.ncgi.plmn_id == ue->get_ue_context().plmn) {
+      return ntn_onboard_ue_cell_view{mapping, route};
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<cu_cp_user_location_info_nr> cu_cp_impl::build_ntn_onboard_user_location_info(ue_index_t ue_index)
+{
+  const auto now  = std::chrono::system_clock::now();
+  const auto view = resolve_ntn_onboard_ue_cell(ue_index, now);
+  if (!view.has_value() || view->route.tai_status != ntn_onboard_tai_status::ready) {
+    return std::nullopt;
+  }
+
+  cu_cp_user_location_info_nr user_location;
+  user_location.nr_cgi = view->route.ncgi;
+  user_location.tai    = cu_cp_tai{view->route.ncgi.plmn_id, view->route.tac};
+  const auto timestamp_seconds =
+      std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+  user_location.time_stamp = static_cast<uint32_t>(timestamp_seconds & 0xffffffffU);
+  return user_location;
+}
+
 std::optional<cu_cp_user_location_info_nr> cu_cp_impl::build_ntn_release_user_location_info(ue_index_t ue_index)
 {
+  if (cfg.mobility.onboard_position_plan.enabled && cfg.mobility.onboard_position_plan.du_execution_enabled) {
+    return build_ntn_onboard_user_location_info(ue_index);
+  }
+
   const auto& ntn_cfg = cfg.mobility.meas_manager_config.ntn_location_mobility;
   if (!ntn_cfg.enabled || is_current_ntn_assistance_stale(std::chrono::steady_clock::now())) {
     return std::nullopt;
@@ -5229,6 +5267,20 @@ std::optional<cu_cp_user_location_info_nr> cu_cp_impl::build_ntn_release_user_lo
 std::optional<cu_cp_info_on_recommended_cells_and_ran_nodes_for_paging>
 cu_cp_impl::build_ntn_paging_recommendation(ue_index_t ue_index)
 {
+  if (cfg.mobility.onboard_position_plan.enabled && cfg.mobility.onboard_position_plan.du_execution_enabled) {
+    const auto view = resolve_ntn_onboard_ue_cell(ue_index, std::chrono::system_clock::now());
+    if (!view.has_value() || view->route.tai_status != ntn_onboard_tai_status::ready ||
+        view->mapping->positions_for_nci(view->route.identity.nci).empty()) {
+      return std::nullopt;
+    }
+
+    cu_cp_info_on_recommended_cells_and_ran_nodes_for_paging recommendation;
+    cu_cp_recommended_cell_item recommended_cell;
+    recommended_cell.ngran_cgi = view->route.ncgi;
+    recommendation.recommended_cells_for_paging.recommended_cell_list.push_back(recommended_cell);
+    return recommendation;
+  }
+
   const auto& ntn_cfg = cfg.mobility.meas_manager_config.ntn_location_mobility;
   if (!ntn_cfg.enabled || is_current_ntn_assistance_stale(std::chrono::steady_clock::now())) {
     return std::nullopt;
@@ -5388,6 +5440,44 @@ void cu_cp_impl::mark_ntn_access_released_after_ics(ntn_ue_access_service_layer_
 
 void cu_cp_impl::persist_ntn_idle_paging_context_for_ue(ue_index_t ue_index, const char* reason)
 {
+  if (cfg.mobility.onboard_position_plan.enabled && cfg.mobility.onboard_position_plan.du_execution_enabled) {
+    const auto tmsi_it = ntn_connected_ue_five_g_s_tmsi.find(ue_index);
+    if (tmsi_it == ntn_connected_ue_five_g_s_tmsi.end()) {
+      return;
+    }
+
+    const uint64_t tmsi_number = tmsi_it->second.to_number();
+    auto erase_stale_onboard_context = [this, tmsi_number]() {
+      const auto old_context = ntn_idle_paging_contexts.find(tmsi_number);
+      if (old_context != ntn_idle_paging_contexts.end() &&
+          old_context->second.authority == "onboard_position_plan") {
+        ntn_idle_paging_contexts.erase(old_context);
+      }
+    };
+
+    const auto view = resolve_ntn_onboard_ue_cell(ue_index, std::chrono::system_clock::now());
+    if (!view.has_value() || view->route.tai_status != ntn_onboard_tai_status::ready ||
+        view->mapping->positions_for_nci(view->route.identity.nci).empty()) {
+      erase_stale_onboard_context();
+      return;
+    }
+
+    ntn_idle_paging_context context;
+    context.authority         = "onboard_position_plan";
+    context.five_g_s_tmsi     = tmsi_it->second;
+    context.last_serving_nci  = view->route.identity.nci;
+    context.onboard_nci       = view->route.identity.nci;
+    context.onboard_ncgi      = view->route.ncgi;
+    context.onboard_tai       = cu_cp_tai{view->route.ncgi.plmn_id, view->route.tac};
+    context.schedule_version  = view->mapping->schedule_version();
+    context.calendar_hash     = view->mapping->calendar_hash();
+    context.plan_valid_until  = view->mapping->valid_until();
+    context.updated_time      = std::chrono::steady_clock::now();
+    context.invalid_reason    = reason != nullptr ? reason : "none";
+    ntn_idle_paging_contexts[tmsi_number] = std::move(context);
+    return;
+  }
+
   const auto& ntn_cfg = cfg.mobility.meas_manager_config.ntn_location_mobility;
   if (!ntn_cfg.enabled) {
     return;
@@ -5695,12 +5785,16 @@ bool cu_cp_impl::schedule_ntn_inactive_suspend_if_eligible(ue_index_t ue_index)
 void cu_cp_impl::prune_expired_ntn_idle_paging_contexts(std::chrono::steady_clock::time_point now)
 {
   const auto max_age = cfg.mobility.meas_manager_config.ntn_location_mobility.idle_paging_context_max_age;
-  if (max_age.count() == 0) {
-    return;
-  }
+  const auto system_now = std::chrono::system_clock::now();
 
   for (auto it = ntn_idle_paging_contexts.begin(); it != ntn_idle_paging_contexts.end();) {
-    if (it->second.updated_time != std::chrono::steady_clock::time_point{} && now - it->second.updated_time > max_age) {
+    const bool age_expired = max_age.count() > 0 &&
+                             it->second.updated_time != std::chrono::steady_clock::time_point{} &&
+                             now - it->second.updated_time > max_age;
+    const bool plan_expired = it->second.authority == "onboard_position_plan" &&
+                              (it->second.plan_valid_until == std::chrono::system_clock::time_point{} ||
+                               system_now >= it->second.plan_valid_until);
+    if (age_expired || plan_expired) {
       it = ntn_idle_paging_contexts.erase(it);
       ++nof_ntn_idle_paging_expired;
     } else {
@@ -5709,7 +5803,8 @@ void cu_cp_impl::prune_expired_ntn_idle_paging_contexts(std::chrono::steady_cloc
   }
 
   for (auto it = ntn_inactive_contexts.begin(); it != ntn_inactive_contexts.end();) {
-    if (it->second.updated_time != std::chrono::steady_clock::time_point{} && now - it->second.updated_time > max_age) {
+    if (max_age.count() > 0 && it->second.updated_time != std::chrono::steady_clock::time_point{} &&
+        now - it->second.updated_time > max_age) {
       it = ntn_inactive_contexts.erase(it);
       ++nof_ntn_inactive_contexts_expired;
       last_ntn_inactive_reason = "context_expired";
@@ -5721,6 +5816,136 @@ void cu_cp_impl::prune_expired_ntn_idle_paging_contexts(std::chrono::steady_cloc
 
 bool cu_cp_impl::apply_ntn_idle_paging_recommendation(cu_cp_paging_message& msg)
 {
+  if (cfg.mobility.onboard_position_plan.enabled && cfg.mobility.onboard_position_plan.du_execution_enabled) {
+    std::optional<nr_cell_global_id_t> previous_onboard_ncgi;
+    const auto previous_context = ntn_idle_paging_contexts.find(msg.ue_paging_id.to_number());
+    if (previous_context != ntn_idle_paging_contexts.end() &&
+        previous_context->second.authority == "onboard_position_plan") {
+      previous_onboard_ncgi = previous_context->second.onboard_ncgi;
+    }
+    prune_expired_ntn_idle_paging_contexts(std::chrono::steady_clock::now());
+    const auto system_now = std::chrono::system_clock::now();
+    const std::shared_ptr<const ntn_onboard_runtime_mapping_snapshot> mapping =
+        get_ready_ntn_onboard_runtime_mapping(system_now);
+    if (mapping == nullptr) {
+      // Do not let an old, locally recorded onboard cell bypass the hidden mapping while DU reconciliation is in
+      // progress. Match the complete cached NCGI for this UE; recommendations for another PLMN or unrelated cells
+      // remain part of the ordinary Paging message.
+      if (previous_onboard_ncgi.has_value() && msg.assist_data_for_paging.has_value() &&
+          msg.assist_data_for_paging->assist_data_for_recommended_cells.has_value()) {
+        const nr_cell_global_id_t stale_ncgi = previous_onboard_ncgi.value();
+        auto& recommended_cells = msg.assist_data_for_paging->assist_data_for_recommended_cells
+                                      ->recommended_cells_for_paging.recommended_cell_list;
+        recommended_cells.erase(
+            std::remove_if(recommended_cells.begin(),
+                           recommended_cells.end(),
+                           [&stale_ncgi](const cu_cp_recommended_cell_item& recommended) {
+                             return recommended.ngran_cgi == stale_ncgi;
+                           }),
+            recommended_cells.end());
+      }
+      ++nof_ntn_idle_paging_skipped;
+      last_ntn_idle_paging_reason = "onboard_mapping_unavailable";
+      return false;
+    }
+
+    auto route_can_narrow_paging = [&msg, &mapping](const ntn_onboard_runtime_cell_route& route) {
+      return route.tai_status == ntn_onboard_tai_status::ready &&
+             !mapping->positions_for_nci(route.identity.nci).empty() &&
+             ntn_paging_tai_list_contains_exact_tai(
+                 msg.tai_list_for_paging, cu_cp_tai{route.ncgi.plmn_id, route.tac});
+    };
+    auto install_recommended_cell = [&msg](const ntn_onboard_runtime_cell_route& route) {
+      if (!msg.assist_data_for_paging.has_value()) {
+        msg.assist_data_for_paging.emplace();
+      }
+      if (!msg.assist_data_for_paging->assist_data_for_recommended_cells.has_value()) {
+        msg.assist_data_for_paging->assist_data_for_recommended_cells.emplace();
+      }
+      auto& recommended_cells = msg.assist_data_for_paging->assist_data_for_recommended_cells
+                                    ->recommended_cells_for_paging.recommended_cell_list;
+      recommended_cells.clear();
+      cu_cp_recommended_cell_item cell;
+      cell.ngran_cgi = route.ncgi;
+      recommended_cells.push_back(cell);
+    };
+
+    const uint64_t tmsi_number = msg.ue_paging_id.to_number();
+    auto           context_it  = ntn_idle_paging_contexts.find(tmsi_number);
+    std::optional<std::string> context_skip_reason;
+    if (context_it != ntn_idle_paging_contexts.end() &&
+        context_it->second.authority == "onboard_position_plan") {
+      const ntn_idle_paging_context& context = context_it->second;
+      const bool context_matches_plan = context.onboard_nci.has_value() &&
+                                        context.schedule_version == mapping->schedule_version() &&
+                                        normalize_ntn_calendar_hash_for_comparison(context.calendar_hash) ==
+                                            normalize_ntn_calendar_hash_for_comparison(mapping->calendar_hash()) &&
+                                        context.plan_valid_until == mapping->valid_until() &&
+                                        system_now < context.plan_valid_until;
+      if (context_matches_plan) {
+        ++nof_ntn_idle_paging_ue_hits;
+        const ntn_onboard_runtime_cell_route* route = mapping->resolve_cell_route(context.onboard_nci.value());
+        if (route != nullptr && context.matches_onboard_route(*route) && route_can_narrow_paging(*route)) {
+          install_recommended_cell(*route);
+          ++nof_ntn_idle_paging_recommendations;
+          last_ntn_idle_paging_reason = "onboard_cell_context";
+          return true;
+        }
+        if (route == nullptr || !context.matches_onboard_route(*route)) {
+          ntn_idle_paging_contexts.erase(context_it);
+          ++nof_ntn_idle_paging_expired;
+          context_skip_reason = route == nullptr ? "onboard_context_cell_unavailable"
+                                                 : "onboard_context_cell_route_changed";
+        } else {
+          context_skip_reason = "onboard_context_tai_not_in_paging";
+        }
+      } else {
+        ntn_idle_paging_contexts.erase(context_it);
+        ++nof_ntn_idle_paging_expired;
+        context_skip_reason = "onboard_context_plan_changed";
+      }
+    }
+
+    // A current AMF recommendation is already expressed as an exact NCGI. Preserve it when its cell and complete TAI
+    // match the live onboard mapping; otherwise leave ordinary TAI-based Paging unchanged without guessing a position.
+    if (msg.assist_data_for_paging.has_value() &&
+        msg.assist_data_for_paging->assist_data_for_recommended_cells.has_value()) {
+      auto& recommended_cells = msg.assist_data_for_paging->assist_data_for_recommended_cells
+                                    ->recommended_cells_for_paging.recommended_cell_list;
+      bool preserved_exact_onboard_recommendation = false;
+      recommended_cells.erase(
+          std::remove_if(recommended_cells.begin(),
+                         recommended_cells.end(),
+                         [&mapping, &route_can_narrow_paging, &preserved_exact_onboard_recommendation](
+                             const cu_cp_recommended_cell_item& recommended) {
+                           const ntn_onboard_runtime_cell_route* route =
+                               mapping->resolve_cell_route(recommended.ngran_cgi.nci);
+                           // NCI is scoped by PLMN in an NCGI. A recommendation that reuses the same opaque NCI
+                           // under another PLMN belongs to the ordinary Paging path and must remain untouched.
+                           if (route == nullptr || recommended.ngran_cgi != route->ncgi) {
+                             return false;
+                           }
+                           const bool valid = route_can_narrow_paging(*route);
+                           preserved_exact_onboard_recommendation |= valid;
+                           return !valid;
+                         }),
+          recommended_cells.end());
+      if (preserved_exact_onboard_recommendation) {
+        last_ntn_idle_paging_reason = "onboard_amf_recommended_preserved";
+        return false;
+      }
+    }
+
+    ++nof_ntn_idle_paging_skipped;
+    if (context_skip_reason.has_value()) {
+      last_ntn_idle_paging_reason = context_skip_reason.value();
+    } else {
+      last_ntn_idle_paging_reason = mapping->nof_positions() == 0 ? "onboard_no_assigned_positions"
+                                                                 : "onboard_no_valid_cell_context";
+    }
+    return false;
+  }
+
   const auto& ntn_cfg = cfg.mobility.meas_manager_config.ntn_location_mobility;
   if (!ntn_cfg.enabled) {
     return false;
@@ -8342,6 +8567,48 @@ cu_cp_ntn_runtime_status cu_cp_impl::get_current_ntn_runtime_status() const
         position_status.cells[i].runtime_plmn       = route.ncgi.plmn_id.to_string();
         position_status.cells[i].runtime_tac        = route.tac;
         position_status.cells[i].runtime_tai_status = to_string(route.tai_status);
+      }
+    }
+    if (!cfg.mobility.onboard_position_plan.enabled ||
+        !cfg.mobility.onboard_position_plan.du_execution_enabled) {
+      position_status.paging_state = "disabled";
+    } else if (validated_runtime_mapping == nullptr) {
+      position_status.paging_state = "mapping_unavailable";
+    } else if (validated_runtime_mapping->nof_positions() == 0) {
+      position_status.paging_state = "no_assigned_positions";
+    } else {
+      const auto route_can_page = [&validated_runtime_mapping](const ntn_onboard_runtime_cell_route& route) {
+        return route.tai_status == ntn_onboard_tai_status::ready &&
+               !validated_runtime_mapping->positions_for_nci(route.identity.nci).empty();
+      };
+      const bool any_route_can_page = std::any_of(validated_runtime_mapping->cell_routes().begin(),
+                                                   validated_runtime_mapping->cell_routes().end(),
+                                                   route_can_page);
+      position_status.paging_state = any_route_can_page ? "ready" : "tai_unavailable";
+
+      if (any_route_can_page) {
+        const auto context_max_age =
+            cfg.mobility.meas_manager_config.ntn_location_mobility.idle_paging_context_max_age;
+        const auto steady_now = std::chrono::steady_clock::now();
+        for (const auto& entry : ntn_idle_paging_contexts) {
+          const ntn_idle_paging_context& context = entry.second;
+          const bool age_valid = context_max_age.count() == 0 ||
+                                 context.updated_time == std::chrono::steady_clock::time_point{} ||
+                                 steady_now - context.updated_time <= context_max_age;
+          if (context.authority != "onboard_position_plan" || !age_valid || !context.onboard_nci.has_value() ||
+              context.schedule_version != validated_runtime_mapping->schedule_version() ||
+              normalize_ntn_calendar_hash_for_comparison(context.calendar_hash) !=
+                  normalize_ntn_calendar_hash_for_comparison(validated_runtime_mapping->calendar_hash()) ||
+              context.plan_valid_until != validated_runtime_mapping->valid_until() ||
+              runtime_mapping_now >= context.plan_valid_until) {
+            continue;
+          }
+          const ntn_onboard_runtime_cell_route* route =
+              validated_runtime_mapping->resolve_cell_route(context.onboard_nci.value());
+          if (route != nullptr && context.matches_onboard_route(*route) && route_can_page(*route)) {
+            ++position_status.valid_idle_paging_contexts;
+          }
+        }
       }
     }
     if (ntn_position_plan_version_anchor.has_value()) {

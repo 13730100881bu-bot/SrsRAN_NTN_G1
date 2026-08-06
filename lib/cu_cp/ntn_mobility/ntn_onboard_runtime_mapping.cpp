@@ -97,6 +97,29 @@ const char* srsran::srs_cu_cp::to_string(ntn_position_transition transition)
   return "unknown";
 }
 
+ntn_onboard_tai_status
+srsran::srs_cu_cp::classify_ntn_onboard_tai(span<const cu_cp_tai> supported_tais, const cu_cp_tai& cell_tai)
+{
+  unsigned exact_matches = 0;
+  bool     plmn_present  = false;
+  for (const cu_cp_tai& supported : supported_tais) {
+    if (supported.plmn_id == cell_tai.plmn_id) {
+      plmn_present = true;
+      if (supported.tac == cell_tai.tac) {
+        ++exact_matches;
+      }
+    }
+  }
+  if (exact_matches == 1) {
+    return ntn_onboard_tai_status::ready;
+  }
+  if (exact_matches > 1) {
+    return ntn_onboard_tai_status::supported_tai_duplicate;
+  }
+  return plmn_present ? ntn_onboard_tai_status::plmn_tac_mismatch
+                      : ntn_onboard_tai_status::supported_tai_missing;
+}
+
 expected<std::shared_ptr<const ntn_onboard_runtime_mapping_snapshot>, std::string>
 ntn_onboard_runtime_mapping_snapshot::create(
     const ntn_activated_position_plan&                       active_plan,

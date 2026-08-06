@@ -335,6 +335,10 @@ private:
 
   std::optional<cu_cp_user_location_info_nr>
   build_ntn_core_user_location_info(const ntn_ue_location_report& report);
+  struct ntn_onboard_ue_cell_view;
+  std::optional<ntn_onboard_ue_cell_view>
+  resolve_ntn_onboard_ue_cell(ue_index_t ue_index, std::chrono::system_clock::time_point now);
+  std::optional<cu_cp_user_location_info_nr> build_ntn_onboard_user_location_info(ue_index_t ue_index);
   std::optional<cu_cp_user_location_info_nr> build_ntn_release_user_location_info(ue_index_t ue_index);
   std::optional<cu_cp_info_on_recommended_cells_and_ran_nodes_for_paging>
   build_ntn_paging_recommendation(ue_index_t ue_index);
@@ -464,6 +468,7 @@ private:
   };
 
   struct ntn_idle_paging_context {
+    std::string                        authority = "legacy";
     std::optional<cu_cp_five_g_s_tmsi> five_g_s_tmsi;
     std::optional<std::string>         last_service_beam_id;
     std::optional<std::string>         last_downlink_wake_beam_id;
@@ -473,10 +478,27 @@ private:
     std::string                        paired_access_reason = "none";
     std::optional<std::string>         last_access_analog_beam_id;
     std::optional<nr_cell_identity>    last_serving_nci;
+    std::optional<nr_cell_identity>    onboard_nci;
+    std::optional<nr_cell_global_id_t> onboard_ncgi;
+    std::optional<cu_cp_tai>           onboard_tai;
+    uint64_t                           schedule_version = 0;
+    std::string                        calendar_hash = "none";
+    std::chrono::system_clock::time_point plan_valid_until = {};
     std::optional<tac_t>               last_derived_tac;
     std::optional<ntn_ue_location_report> last_location;
     std::chrono::steady_clock::time_point updated_time = {};
     std::string invalid_reason = "none";
+
+    bool matches_onboard_route(const ntn_onboard_runtime_cell_route& route) const
+    {
+      return onboard_ncgi.has_value() && onboard_tai.has_value() && onboard_ncgi.value() == route.ncgi &&
+             onboard_tai->plmn_id == route.ncgi.plmn_id && onboard_tai->tac == route.tac;
+    }
+  };
+
+  struct ntn_onboard_ue_cell_view {
+    std::shared_ptr<const ntn_onboard_runtime_mapping_snapshot> mapping;
+    ntn_onboard_runtime_cell_route                              route;
   };
 
   struct ntn_inactive_context {

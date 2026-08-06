@@ -226,6 +226,28 @@ TEST(ntn_onboard_runtime_mapping, keeps_tai_policy_status_separate_from_position
   }
 }
 
+TEST(ntn_onboard_runtime_mapping, classifies_complete_cell_tai_as_ready_missing_duplicate_or_mismatched)
+{
+  const cu_cp_tai cell_tai{plmn_identity::test_value(), 7};
+
+  EXPECT_EQ(classify_ntn_onboard_tai(span<const cu_cp_tai>{}, cell_tai),
+            ntn_onboard_tai_status::supported_tai_missing);
+
+  const std::array<cu_cp_tai, 1> other_plmn = {cu_cp_tai{plmn_identity::parse("99999").value(), 7}};
+  EXPECT_EQ(classify_ntn_onboard_tai(other_plmn, cell_tai),
+            ntn_onboard_tai_status::supported_tai_missing);
+
+  const std::array<cu_cp_tai, 1> exact = {cell_tai};
+  EXPECT_EQ(classify_ntn_onboard_tai(exact, cell_tai), ntn_onboard_tai_status::ready);
+
+  const std::array<cu_cp_tai, 2> duplicate = {cell_tai, cell_tai};
+  EXPECT_EQ(classify_ntn_onboard_tai(duplicate, cell_tai), ntn_onboard_tai_status::supported_tai_duplicate);
+
+  const std::array<cu_cp_tai, 2> mismatched = {
+      cu_cp_tai{plmn_identity::test_value(), 8}, cu_cp_tai{plmn_identity::parse("99999").value(), 7}};
+  EXPECT_EQ(classify_ntn_onboard_tai(mismatched, cell_tai), ntn_onboard_tai_status::plmn_tac_mismatch);
+}
+
 TEST(ntn_onboard_runtime_mapping, hides_a_snapshot_when_the_live_du_cell_route_changes)
 {
   const auto snapshot = build_snapshot(make_active_plan(10, 8));
@@ -291,6 +313,20 @@ TEST(ntn_onboard_runtime_mapping, schema_v1_and_v2_empty_assigned_array_keeps_le
     const auto snapshot = build_snapshot(plan);
     ASSERT_NE(snapshot, nullptr);
     EXPECT_EQ(snapshot->nof_positions(), 8U);
+  }
+}
+
+TEST(ntn_onboard_runtime_mapping, schema_v3_and_v4_map_only_the_explicit_assigned_subset)
+{
+  for (unsigned schema : {3U, 4U}) {
+    SCOPED_TRACE(schema);
+    const auto snapshot = build_snapshot(make_active_plan(8, 5, schema));
+    ASSERT_NE(snapshot, nullptr);
+    EXPECT_EQ(snapshot->nof_positions(), 5U);
+    EXPECT_EQ(snapshot->positions_for_nci(first_nci).size(), 3U);
+    EXPECT_EQ(snapshot->positions_for_nci(second_nci).size(), 2U);
+    EXPECT_NE(snapshot->find_position(make_position_id(4)), nullptr);
+    EXPECT_EQ(snapshot->find_position(make_position_id(5)), nullptr);
   }
 }
 
