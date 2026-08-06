@@ -246,7 +246,10 @@ SIB19 描述网络侧的卫星 assistance 和小区广播状态，应该随着 b
 
 - NGAP 使用标准 `LocationReport`、`UserLocationInformationNR` 和 `NRNTNTAIInformation`，不添加私有经纬度扩展。
 - serving NCI 只有在当前 active/draining 且 core-reportable 时才上报。
-- beam-derived TAC/TAI 用于核心网位置上下文、release hint 和 paging narrowing；TAC 无效时回退，不能伪造推荐。
+- legacy NTN profile 继续使用 beam-derived TAC/TAI；onboard execution 使用当前 DU 小区的 PLMN、稳定 NCI 和 TAC，不从一级波位编号或坐标推导 TAC。
+- onboard execution 中，同一个稳定 NCI 可以负责多个一级波位，这些波位共享该小区的 NCGI 和 TAI。完整 `PLMN+TAC` 必须在 NGAP supported TA 中唯一匹配。
+- UE 释放时保存的是当前稳定小区及其计划版本，不猜测具体一级波位。Paging 只在这份记录仍与当前 schedule、calendar、有效期、NCGI 和 TAI 完全一致时缩小到对应 NCI；记录过期或不匹配时继续普通 TAI Paging。
+- 当前路由绑定 DU served cell 的 primary NCGI。UE 使用同一小区的 secondary PLMN 时，不生成 onboard release location 或单小区 Paging 推荐。
 - QoS policy 可使用 ARP、5QI、GBR、slice 和 emergency priority 排序新 demand，但不把 CU-CP policy 描述成 MAC 调度或既有 bearer 的物理抢占。
 - soft switch-over 减少新准入并准备迁移；hard switch-over 停止新准入并触发 draining、HO 或 release。
 
@@ -254,7 +257,9 @@ SIB19 描述网络侧的卫星 assistance 和小区广播状态，应该随着 b
 
 规划器为每个 L1 保留所有达到 `45°` 的可见卫星，当前 owner 可滞回保持到 `42°`。这份完整 `visible inventory` 不受每星 256 或每小区 128 的服务容量裁剪；容量只参与 assignment proposal。管理中心审核后下发带版本和 activation epoch 的波位表，星载 gNB 再将本星获授权 L1 二分给两个长期 NCI/PCI；空间紧凑/连通只是 best-effort 目标。
 
-L1 跨星时不迁移 NCI：源、目标分别使用自己的星载 NCI/PCI。只有二者 NCI/PCI 不同，目标才可以为发现/测量做重叠广播；这仍不代表 serving 已切换。目标 ready、DU `applied` 且到达对齐 640 ms 的 activation epoch 后，proposal 才能提交为 serving。连接态 UE 通过 HO/CHO，空闲态 UE 通过重选；同星在两个 NCI 之间重新分组也属于小区关系变化。当前 CU-CP 已实现单星计划的原子切换和软件 gate；全球跨星 ownership producer、UE 跨星流程与 RF 执行仍未闭环。
+L1 跨星时不迁移 NCI：源、目标分别使用自己的星载 NCI/PCI。只有二者 NCI/PCI 不同，目标才可以为发现/测量做重叠广播；此时 primary 仍在源侧。目标 ready、DU `applied` 且到达对齐 640 ms 的 activation epoch 后，proposal 才能提交为 serving。连接态 UE 通过 HO/CHO，空闲态 UE 通过重选；同星在两个 NCI 之间重新分组也属于小区关系变化。当前 CU-CP 已实现单星计划的原子切换和软件 gate；全球跨星 ownership producer、UE 跨星流程与 RF 执行仍未闭环。
+
+运行映射进一步区分“换了一级波位”和“换了 NR 小区”：两个不同 `position_id` 仍属于同一个 NCI 时记为 `same_cell`，不触发 handover；所属 NCI 改变时记为 `cell_change`。当前生产 Initial UL 和位置报告尚未提供可信 `position_id`，因此这项能力先用于查询和审计，没有接入真实 handover。
 
 ### 8.5 计划更新、重启和 DU 重连
 
@@ -277,7 +282,7 @@ CU-CP 是 NTN 资源权威，但分布式系统可能因为超时、重连或部
 
 主要运行态命令包括：
 
-- `ntn_state`：整体卫星、assistance、资源和 SIB19 状态。
+- `ntn_state`：整体卫星、assistance、资源和 SIB19 状态，并显示运行映射阶段、一级波位总数、两个小区的 PLMN/TAC/TAI、Paging 状态和有效 idle context 数量。
 - `ntn_assistance`：当前 NTN assistance snapshot。
 - `ntn_beams`：analog/digital beam、candidate/loaded/draining 和原因。
 - `ntn_ues`：UE access/service、capability、位置和 HO 状态。
@@ -343,6 +348,8 @@ CU-CP 是 NTN 资源权威，但分布式系统可能因为超时、重连或部
 11. 即使没有 UE，所有 active L1 仍必须按 `80 ms` 目标重访期限周期发送 SSB；每个有效 PRACH RO 都必须有对应接收波束。
 12. DU 断开后，旧连接上的软件 `applied` 立即失效；只有当前连接的完整精确查询可以恢复。
 13. 257 条输入必须完整保留并拒绝执行，不能因重启、清理或旧 active snapshot 被裁剪成 256 条或更少。
+14. 一个稳定 NCI 可以同时负责多个一级波位；一级波位变化只有在 owner NCI 改变时才形成小区变化。
+15. onboard TAI 必须来自唯一匹配的 DU served cell，不从 `G######`、坐标或波位序号推导。
 
 ## 12. 下一阶段路线
 

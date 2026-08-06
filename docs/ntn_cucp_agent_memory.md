@@ -1,6 +1,6 @@
 # NTN CU-CP Agent Memory
 
-Last updated: 2026-08-05
+Last updated: 2026-08-06
 
 This file is the compact handoff memory for future conversations. It keeps the
 durable NTN CU-CP design context without pulling in the old project-management
@@ -533,6 +533,16 @@ For a more detailed task-to-change lookup, use
   detect a coordinated rollback/deletion of both local files. `applied` remains
   the installed software access calendar, not PHY/RU/RF or over-the-air execution.
   See `docs/ntn_schema_v4_signed_plan.md`.
+- CUCP-047 builds one immutable runtime mapping from the active onboard plan and
+  the current live-DU cell inventory. One stable NCI may own many L1 positions;
+  the mapping becomes `ready` only while the plan is active, the matching DU
+  calendar is applied, validity has not expired, and both cell routes still
+  match the DU connection generation. Disconnect and restart hide the mapping
+  until a fresh DU query succeeds. Onboard release and paging narrowing use the
+  DU cell's exact NCGI and TAI, never a TAC derived from `G######`. A UE using a
+  secondary served PLMN currently fails closed for these onboard hints, while
+  ordinary paging remains available. Legacy beam-derived behavior and the
+  default-off terrestrial path are unchanged.
 
 ## Protocol References
 
@@ -598,6 +608,13 @@ needs that layer.
   `SatelliteCellBinding` planning objects.
 - Do not migrate NCI with an L1. NCI/PCI follow one of the two long-lived
   onboard cells; a position transfer changes the serving cell identity.
+- Do not assume an onboard NCI identifies one L1. One stable onboard cell may
+  own many L1 positions in the same active plan, so the onboard execution path
+  must not use `find_ntn_beam_id_by_nci` as a one-to-one lookup.
+- Do not derive TAC from `G######`, coordinates, or a position ordinal. Onboard
+  TAI comes from the uniquely matched live DU cell. The current route binds that
+  cell's primary NCGI; a secondary served PLMN is not silently promoted to an
+  authoritative onboard paging route.
 - Do not require PCI global uniqueness. Reuse it with a conflict graph whose
   edges represent co-channel, simultaneously visible long-lived onboard cells.
 - Do not mix the current prototype `843/137/16/256`, historical China Web

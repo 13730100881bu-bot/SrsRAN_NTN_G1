@@ -1,6 +1,6 @@
 # NTN CU-CP Task Change Index
 
-Last updated: 2026-08-05
+Last updated: 2026-08-06
 
 This file maps the CUCP task chain to the main feature changes and
 representative code areas. It is a compact lookup table for future agents.
@@ -120,6 +120,7 @@ them casually.
 | CUCP-044 | Management-center dual-set position plan. Private schema v3 carries the complete `visible_l1_positions` inventory and the independent `assigned_l1_position_ids` service subset in one canonical hash. CU-CP retains every visible entry, validates that each assigned ID is unique and visible, applies the 256/128 calendar capacities only to the assigned subset, then partitions and schedules only that subset without changing the two stable NCI/PCI identities. State schema v3 persists both collections and remains able to read schema v1/v2 with `assigned=visible` semantics. Read-only status reports visible and assigned counts separately. The headless Node exporter and C++ share a fixed golden hash. Default-off terrestrial behavior is unchanged; no F1AP, DU, MAC, PHY, RU/RF, Web/GIS or generated ASN.1 interface changed. | `utils/ntn/versioned_position_plan_v3.*`, `utils/ntn/constellation_*export*`, `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.*`, `ntn_onboard_position_plan_state.*`, `lib/cu_cp/cu_cp_impl.cpp`, `include/srsran/cu_cp/cu_cp_command_handler.h`, O-CU-CP `ntn_state`, focused Node/controller/state/CU-CP tests and NTN planning/runtime documents. |
 | CUCP-045 | Bounded schema-v3 input and complete CU-CP execution/restart flow. Plan files are limited to 4 MiB, both position arrays to 65,536 entries, planning-context identifiers to 256 UTF-8 bytes and recovery state to 16 MiB. Bounded reads reject oversize or growing input before large allocation or state changes; state cell-assignment and cleanup arrays are checked before vector reservation. The Node producer uses the same limits and atomic same-directory replacement. A 300-visible/87-assigned plan sends only 87 positions and 870 intents, activates without changing the two NCI/PCI identities and is restored only after a matching DU query. A 257-assigned plan returns `schedule_overflow` while preserving the old active plan; an empty assignment installs two empty cell calendars. Schema v1/v2 and the default-off terrestrial path retain their existing behavior. No F1AP, DU, MAC, PHY, RU/RF, Web/GIS or generated ASN.1 interface changed. | `utils/ntn/versioned_position_plan_v3.*`, `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.*`, `ntn_onboard_position_plan_state.*`, `lib/cu_cp/cu_cp_impl.cpp`, focused Node/controller/state/CU-CP/config tests and NTN planning/runtime documents. |
 | CUCP-046 | Authenticated schema-v4 management plans and restart-safe software version anchoring. Schema v4 retains the schema-v3 visible/assigned contract and adds an exact-keyed `authentication` object using `ecdsa-p256-sha256`; signatures are ASN.1 DER in canonical Base64. Duplicate JSON members, delimiter-ambiguous signed identifiers and values outside the shared Node/C++ integer and time range are rejected before use. CU-CP loads only configured P-256 public keys, reports their SHA-256 SPKI fingerprint and rejects missing, unknown, invalid or replayed signatures with stable reason codes. Signed execution uses `reserve anchor → persist state schema v4 → commit anchor → prepare software calendar`; state schema v4 keeps the complete signed high-water source so restart repeats signature verification and reconciles it with the independent version file before querying DU. The version file is explicitly `software_only`: it detects ordinary state-only rollback but cannot replace HSM/TPM/trusted monotonic storage or detect coordinated rollback/deletion of both local files. Default-off and unsigned schema-v1/v2/v3 behavior remain unchanged. `applied` remains software-calendar installation; no F1AP, DU, MAC, PHY, RU/RF, Web/GIS or generated ASN.1 interface changed. | `utils/ntn/versioned_position_plan_v4.*`, `utils/ntn/testdata/versioned-position-plan-v4-*`, `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.*`, `ntn_onboard_position_plan_state.*`, `ntn_plan_version_anchor.*`, `lib/cu_cp/cu_cp_impl.*`, private O-CU-CP config/`ntn_state`, focused Node/controller/state/anchor/CU-CP/config tests and `docs/ntn_schema_v4_signed_plan.md`. |
+| CUCP-047 | Read-only runtime position mapping and cell-level paging for the onboard execution profile. An immutable snapshot maps every assigned L1 position exactly once to one of the two stable NCI/PCI identities and supports many positions per NCI. It is exposed only while the plan is active and valid, the matching DU software calendar is applied, and both copied DU cell routes still match the live connection generation; disconnect and restart require a fresh DU reconciliation. NCGI and TAI come from the uniquely matched DU served cell, and paging narrowing requires a current idle context whose NCI, NCGI, TAI, schedule version, calendar hash and validity all match. Missing or ambiguous TAI, an empty assignment, stale context, or a UE on a secondary served PLMN disables onboard narrowing without changing ordinary paging. Position changes inside one NCI are classified as `same_cell`; an owner-NCI change is `cell_change`, but production Initial UL and handover still have no trusted `position_id`. Legacy NTN and default-off terrestrial behavior remain unchanged; no F1AP, DU, MAC, PHY, RU/RF, Web/GIS or generated ASN.1 interface changed. | `lib/cu_cp/ntn_mobility/ntn_onboard_runtime_mapping.*`, `lib/cu_cp/cu_cp_impl.*`, `include/srsran/cu_cp/cu_cp_command_handler.h`, O-CU-CP `ntn_state`, `tests/unittests/cu_cp/ntn_mobility/ntn_onboard_runtime_mapping_test.cpp`, `tests/unittests/cu_cp/cu_cp_ntn_mobility_test.cpp`, runtime-contract, onboard-plan and solution documentation. |
 | NTNPLAN-001 | Historical state before NTNPLAN-002: separated complete L1 visibility from unique service assignment in the offline planner and added a reproducible sampled comparison with a verified catalog content hash. At that point the Web displayed 3,528 satellites and treated 2,990 as an unselected coarse candidate. The 256/128 limits apply only to actual assignment, PRACH is planned per assigned L1, and the CU-CP at that point could not consume complete visibility and actual assignment as two independent sets. CUCP-044 later closed that input-contract gap. NTNPLAN-002 supersedes only the constellation decision status, not these planning boundaries. | `utils/ntn/constellation_screen.*`, `utils/ntn/scenarios/global_constellation_screen_v1*`, `docs/ntn_orbit_constellation_plan.md`, `docs/ntn_beam_hopping_access_plan.md`, Web planner source/tests and the separate `gh-pages` deployment. |
 | NTNPLAN-002 | Records the final engineering decision to use 46 planes × 65 satellites, 2,990 satellites in total. The 3,528-satellite model becomes a historical Web display comparison. The existing 720/720 fixed-step coverage and unique-assignment evidence supports the decision, while `selectedScenario=null` and `exact=false` continue to record that seven-day continuous coverage, N-1, gateway, power/interference and real-radio acceptance are unfinished. This does not claim CU-CP, DU, PHY/RU/RF or over-the-air execution. | `docs/ntn_orbit_constellation_plan.md`, `docs/ntn_beam_hopping_access_plan.md`, `docs/ntn_cucp_agent_memory.md`, Web planner source/tests and the separate `gh-pages` deployment. |
 
@@ -524,3 +525,42 @@ off. The split demo and broad F1AP/MAC/RF suites were not repeated because
 CUCP-045 leaves their interfaces unchanged. In this contract, `applied` means
 the software calendar gate is installed; device and radio execution remain in
 the later hardware-control task.
+
+CUCP-047 validation record (2026-08-06):
+
+```bash
+cmake --build build/ai-clean \
+  --target ntn_mobility_test cu_cp_test cu_cp_unit_config_test srsran_cu_cp -j1
+build/ai-clean/tests/unittests/cu_cp/ntn_mobility/ntn_mobility_test \
+  --gtest_filter='ntn_onboard_runtime_mapping.*'
+build/ai-clean/tests/unittests/cu_cp/cu_cp_test \
+  --gtest_filter='cu_cp_ntn_mobility_test.schema_v4_signed_calendar_is_applied_persisted_and_reverified_on_restart:cu_cp_ntn_mobility_test.onboard_runtime_mapping_*:cu_cp_ntn_mobility_test.onboard_paging_*:cu_cp_ntn_mobility_test.default_cu_cp_rejects_ntn_satellite_state_updates' \
+  --gtest_repeat=3
+build/ai-clean/tests/unittests/cu_cp/cu_cp_test \
+  --gtest_filter='cu_cp_ntn_mobility_test.lost_application_query_does_not_block_apply_deadline_rollback_clear'
+build/ai-clean/tests/unittests/apps/units/o_cu_cp/cu_cp/cu_cp_unit_config_test \
+  --gtest_filter='cu_cp_unit_config.ntn_state_command_*:cu_cp_unit_config.default_terrestrial_config_keeps_ntn_disabled'
+powershell -ExecutionPolicy Bypass \
+  -File run_artifacts/srsran_runtime_capture/split/run_ntn_system_suite.ps1 \
+  -Scenario ntn_paging_sim,ntn_cli_observability_sim -Mode sim
+git diff --check
+```
+
+All four requested build targets completed successfully. The immutable mapping
+group passed 12/12. The signed-plan, mapping lifecycle, release, paging and
+default-off group passed three consecutive runs: 17 tests per run, 51
+executions in total. The independent 200 ms missing-DU-query deadline test
+passed 1/1, and the command/configuration group passed 5/5. The system suite
+passed 39/39 paging cases and 22/22 read-only command cases; cleanup reported no
+residual split process. `git diff --check` passed.
+
+These checks include 300 visible and 87 assigned positions, many positions per
+stable NCI, exact child-mask lookup, schema v1-v4 compatibility, empty
+assignment, overflow preservation, atomic activation, restart and DU reconnect,
+complete PLMN+TAC matching, Release Complete location, fresh/stale/expired idle
+contexts, another PLMN reusing the same NCI, AMF recommendation preservation and
+the terrestrial default-off path. No F1AP, DU, MAC, PHY, RU/RF, Web/GIS or
+generated ASN.1 interface changed, so their broad suites were not repeated.
+`applied` continues to mean that the software calendar is installed; Initial UL
+does not yet carry a trusted `position_id`, and device or radio execution is not
+part of CUCP-047.

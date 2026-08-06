@@ -89,6 +89,69 @@ assigned to it for one plan version. Every authorized L1 appears in exactly one
 of the two sets; visible but unassigned L1s appear in neither. The two NCI
 values are distinct; PCI may be reused.
 
+## onboard_runtime_position_mapping
+
+The immutable CU-CP view of the positions served by the currently active
+onboard plan. It records the satellite, catalog and schedule versions,
+source/calendar hashes, plan validity and the two stable cell routes copied from
+the live DU served-cell inventory. It does not retain pointers to DU contexts
+and it is not a second source of plan state.
+
+Only `assigned_l1_position_ids` enter this snapshot. Every assigned position
+appears exactly once and retains its `child_mask`; visible-only positions do not
+appear. One stable NCI may own many positions. Results returned by
+`positions_for_nci(nci)` are ordered by `position_id`, so identical active input
+produces an identical query result. The read-only queries are:
+
+- `find_position(position_id)`, returning the position and its stable NCI/PCI;
+- `positions_for_nci(nci)`, returning all positions owned by that cell;
+- `resolve_cell_route(nci)`, returning the copied NCGI, TAC, DU cell and DU
+  connection generation; and
+- `classify_position_transition(old_position, new_position)`, returning
+  `no_change` for the same position, `same_cell` for two positions under one
+  NCI, `cell_change` when the owner NCI changes, and `unknown` when either
+  position or the snapshot is unavailable.
+
+Runtime mapping stages are `disabled`, `awaiting_active_plan`,
+`awaiting_live_du`, `ready` and `stale`. `ready` requires onboard execution, an
+active and still-valid plan, matching applied DU calendar state, unique live-DU
+resolution of both configured NCI/PCI identities and the same DU connection
+generation that supplied the application result. A pending plan does not alter
+the ready snapshot. A failed update keeps the old valid snapshot, while an
+activation replaces the complete snapshot at once.
+
+A DU disconnect immediately hides the snapshot. Reconnect and process restart
+both require a new exact DU query before rebuilding it; the mapping is not
+persisted separately. An active plan with no assigned positions has a valid
+zero-position snapshot, but neither cell is eligible for onboard paging
+narrowing.
+
+## onboard_cell_tai_and_paging
+
+An onboard cell route uses the primary NCGI copied from its uniquely matched DU
+served cell: NCGI is that cell's PLMN plus stable NCI, and TAI is the same PLMN
+plus that cell's TAC. The complete PLMN+TAC pair must occur exactly once in the
+NGAP supported-TA configuration. The route reports `ready`,
+`supported_tai_missing`, `supported_tai_duplicate` or `plmn_tac_mismatch`.
+Position queries remain observable when TAI is not ready, but onboard core
+location and paging narrowing are disabled.
+
+Before UE release, CU-CP may store an idle paging context containing its
+authority, NCI, exact NCGI and TAI, schedule version, calendar hash and plan
+`valid_until`. It may recommend that stable NCI only while every field still
+matches the ready runtime mapping and the cell owns at least one assigned
+position. A missing, stale or expired context does not guess a `position_id` and
+does not narrow the normal TAI-based paging path. A current AMF recommendation
+is preserved only when its complete NCGI matches a current cell route and the
+Paging TAI list contains that route's complete PLMN+TAC.
+
+The current route represents the DU cell's primary `cell.cgi`. If a UE selects a
+secondary PLMN served by the same cell, CU-CP does not create onboard release
+location, idle context or paging narrowing from that primary route. This is a
+fail-closed boundary for the onboard hint only; ordinary paging remains
+available. The onboard execution profile never derives TAC from `G######` and
+does not call the legacy one-beam-per-NCI lookup for this decision.
+
 ## access_calendar_intent
 
 A checked CU-CP planning item containing schedule version, stable cell NCI,
@@ -275,6 +338,9 @@ showing that plan as `active` or `applied`. Only complete matching feedback for
 both cells can restore those labels. Missing, incomplete, expired or mismatched
 feedback fails closed and cannot replace a still-valid old plan.
 
+The runtime position mapping is not stored in this file. It is rebuilt from the
+revalidated active plan only after the live-DU query above succeeds.
+
 If a saved deployment has expired, CU-CP records an exact cleanup task and keeps
 that task across later restarts until clear feedback is confirmed. A cleanup
 task is tied to the expired version/hash and must not clear a different active
@@ -363,6 +429,11 @@ state. `accept` means only that supplied metadata matches the CU-CP active-plan
 and current software-gate snapshot; it does not authenticate the sender or add
 receive-time freshness/anti-replay, is not durable across DU reconnect without
 reconciliation, and is not PHY/RU/RF proof.
+
+Read-only status therefore reports
+`initial_access_position_check=not_in_production_path`. The transition
+classifier above is available for checked input, but it is not wired into
+production Initial UL or handover until a trusted `position_id` source exists.
 
 ## ntn_assistance_snapshot
 

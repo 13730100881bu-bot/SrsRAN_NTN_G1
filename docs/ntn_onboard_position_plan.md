@@ -307,6 +307,20 @@ cleanup queue 记录精确 schedule version、calendar hash 和原因。DU 确�
 
 如果写盘失败，任务保留在 fail-closed 内存中并阻止继续写入。崩溃后旧状态仍可能让同一 clear 被幂等重试，这是有意的 at-least-once 安全语义：允许安全重复，禁止静默丢失。DU clear 因而必须按 version/hash 幂等。若文件已替换但目录 durability 无法确认，CU-CP 同样保持 blocked，因为崩溃后可能看到旧文件或新文件。
 
+### 10.4 运行映射与小区级寻呼
+
+计划到点启用后，CU-CP 会建立一份只读运行映射。它只包含本星实际负责的一级波位，每个一级波位恰好出现一次，并指向两个稳定星载小区中的一个。同一个 NCI 可以同时负责多个一级波位；按 NCI 查询时，结果始终按 `position_id` 排序。
+
+运行映射只有在计划已经 active、仍在有效期内、DU 已确认同一软件日历为 `applied`，且两个 NCI/PCI 仍能唯一对应到当前 DU 小区时才进入 `ready`。pending 计划不会改变正在使用的映射，新计划失败时旧有效映射继续使用；新计划到达启用时刻后，整份映射一次性替换。DU 断开会立即隐藏映射，重连和进程重启都要先重新查询 DU。映射本身不单独写入状态文件。
+
+位置变化分为四类：同一 `position_id` 为 `no_change`；两个不同一级波位属于同一 NCI 时为 `same_cell`，不触发 handover；所属 NCI 改变时为 `cell_change`；缺少位置或可用映射时为 `unknown`。当前生产 Initial UL 和位置报告还没有可信 `position_id`，因此本轮只提供分类查询，不接入真实 handover。
+
+每个星载小区的 NCGI 和 TAI 直接取自唯一匹配的 DU served cell：NCGI 使用该小区的 PLMN 和稳定 NCI，TAI 使用同一 PLMN 和 TAC。完整的 `PLMN+TAC` 必须在 NGAP supported TA 中恰好出现一次。缺失、重复或不匹配时，一级波位映射仍可查看，但 CU-CP 不生成该小区的 onboard release location，也不把 Paging 缩小到该小区。
+
+UE 释放前，CU-CP 可以保存当前稳定小区、NCGI、TAI、schedule version、calendar hash 和计划截止时间。收到 Paging 后，只有这些信息仍与当前运行映射完全一致，才推荐对应 NCI；旧版本、已过期或不完整的记录直接失效，普通 TAI Paging 继续执行。实际负责集合为空时，运行映射有效但波位数为零，两个小区都不参与 NTN 定向寻呼。
+
+当前小区路由使用 DU served cell 的 primary NCGI。如果 UE 选择同一小区的 secondary PLMN，CU-CP 不复用 primary route 生成 onboard release location 或 Paging 推荐。这个限制只影响 onboard 定向提示，普通 Paging 路径保持原样。
+
 ## 11. 只读观测
 
 `ntn_state` 显示：
@@ -319,14 +333,19 @@ cleanup queue 记录精确 schedule version、calendar hash 和原因。DU 确�
 - active calendar hash；
 - cleanup queue 深度、队首 version/hash/reason；
 - state file schema、generation、hash、保存结果和 write-block 状态；
+- `runtime_mapping_stage`、`runtime_mapping_detail`、当前 schedule version 和 calendar hash；
+- 已映射一级波位总数，以及两个 NCI/PCI 各自的映射数量；
+- 两个小区的 PLMN、TAC 和 TAI 状态；
+- Paging 状态、有效 idle context 数量；
+- `initial_access_position_check=not_in_production_path`；
 - 最近拒绝原因。
 
 这些字段是只读诊断，不改变状态。Digital 资源在本阶段只显示规划容量，仍标记为未绑定到真实数字业务运行态。
 
 ## 12. 兼容与实现边界
 
-- schema v3 只收敛管理中心输入、CU-CP 处理、恢复和只读观测，没有修改 F1AP、DU、MAC、PHY、RU/RF、Web/GIS 或 generated ASN.1。
-- 旧 `find_ntn_beam_id_by_nci`、beam-derived TAC/TAI/NGAP/Paging 和 per-beam NCI 路径继续作为默认关闭 profile 之外的兼容实现。
+- schema v1 继续兼容 dry-run，schema v2-v4 共用现有 CU-CP 执行、恢复和只读观测路径；这些兼容处理没有修改 F1AP、DU、MAC、PHY、RU/RF、Web/GIS 或 generated ASN.1。
+- legacy NTN profile 继续使用旧 `find_ntn_beam_id_by_nci`、beam-derived TAC/TAI/NGAP/Paging 和 per-beam NCI 路径；onboard execution 路径不调用这些一对一查找，也不从一级波位推导 TAC。
 - 新 L1 目录不永久保存 NCI/PCI，也不注入 legacy beam table。
 - 原始 PRACH detection 仍属于 PHY/DU/MAC；CU-CP 只管理计划、资源授权和可用 metadata 的 Initial UL 审计。
 - 当前没有 `(nci, position_id, cell_local_port, direction) -> hardware_beam_handle` 映射，也没有设备 `prepare_bank/arm_at/cancel/query` 回执。
@@ -338,7 +357,9 @@ cleanup queue 记录精确 schedule version、calendar hash 和原因。DU 确�
 
 - `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan.*`
 - `lib/cu_cp/ntn_mobility/ntn_onboard_position_plan_state.*`
+- `lib/cu_cp/ntn_mobility/ntn_onboard_runtime_mapping.*`
 - `lib/cu_cp/cu_cp_impl.*`
+- `include/srsran/cu_cp/cu_cp_command_handler.h`
 - `apps/units/o_cu_cp/cu_cp/cu_cp_cmdline_commands.h`
 - `utils/ntn/versioned_position_plan_v3.mjs`
 - `utils/ntn/constellation_plan_export.mjs`
@@ -347,6 +368,7 @@ cleanup queue 记录精确 schedule version、calendar hash 和原因。DU 确�
 
 - `tests/unittests/cu_cp/ntn_mobility/ntn_onboard_position_plan_test.cpp`
 - `tests/unittests/cu_cp/ntn_mobility/ntn_onboard_position_plan_state_test.cpp`
+- `tests/unittests/cu_cp/ntn_mobility/ntn_onboard_runtime_mapping_test.cpp`
 - `tests/unittests/cu_cp/cu_cp_ntn_mobility_test.cpp`
 - `tests/unittests/apps/units/o_cu_cp/cu_cp/cu_cp_unit_config_test.cpp`
 
@@ -359,9 +381,10 @@ node --test \
   utils/ntn/constellation_replay_plan_export.test.mjs
 cmake --build build/ai-clean --target ntn_mobility_test -j1
 build/ai-clean/tests/unittests/cu_cp/ntn_mobility/ntn_mobility_test \
-  --gtest_filter='ntn_onboard_position_plan.*:ntn_onboard_position_plan_state.*'
-cmake --build build/ai-clean --target cu_cp_test -j1
-cmake --build build/ai-clean --target cu_cp_unit_config_test -j1
+  --gtest_filter='ntn_onboard_position_plan.*:ntn_onboard_position_plan_state.*:ntn_onboard_runtime_mapping.*'
+cmake --build build/ai-clean --target cu_cp_test cu_cp_unit_config_test srsran_cu_cp -j1
+build/ai-clean/tests/unittests/cu_cp/cu_cp_test \
+  --gtest_filter='cu_cp_ntn_mobility_test.onboard_runtime_mapping_*:cu_cp_ntn_mobility_test.onboard_paging_*:cu_cp_ntn_mobility_test.default_cu_cp_rejects_ntn_satellite_state_updates'
 ```
 
 每次交付的实际通过数量和未运行项记录在 [NTN CU-CP Task Change Index](ntn_cucp_task_change_index.md)，不能用历史测试数替代当前验证结果。
