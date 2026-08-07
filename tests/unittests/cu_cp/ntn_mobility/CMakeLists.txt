@@ -26,6 +26,7 @@ add_executable(ntn_mobility_test
   ntn_beam_placement_planner_test.cpp
   ntn_beam_rebalance_policy_test.cpp
   ntn_qos_policy_test.cpp
+  ntn_initial_ul_position_authorizer_test.cpp
   ntn_onboard_position_plan_test.cpp
   ntn_onboard_position_plan_state_test.cpp
   ntn_onboard_runtime_mapping_test.cpp

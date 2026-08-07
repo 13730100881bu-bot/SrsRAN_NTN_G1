@@ -259,6 +259,10 @@ TEST(cu_cp_unit_config, default_terrestrial_config_keeps_ntn_disabled)
   ASSERT_EQ(ntn_cfg.satellite_state_update.update_period, std::chrono::milliseconds(0));
   ASSERT_FALSE(cu_cp_cfg.mobility.onboard_position_plan.enabled);
   ASSERT_FALSE(cu_cp_cfg.mobility.onboard_position_plan.du_execution_enabled);
+  ASSERT_EQ(cu_cp_cfg.mobility.onboard_position_plan.initial_ul_position_validation,
+            srs_cu_cp::ntn_initial_ul_position_validation_mode::disabled);
+  ASSERT_EQ(cfg.mobility_config.ntn_onboard_position_plan.initial_ul_position_validation, "disabled");
+  ASSERT_FALSE(cu_cp_cfg.mobility.onboard_position_plan.initial_ul_position_provider);
   ASSERT_FALSE(cu_cp_cfg.mobility.onboard_position_plan.require_signed_plan);
   ASSERT_TRUE(cu_cp_cfg.mobility.onboard_position_plan.trusted_signing_keys.empty());
   ASSERT_EQ(cu_cp_cfg.mobility.onboard_position_plan.du_prepare_guard, std::chrono::milliseconds{1000});
@@ -274,6 +278,7 @@ TEST(cu_cp_unit_config, onboard_position_plan_is_an_independent_opt_in_profile)
   cu_cp_unit_config cfg;
   cfg.mobility_config.ntn_onboard_position_plan.enabled          = true;
   cfg.mobility_config.ntn_onboard_position_plan.du_execution_enabled = true;
+  cfg.mobility_config.ntn_onboard_position_plan.initial_ul_position_validation = "audit";
   cfg.mobility_config.ntn_onboard_position_plan.require_signed_plan = true;
   cfg.mobility_config.ntn_onboard_position_plan.trusted_signing_keys = {
       {"planning-key-2026-01", "keys/planning-key-2026-01.pem"},
@@ -305,6 +310,8 @@ TEST(cu_cp_unit_config, onboard_position_plan_is_an_independent_opt_in_profile)
   EXPECT_FALSE(cu_cp_cfg.mobility.meas_manager_config.ntn_location_mobility.enabled);
   EXPECT_TRUE(cu_cp_cfg.mobility.onboard_position_plan.enabled);
   EXPECT_TRUE(cu_cp_cfg.mobility.onboard_position_plan.du_execution_enabled);
+  EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.initial_ul_position_validation,
+            srs_cu_cp::ntn_initial_ul_position_validation_mode::audit);
   EXPECT_TRUE(cu_cp_cfg.mobility.onboard_position_plan.require_signed_plan);
   ASSERT_EQ(cu_cp_cfg.mobility.onboard_position_plan.trusted_signing_keys.size(), 2U);
   EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.trusted_signing_keys[0].key_id, "planning-key-2026-01");
@@ -342,6 +349,7 @@ TEST(cu_cp_unit_config, onboard_position_plan_is_an_independent_opt_in_profile)
   EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.subvisit_duration, std::chrono::microseconds{2500});
   EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.activation_alignment, std::chrono::milliseconds{640});
   EXPECT_EQ(yaml_plan["expected_catalog_id"].as<std::string>(), "global-land-l1-v1");
+  EXPECT_EQ(yaml_plan["initial_ul_position_validation"].as<std::string>(), "audit");
   EXPECT_EQ(yaml_plan["state_file"].as<std::string>(), "ntn-onboard-position-plan-state.json");
   EXPECT_TRUE(yaml_plan["require_signed_plan"].as<bool>());
   EXPECT_EQ(yaml_plan["version_anchor_file"].as<std::string>(),
@@ -360,6 +368,43 @@ TEST(cu_cp_unit_config, onboard_position_plan_is_an_independent_opt_in_profile)
             "sha256:195786f4161e3b0fad6faa0605144948a7401c067a014bde684c1b29a8087d63");
   EXPECT_EQ(yaml_plan["max_digital_ports_per_cell"].as<unsigned>(), 64U);
   EXPECT_EQ(yaml_plan["max_digital_ports_per_satellite"].as<unsigned>(), 128U);
+}
+
+TEST(cu_cp_unit_config, initial_ul_position_validation_requires_executing_onboard_plan)
+{
+  cu_cp_unit_config cfg;
+  auto&             plan = cfg.mobility_config.ntn_onboard_position_plan;
+
+  plan.initial_ul_position_validation = "unsupported";
+  EXPECT_FALSE(validate_cu_cp_unit_config(cfg));
+
+  plan.initial_ul_position_validation = "audit";
+  EXPECT_FALSE(validate_cu_cp_unit_config(cfg));
+
+  plan.enabled        = true;
+  plan.satellite_id   = "P01-S01";
+  plan.plan_json_file = "management-center-plan.json";
+  plan.cell_ncis      = {0x123450001ULL, 0x123450002ULL};
+  plan.cell_pcis      = {101, 101};
+  EXPECT_FALSE(validate_cu_cp_unit_config(cfg));
+
+  plan.du_execution_enabled = true;
+  set_onboard_execution_context(plan);
+  EXPECT_TRUE(validate_cu_cp_unit_config(cfg));
+
+  plan.initial_ul_position_validation = "strict";
+  EXPECT_TRUE(validate_cu_cp_unit_config(cfg));
+
+  const srs_cu_cp::cu_cp_configuration cu_cp_cfg = generate_cu_cp_config(cfg);
+  EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.initial_ul_position_validation,
+            srs_cu_cp::ntn_initial_ul_position_validation_mode::strict);
+  EXPECT_FALSE(cu_cp_cfg.mobility.onboard_position_plan.initial_ul_position_provider);
+
+  YAML::Node yaml_root;
+  fill_cu_cp_config_in_yaml_schema(yaml_root, cfg);
+  EXPECT_EQ(yaml_root["cu_cp"]["mobility"]["ntn_onboard_position_plan"]["initial_ul_position_validation"]
+                .as<std::string>(),
+            "strict");
 }
 
 TEST(cu_cp_unit_config, enabled_onboard_position_plan_requires_exactly_two_stable_cell_identities)
@@ -1585,6 +1630,18 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_versioned_onboard_position_plan
   plan.runtime_mapped_l1_positions       = 87;
   plan.paging_state                      = "ready";
   plan.valid_idle_paging_contexts        = 3;
+  plan.initial_access_position_mode             = "audit";
+  plan.initial_access_position_check            = "audit";
+  plan.initial_access_position_source_state     = "ready";
+  plan.initial_access_position_source_authority = "du_private_sideband";
+  plan.initial_access_position_pending          = 4;
+  plan.initial_access_position_active_contexts  = 2;
+  plan.initial_access_position_accepted         = 31;
+  plan.initial_access_position_rejected         = 5;
+  plan.initial_access_position_audited          = 7;
+  plan.initial_access_position_expired          = 3;
+  plan.initial_access_position_replayed         = 1;
+  plan.initial_access_position_last_reason      = "active_plan_mismatch";
   plan.satellite_id                                  = "P01-S01";
   plan.active_catalog_version   = 10;
   plan.active_schedule_version  = 20;
@@ -1672,7 +1729,11 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_versioned_onboard_position_plan
             std::string::npos);
   EXPECT_NE(output.find("NTN onboard runtime mapping: stage=ready detail=active_plan_and_live_du_match "
                         "schedule_version=20 calendar_hash=sha256:active-calendar mapped_l1=87 paging=ready "
-                        "valid_idle_contexts=3 initial_access_position_check=not_in_production_path"),
+                        "valid_idle_contexts=3 initial_access_position_check=audit"),
+            std::string::npos);
+  EXPECT_NE(output.find("NTN Initial UL position check: mode=audit source_state=ready "
+                        "source_authority=du_private_sideband pending=4 active_contexts=2 accepted=31 rejected=5 "
+                        "audited=7 expired=3 replayed=1 last_reason=active_plan_mismatch"),
             std::string::npos);
   EXPECT_NE(output.find("NTN access calendar intent: schedule_version=21 intents=2560 ssb=2048 prach_ro=256 "
                         "prach_ul_beam=256 max_ssb_interval_ms=80 "
@@ -1718,7 +1779,11 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_disabled_onboard_state_defaults
             std::string::npos);
   EXPECT_NE(output.find("NTN onboard runtime mapping: stage=disabled detail=feature_disabled schedule_version=0 "
                         "calendar_hash=none mapped_l1=0 paging=disabled valid_idle_contexts=0 "
-                        "initial_access_position_check=not_in_production_path"),
+                        "initial_access_position_check=disabled"),
+            std::string::npos);
+  EXPECT_NE(output.find("NTN Initial UL position check: mode=disabled source_state=disabled "
+                        "source_authority=none pending=0 active_contexts=0 accepted=0 rejected=0 audited=0 expired=0 "
+                        "replayed=0 last_reason=none"),
             std::string::npos);
   EXPECT_NE(output.find("NTN calendar clear queue: depth=0 in_flight=no head_schedule_version=0 "
                         "head_calendar_hash=none head_reason=none"),
