@@ -93,6 +93,20 @@ static bool validate_mobility_appconfig(gnb_id_t gnb_id, const cu_cp_unit_mobili
 {
   const auto& ntn_cfg = config.ntn_location_mobility;
   const auto& position_plan_cfg = config.ntn_onboard_position_plan;
+  const bool  initial_ul_position_validation_enabled =
+      position_plan_cfg.initial_ul_position_validation == "audit" ||
+      position_plan_cfg.initial_ul_position_validation == "strict";
+  if (position_plan_cfg.initial_ul_position_validation != "disabled" &&
+      !initial_ul_position_validation_enabled) {
+    fmt::print("Invalid CU-CP configuration. initial_ul_position_validation must be disabled, audit or strict\n");
+    return false;
+  }
+  if (initial_ul_position_validation_enabled &&
+      (!position_plan_cfg.enabled || !position_plan_cfg.du_execution_enabled)) {
+    fmt::print("Invalid CU-CP configuration. Initial UL position validation requires onboard position-plan DU "
+               "execution\n");
+    return false;
+  }
   if (position_plan_cfg.du_execution_enabled && ntn_cfg.enabled) {
     fmt::print("Invalid CU-CP configuration. Executing onboard position plans and legacy NTN location mobility "
                "cannot both be identity-authoritative\n");

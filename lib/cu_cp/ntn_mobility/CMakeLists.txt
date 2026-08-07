@@ -26,6 +26,7 @@ add_library(srsran_cu_cp_ntn_mobility STATIC
   ntn_beam_tac.cpp
   ntn_beam_placement_planner.cpp
   ntn_qos_policy.cpp
+  ntn_initial_ul_position_authorizer.cpp
   ntn_onboard_position_plan.cpp
   ntn_onboard_position_plan_state.cpp
   ntn_onboard_runtime_mapping.cpp

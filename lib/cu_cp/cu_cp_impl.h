@@ -38,6 +38,7 @@
 #include "ntn_mobility/ntn_beam_placement_planner.h"
 #include "ntn_mobility/ntn_beam_service_resource_manager.h"
 #include "ntn_mobility/ntn_beam_tac.h"
+#include "ntn_mobility/ntn_initial_ul_position_authorizer.h"
 #include "ntn_mobility/ntn_onboard_runtime_mapping.h"
 #include "ntn_mobility/ntn_onboard_position_plan.h"
 #include "ntn_mobility/ntn_onboard_position_plan_state.h"
@@ -438,6 +439,14 @@ private:
   void commit_ntn_digital_service_binding_if_pdu_setup_succeeded(ue_index_t ue_index, bool success);
   void clear_ntn_digital_service_context_if_no_service_remains(ue_index_t ue_index);
   void release_ntn_analog_access_after_initial_context_setup(ue_index_t ue_index);
+  struct ntn_initial_ul_position_ue_context;
+  struct ntn_initial_ul_position_admission_result;
+  ntn_initial_ul_position_admission_result
+  evaluate_ntn_initial_ul_position(ue_index_t ue_index, std::optional<nr_cell_identity> serving_nci);
+  void store_ntn_initial_ul_position_context(ue_index_t                                      ue_index,
+                                             const ntn_initial_ul_position_ue_context& context);
+  void erase_ntn_initial_ul_position_context(ue_index_t ue_index);
+  void invalidate_ntn_initial_ul_position_state_locked(std::optional<du_index_t> du_index = std::nullopt);
   std::vector<ntn_beam_load> build_ntn_beam_loads_for_current_service_contexts();
   std::vector<ntn_served_beam_demand> build_ntn_served_beam_demands_for_current_service_contexts();
   void merge_pending_ntn_connected_handover_loads(std::vector<ntn_beam_load>& loads) const;
@@ -774,6 +783,32 @@ private:
   ntn_onboard_runtime_mapping_stage                          current_ntn_onboard_runtime_mapping_stage =
       ntn_onboard_runtime_mapping_stage::disabled;
   std::string current_ntn_onboard_runtime_mapping_detail = "feature_disabled";
+  struct ntn_initial_ul_position_ue_context {
+    uint64_t            observation_id = 0;
+    std::string         position_id;
+    nr_cell_identity    nci = nr_cell_identity::min();
+    pci_t               pci = INVALID_PCI;
+    du_index_t          du_index = du_index_t::invalid;
+    du_cell_index_t     du_cell_index = du_cell_index_t::invalid;
+    rnti_t              c_rnti = rnti_t::INVALID_RNTI;
+    uint64_t            schedule_version = 0;
+    std::string         calendar_hash;
+    uint64_t            du_connection_generation = 0;
+  };
+  struct ntn_initial_ul_position_admission_result {
+    bool                                               applicable = false;
+    bool                                               allowed    = true;
+    std::string                                        reason     = "not_applicable";
+    std::optional<ntn_initial_ul_position_ue_context> context;
+  };
+  std::optional<ntn_initial_ul_position_authorizer> initial_ul_position_authorizer;
+  std::unordered_map<ue_index_t, ntn_initial_ul_position_ue_context> ntn_initial_ul_position_contexts;
+  uint64_t    nof_ntn_initial_ul_position_accepted = 0;
+  uint64_t    nof_ntn_initial_ul_position_rejected = 0;
+  uint64_t    nof_ntn_initial_ul_position_audited  = 0;
+  uint64_t    nof_ntn_initial_ul_position_expired  = 0;
+  uint64_t    nof_ntn_initial_ul_position_replayed = 0;
+  std::string last_ntn_initial_ul_position_reason  = "none";
   std::string                                           last_ntn_position_plan_file_signature;
   std::optional<std::chrono::steady_clock::time_point>  ntn_position_plan_reload_deadline;
   bool                                                   ntn_position_plan_query_in_flight = false;

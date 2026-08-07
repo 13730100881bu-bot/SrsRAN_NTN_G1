@@ -25,6 +25,7 @@
 #include "srsran/cu_cp/cell_meas_manager_config.h"
 #include "srsran/cu_cp/cu_cp_metrics_notifier.h"
 #include "srsran/cu_cp/mobility_manager_config.h"
+#include "srsran/cu_cp/ntn_initial_ul_position_observation.h"
 #include "srsran/cu_cp/ue_configuration.h"
 #include "srsran/e1ap/cu_cp/e1ap_configuration.h"
 #include "srsran/e2/e2_cu.h"
@@ -39,6 +40,7 @@
 #include "srsran/support/executors/task_executor.h"
 #include <array>
 #include <chrono>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -74,12 +76,20 @@ struct ntn_position_plan_trusted_key_source_config {
   std::string public_key_file;
 };
 
+/// Policy applied to trusted Initial UL position observations.
+enum class ntn_initial_ul_position_validation_mode { disabled, audit, strict };
+
 /// Opt-in source for management-center versioned onboard L1 position plans.
 /// This is independent of the legacy per-beam NCI location-mobility profile.
 struct ntn_onboard_position_plan_source_config {
   bool                      enabled = false;
   /// Deploy checked calendars over F1AP and require matching DU/MAC applied feedback before CU-CP activation.
   bool                      du_execution_enabled = false;
+  /// Controls whether trusted Initial UL position observations are ignored, audited or enforced.
+  ntn_initial_ul_position_validation_mode initial_ul_position_validation =
+      ntn_initial_ul_position_validation_mode::disabled;
+  /// Optional source of trusted Initial UL position observations. Strict-mode availability is checked at startup.
+  std::shared_ptr<ntn_initial_ul_position_observation_provider> initial_ul_position_provider;
   /// Require every accepted position plan to carry a valid management-center signature.
   bool                      require_signed_plan = false;
   /// Local public-key files. Only their configured key IDs may authenticate a plan.

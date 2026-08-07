@@ -851,6 +851,19 @@ public:
                position_plan.paging_state,
                position_plan.valid_idle_paging_contexts,
                position_plan.initial_access_position_check);
+    fmt::print("NTN Initial UL position check: mode={} source_state={} source_authority={} pending={} "
+               "active_contexts={} accepted={} rejected={} audited={} expired={} replayed={} last_reason={}\n",
+               position_plan.initial_access_position_mode,
+               position_plan.initial_access_position_source_state,
+               position_plan.initial_access_position_source_authority,
+               position_plan.initial_access_position_pending,
+               position_plan.initial_access_position_active_contexts,
+               position_plan.initial_access_position_accepted,
+               position_plan.initial_access_position_rejected,
+               position_plan.initial_access_position_audited,
+               position_plan.initial_access_position_expired,
+               position_plan.initial_access_position_replayed,
+               position_plan.initial_access_position_last_reason);
     fmt::print("NTN access calendar intent: schedule_version={} intents={} ssb={} prach_ro={} prach_ul_beam={} "
                "max_ssb_interval_ms={} max_prach_interval_ms={} "
                "prach_ro_without_beam={} resource_conflicts={} deployment_detail={} evidence={}\n",

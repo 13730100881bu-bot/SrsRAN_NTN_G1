@@ -274,6 +274,7 @@ build_cu_cp_ntn_onboard_position_plan_section(const cu_cp_unit_ntn_onboard_posit
   YAML::Node node;
   node["enabled"]          = config.enabled;
   node["du_execution_enabled"] = config.du_execution_enabled;
+  node["initial_ul_position_validation"] = config.initial_ul_position_validation;
   node["require_signed_plan"] = config.require_signed_plan;
   node["satellite_id"]     = config.satellite_id;
   node["plan_json_file"]   = config.plan_json_file;

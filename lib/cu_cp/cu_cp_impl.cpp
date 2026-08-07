@@ -349,6 +349,20 @@ static ntn_onboard_position_plan_config make_ntn_onboard_position_plan_config(co
   return result;
 }
 
+static const char*
+get_initial_ul_position_validation_mode_name(ntn_initial_ul_position_validation_mode mode)
+{
+  switch (mode) {
+    case ntn_initial_ul_position_validation_mode::disabled:
+      return "disabled";
+    case ntn_initial_ul_position_validation_mode::audit:
+      return "audit";
+    case ntn_initial_ul_position_validation_mode::strict:
+      return "strict";
+  }
+  return "disabled";
+}
+
 static std::string format_beam_ids(const std::vector<std::string>& beam_ids)
 {
   std::string formatted;
@@ -2820,6 +2834,13 @@ cu_cp_impl::cu_cp_impl(const cu_cp_configuration& config_) :
   const auto& position_plan_cfg = cfg.mobility.onboard_position_plan;
   if (position_plan_cfg.enabled) {
     ntn_onboard_position_plan_ctrl.emplace(make_ntn_onboard_position_plan_config(cfg));
+    if (position_plan_cfg.initial_ul_position_validation !=
+            ntn_initial_ul_position_validation_mode::disabled &&
+        position_plan_cfg.initial_ul_position_provider != nullptr) {
+      position_plan_cfg.initial_ul_position_provider->invalidate_all();
+      initial_ul_position_authorizer.emplace(*position_plan_cfg.initial_ul_position_provider,
+                                             *ntn_onboard_position_plan_ctrl);
+    }
     if (!ntn_onboard_position_plan_ctrl->config().authentication_setup_error.empty()) {
       logger.error("Failed to initialize NTN position-plan public-key trust. Cause: {}",
                    ntn_onboard_position_plan_ctrl->config().authentication_setup_error);
@@ -2868,6 +2889,22 @@ cu_cp_impl::~cu_cp_impl()
 
 bool cu_cp_impl::start()
 {
+  const auto& position_plan_cfg = cfg.mobility.onboard_position_plan;
+  const ntn_initial_ul_position_validation_mode initial_ul_mode =
+      position_plan_cfg.initial_ul_position_validation;
+  if (initial_ul_mode != ntn_initial_ul_position_validation_mode::disabled &&
+      (!position_plan_cfg.enabled || !position_plan_cfg.du_execution_enabled ||
+       !ntn_onboard_position_plan_ctrl.has_value())) {
+    logger.error("Failed to start CU-CP. Cause: initial_ul_position_requires_onboard_execution");
+    return false;
+  }
+  if (initial_ul_mode == ntn_initial_ul_position_validation_mode::strict &&
+      (position_plan_cfg.initial_ul_position_provider == nullptr ||
+       !position_plan_cfg.initial_ul_position_provider->source_snapshot().ready)) {
+    logger.error("Failed to start CU-CP. Cause: initial_ul_position_source_unavailable");
+    return false;
+  }
+
   std::promise<bool> p;
   std::future<bool>  fut = p.get_future();
 
@@ -2907,6 +2944,10 @@ void cu_cp_impl::stop()
     ntn_position_plan_query_du_index.reset();
     ntn_position_plan_clear_du_index.reset();
     ntn_position_plan_prepare_dispatched.reset();
+    {
+      std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
+      invalidate_ntn_initial_ul_position_state_locked();
+    }
     if (ntn_satellite_updater != nullptr) {
       ntn_satellite_updater->stop();
     }
@@ -3026,8 +3067,181 @@ void cu_cp_impl::handle_e1_release_request(cu_up_index_t cu_up_index)
   // TODO
 }
 
+cu_cp_impl::ntn_initial_ul_position_admission_result
+cu_cp_impl::evaluate_ntn_initial_ul_position(ue_index_t ue_index,
+                                              std::optional<nr_cell_identity> serving_nci)
+{
+  ntn_initial_ul_position_admission_result result;
+  const auto&                              position_cfg = cfg.mobility.onboard_position_plan;
+  const ntn_initial_ul_position_validation_mode mode = position_cfg.initial_ul_position_validation;
+  if (mode == ntn_initial_ul_position_validation_mode::disabled || !position_cfg.enabled ||
+      !position_cfg.du_execution_enabled) {
+    return result;
+  }
+
+  if (serving_nci.has_value()) {
+    const bool onboard_cell = std::any_of(position_cfg.cell_ncis.begin(),
+                                          position_cfg.cell_ncis.end(),
+                                          [serving_nci](nr_cell_identity nci) { return nci == serving_nci.value(); });
+    if (!onboard_cell) {
+      return result;
+    }
+  }
+
+  result.applicable = true;
+  cu_cp_ue* ue      = ue_mng.find_du_ue(ue_index);
+  if (ue == nullptr || !serving_nci.has_value()) {
+    result.allowed = mode != ntn_initial_ul_position_validation_mode::strict;
+    result.reason  = "ue_identity_mismatch";
+    std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
+    if (mode == ntn_initial_ul_position_validation_mode::audit) {
+      ++nof_ntn_initial_ul_position_audited;
+    } else {
+      ++nof_ntn_initial_ul_position_rejected;
+    }
+    last_ntn_initial_ul_position_reason = result.reason;
+    return result;
+  }
+
+  const auto system_now = std::chrono::system_clock::now();
+  const auto steady_now = std::chrono::steady_clock::now();
+  const std::shared_ptr<const ntn_onboard_runtime_mapping_snapshot> mapping =
+      get_ready_ntn_onboard_runtime_mapping(system_now);
+  const du_index_t      du_index      = ue->get_du_index();
+  const du_cell_index_t du_cell_index = ue->get_pcell_index();
+  const rnti_t          c_rnti        = ue->get_c_rnti();
+
+  ntn_initial_ul_position_authorization_result authorization;
+  uint64_t                                     connection_generation = 0;
+  bool                                         connection_generation_available = false;
+  {
+    std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
+    const auto generation = ntn_position_plan_du_connection_generations.find(du_index);
+    if (generation != ntn_position_plan_du_connection_generations.end()) {
+      connection_generation           = generation->second;
+      connection_generation_available = true;
+    }
+
+    if (!connection_generation_available) {
+      authorization.status = ntn_initial_ul_position_authorization_status::du_generation_mismatch;
+    } else if (!initial_ul_position_authorizer.has_value()) {
+      authorization.status = ntn_initial_ul_position_authorization_status::source_unavailable;
+    } else {
+      ntn_initial_ul_position_authorization_request request;
+      request.key = {du_index, du_cell_index, c_rnti, connection_generation};
+      request.ue_index                = ue_index;
+      request.du_cell_index           = du_cell_index;
+      request.du_connection_generation = connection_generation;
+      request.runtime_mapping         = mapping;
+      request.now                     = system_now;
+      request.observation_now         = steady_now;
+      authorization = initial_ul_position_authorizer->authorize(request);
+    }
+
+    const bool authorized =
+        authorization.status == ntn_initial_ul_position_authorization_status::authorized;
+    if (mode == ntn_initial_ul_position_validation_mode::audit) {
+      ++nof_ntn_initial_ul_position_audited;
+    }
+    if (authorized) {
+      ++nof_ntn_initial_ul_position_accepted;
+      last_ntn_initial_ul_position_reason = "authorized";
+    } else {
+      if (mode == ntn_initial_ul_position_validation_mode::strict) {
+        ++nof_ntn_initial_ul_position_rejected;
+      }
+      if (authorization.status == ntn_initial_ul_position_authorization_status::observation_expired) {
+        ++nof_ntn_initial_ul_position_expired;
+      } else if (authorization.status ==
+                 ntn_initial_ul_position_authorization_status::replayed_observation) {
+        ++nof_ntn_initial_ul_position_replayed;
+      }
+      if (authorization.status == ntn_initial_ul_position_authorization_status::active_plan_mismatch &&
+          authorization.plan_audit.active_schedule_version != 0) {
+        last_ntn_initial_ul_position_reason = to_string(authorization.plan_audit.reason);
+      } else {
+        last_ntn_initial_ul_position_reason = to_string(authorization.status);
+      }
+    }
+    result.reason = last_ntn_initial_ul_position_reason;
+
+    if (authorized && mode == ntn_initial_ul_position_validation_mode::strict && mapping != nullptr) {
+      const ntn_onboard_runtime_cell_route* route = mapping->resolve_cell_route(serving_nci.value());
+      if (route != nullptr) {
+        result.context = ntn_initial_ul_position_ue_context{authorization.observation_id,
+                                                            authorization.position_id,
+                                                            route->identity.nci,
+                                                            route->identity.pci,
+                                                            du_index,
+                                                            du_cell_index,
+                                                            c_rnti,
+                                                            mapping->schedule_version(),
+                                                            mapping->calendar_hash(),
+                                                            connection_generation};
+      }
+    }
+  }
+
+  const bool authorized = authorization.status == ntn_initial_ul_position_authorization_status::authorized;
+  result.allowed        = authorized || mode == ntn_initial_ul_position_validation_mode::audit;
+  if (authorized && mode == ntn_initial_ul_position_validation_mode::strict && !result.context.has_value()) {
+    result.allowed = false;
+    result.reason  = "active_plan_mismatch";
+    std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
+    ++nof_ntn_initial_ul_position_rejected;
+    last_ntn_initial_ul_position_reason = result.reason;
+  }
+  return result;
+}
+
+void cu_cp_impl::store_ntn_initial_ul_position_context(
+    ue_index_t ue_index, const ntn_initial_ul_position_ue_context& context)
+{
+  std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
+  ntn_initial_ul_position_contexts[ue_index] = context;
+}
+
+void cu_cp_impl::erase_ntn_initial_ul_position_context(ue_index_t ue_index)
+{
+  if (cfg.mobility.onboard_position_plan.initial_ul_position_validation !=
+      ntn_initial_ul_position_validation_mode::strict) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
+  ntn_initial_ul_position_contexts.erase(ue_index);
+}
+
+void cu_cp_impl::invalidate_ntn_initial_ul_position_state_locked(std::optional<du_index_t> du_index)
+{
+  const auto& provider = cfg.mobility.onboard_position_plan.initial_ul_position_provider;
+  if (cfg.mobility.onboard_position_plan.initial_ul_position_validation !=
+          ntn_initial_ul_position_validation_mode::disabled &&
+      provider != nullptr) {
+    if (du_index.has_value()) {
+      provider->invalidate_du(du_index.value());
+    } else {
+      provider->invalidate_all();
+    }
+  }
+
+  if (!du_index.has_value()) {
+    ntn_initial_ul_position_contexts.clear();
+    return;
+  }
+  for (auto context = ntn_initial_ul_position_contexts.begin();
+       context != ntn_initial_ul_position_contexts.end();) {
+    if (context->second.du_index == du_index.value()) {
+      context = ntn_initial_ul_position_contexts.erase(context);
+    } else {
+      ++context;
+    }
+  }
+}
+
 bool cu_cp_impl::handle_ue_setup_request(ue_index_t ue_index)
 {
+  // A setup attempt owns at most one non-persistent position context. Any previous attempt for this UE is stale.
+  erase_ntn_initial_ul_position_context(ue_index);
   std::optional<std::string>       serving_beam_id;
   std::optional<nr_cell_identity>  serving_nci;
   du_index_t                       ue_du_index = du_index_t::invalid;
@@ -3038,9 +3252,21 @@ bool cu_cp_impl::handle_ue_setup_request(ue_index_t ue_index)
     } else {
       serving_nci = get_ue_serving_nci_for_ntn_load(du_db, *ue);
     }
-    if (serving_nci.has_value()) {
+    const auto& position_cfg = cfg.mobility.onboard_position_plan;
+    const bool  serving_onboard_execution_cell =
+        serving_nci.has_value() && position_cfg.enabled && position_cfg.du_execution_enabled &&
+        std::any_of(position_cfg.cell_ncis.begin(), position_cfg.cell_ncis.end(), [serving_nci](nr_cell_identity nci) {
+          return nci == serving_nci.value();
+        });
+    if (serving_nci.has_value() && !serving_onboard_execution_cell) {
       serving_beam_id = find_ntn_beam_id_by_nci(serving_nci.value());
     }
+  }
+  const ntn_initial_ul_position_admission_result position_admission =
+      evaluate_ntn_initial_ul_position(ue_index, serving_nci);
+  if (position_admission.applicable && !position_admission.allowed) {
+    logger.warning("ue={}: Rejecting onboard RRC setup. Cause: {}", ue_index, position_admission.reason);
+    return false;
   }
   auto make_access_ownership_update = [this, ue_index]() -> std::optional<ntn_access_rnti_ownership_update> {
     cu_cp_ue* current_ue = ue_mng.find_du_ue(ue_index);
@@ -3119,6 +3345,9 @@ bool cu_cp_impl::handle_ue_setup_request(ue_index_t ue_index)
     const bool accepted = controller.request_ue_setup(cu_cp_admission_request_type::initial_access);
     if (accepted) {
       store_access_active_context();
+      if (position_admission.context.has_value()) {
+        store_ntn_initial_ul_position_context(ue_index, *position_admission.context);
+      }
     }
     return accepted;
   }
@@ -3133,6 +3362,9 @@ bool cu_cp_impl::handle_ue_setup_request(ue_index_t ue_index)
   const bool accepted = controller.request_ue_setup(cu_cp_admission_request_type::initial_access);
   if (accepted) {
     store_access_active_context();
+    if (position_admission.context.has_value()) {
+      store_ntn_initial_ul_position_context(ue_index, *position_admission.context);
+    }
   }
   return accepted;
 }
@@ -7183,6 +7415,7 @@ void cu_cp_impl::clear_ntn_digital_service_context_if_no_service_remains(ue_inde
 
 void cu_cp_impl::release_ntn_analog_access_after_initial_context_setup(ue_index_t ue_index)
 {
+  erase_ntn_initial_ul_position_context(ue_index);
   cu_cp_ue* ue = ue_mng.find_du_ue(ue_index);
   if (ue == nullptr) {
     return;
@@ -8520,6 +8753,23 @@ cu_cp_ntn_runtime_status cu_cp_impl::get_current_ntn_runtime_status() const
                  ? "onboard_position_plan"
                  : (ntn_cfg.enabled ? "legacy" : "onboard_position_plan_dry_run"))
           : (ntn_cfg.enabled ? "legacy" : "none");
+  const ntn_initial_ul_position_validation_mode initial_ul_mode =
+      cfg.mobility.onboard_position_plan.initial_ul_position_validation;
+  position_status.initial_access_position_mode = get_initial_ul_position_validation_mode_name(initial_ul_mode);
+  position_status.initial_access_position_check = position_status.initial_access_position_mode;
+  if (initial_ul_mode == ntn_initial_ul_position_validation_mode::disabled) {
+    position_status.initial_access_position_source_state     = "disabled";
+    position_status.initial_access_position_source_authority = "none";
+  } else if (cfg.mobility.onboard_position_plan.initial_ul_position_provider == nullptr) {
+    position_status.initial_access_position_source_state     = "unavailable";
+    position_status.initial_access_position_source_authority = "none";
+  } else {
+    const auto& provider = cfg.mobility.onboard_position_plan.initial_ul_position_provider;
+    const ntn_initial_ul_position_source_snapshot source = provider->source_snapshot();
+    position_status.initial_access_position_source_state = source.ready ? "ready" : "unavailable";
+    position_status.initial_access_position_source_authority = source.authority.empty() ? "unknown" : source.authority;
+    position_status.initial_access_position_pending = static_cast<unsigned>(source.pending);
+  }
   position_status.satellite_id = cfg.mobility.onboard_position_plan.satellite_id.empty()
                                      ? "none"
                                      : cfg.mobility.onboard_position_plan.satellite_id;
@@ -8540,6 +8790,14 @@ cu_cp_ntn_runtime_status cu_cp_impl::get_current_ntn_runtime_status() const
     position_status.version_anchor_hash     = ntn_position_plan_version_anchor_hash.empty()
                                                   ? "none"
                                                   : ntn_position_plan_version_anchor_hash;
+    position_status.initial_access_position_active_contexts =
+        static_cast<unsigned>(ntn_initial_ul_position_contexts.size());
+    position_status.initial_access_position_accepted = nof_ntn_initial_ul_position_accepted;
+    position_status.initial_access_position_rejected = nof_ntn_initial_ul_position_rejected;
+    position_status.initial_access_position_audited  = nof_ntn_initial_ul_position_audited;
+    position_status.initial_access_position_expired  = nof_ntn_initial_ul_position_expired;
+    position_status.initial_access_position_replayed = nof_ntn_initial_ul_position_replayed;
+    position_status.initial_access_position_last_reason = last_ntn_initial_ul_position_reason;
     ntn_onboard_runtime_mapping_stage projected_mapping_stage = current_ntn_onboard_runtime_mapping_stage;
     std::string projected_mapping_detail = current_ntn_onboard_runtime_mapping_detail;
     if (projected_mapping_stage == ntn_onboard_runtime_mapping_stage::ready &&
@@ -11511,6 +11769,7 @@ async_task<void> cu_cp_impl::handle_ue_removal_request(ue_index_t ue_index)
   ntn_rrc_location_request_states.erase(ue_index);
   ntn_location_freshness_states.erase(ue_index);
   ntn_connected_ue_five_g_s_tmsi.erase(ue_index);
+  erase_ntn_initial_ul_position_context(ue_index);
   ntn_service_resource_mng.remove_ue(ue_index);
   ntn_pre_service_relocation_states.erase(ue_index);
   clear_ntn_connected_handover_state_for_ue_removal(ue_index, "source_ue_removed");
@@ -11635,6 +11894,7 @@ void cu_cp_impl::handle_du_disconnection(du_index_t du_index)
     std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
     ++ntn_position_plan_du_connection_generations[du_index];
     ntn_position_plan_disconnected_dus.insert(du_index);
+    invalidate_ntn_initial_ul_position_state_locked(du_index);
     if (ntn_onboard_runtime_mapping != nullptr &&
         std::any_of(ntn_onboard_runtime_mapping->cell_routes().begin(),
                     ntn_onboard_runtime_mapping->cell_routes().end(),
@@ -11755,6 +12015,7 @@ bool cu_cp_impl::schedule_ue_task(ue_index_t ue_index, async_task<void> task)
 void cu_cp_impl::invalidate_ntn_onboard_runtime_mapping_locked(ntn_onboard_runtime_mapping_stage stage,
                                                                const char*                       detail)
 {
+  invalidate_ntn_initial_ul_position_state_locked();
   ntn_onboard_runtime_mapping.reset();
   current_ntn_onboard_runtime_mapping_stage  = stage;
   current_ntn_onboard_runtime_mapping_detail = detail != nullptr ? detail : "unavailable";
@@ -11877,6 +12138,15 @@ void cu_cp_impl::refresh_ntn_onboard_runtime_mapping(std::chrono::system_clock::
     }
   }
 
+  const bool mapping_identity_changed =
+      ntn_onboard_runtime_mapping == nullptr ||
+      ntn_onboard_runtime_mapping->schedule_version() != snapshot.value()->schedule_version() ||
+      normalize_ntn_calendar_hash_for_comparison(ntn_onboard_runtime_mapping->calendar_hash()) !=
+          normalize_ntn_calendar_hash_for_comparison(snapshot.value()->calendar_hash()) ||
+      !ntn_onboard_runtime_mapping->matches_cell_routes(snapshot.value()->cell_routes());
+  if (mapping_identity_changed) {
+    invalidate_ntn_initial_ul_position_state_locked();
+  }
   ntn_onboard_runtime_mapping                = std::move(snapshot.value());
   current_ntn_onboard_runtime_mapping_stage  = ntn_onboard_runtime_mapping_stage::ready;
   current_ntn_onboard_runtime_mapping_detail = "active_plan_and_live_du_match";
@@ -13945,6 +14215,7 @@ void cu_cp_impl::on_ntn_onboard_position_plan_activation_timer_expired()
 
     if (cfg.mobility.onboard_position_plan.du_execution_enabled && activated_version.has_value() &&
         ntn_onboard_position_plan_ctrl->active_plan().has_value()) {
+      invalidate_ntn_initial_ul_position_state_locked();
       const ntn_activated_position_plan& active = *ntn_onboard_position_plan_ctrl->active_plan();
       bool candidate_matches = mapping_activation_candidate != nullptr &&
                                ntn_onboard_position_plan_ctrl->active_has_external_apply_evidence() &&

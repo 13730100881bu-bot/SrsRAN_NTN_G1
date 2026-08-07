@@ -243,7 +243,19 @@ struct cu_cp_ntn_position_plan_status {
   unsigned    runtime_mapped_l1_positions       = 0;
   std::string paging_state                      = "disabled";
   unsigned    valid_idle_paging_contexts        = 0;
-  std::string initial_access_position_check     = "not_in_production_path";
+  /// Compatibility summary retained for existing read-only command consumers.
+  std::string initial_access_position_check     = "disabled";
+  std::string initial_access_position_mode      = "disabled";
+  std::string initial_access_position_source_state = "disabled";
+  std::string initial_access_position_source_authority = "none";
+  unsigned    initial_access_position_pending         = 0;
+  unsigned    initial_access_position_active_contexts = 0;
+  uint64_t    initial_access_position_accepted        = 0;
+  uint64_t    initial_access_position_rejected        = 0;
+  uint64_t    initial_access_position_audited         = 0;
+  uint64_t    initial_access_position_expired         = 0;
+  uint64_t    initial_access_position_replayed        = 0;
+  std::string initial_access_position_last_reason     = "none";
   unsigned    clear_queue_depth   = 0;
   bool        clear_in_flight     = false;
   uint64_t    clear_queue_head_schedule_version = 0;
