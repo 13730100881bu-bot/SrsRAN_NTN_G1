@@ -112,9 +112,9 @@ SSB/PRACH 保持静态 future prefill，只在当前 `sched_result` 交 MAC/PHY 
 
 这里的 `port_id` 是每小区 0..15 的可复用模拟资源槽；同一端口会在不同窗口服务不同 `position_id`。它不是 eAxC、OFH `BeamId` 或阵列权重索引，不能直接下沉。仓库内可以继续增加 `ru_ntn_beam_controller` 契约、FAPI/OFH `BeamId` plumbing 和 dummy/spy backend，并将证据提升到 `command_sent`；但在管理中心映射和设备回执缺失时，仍不得返回 `device_applied`。
 
-## Initial UL active-plan 审计边界
+## Initial UL active-plan 校验边界
 
-CUCP-037 在 CU-CP 私有 position-plan controller 中增加了无副作用审计器。对完整的 proposed sideband 测试输入，它检查：
+CUCP-037 在 CU-CP 私有 position-plan controller 中增加了无副作用审计器。CUCP-048 进一步把该能力接到首次 RRC Setup 前的注入式 consumer。对完整 observation，它检查：
 
 - `satellite_id`、catalog/schedule version、source/calendar hash；
 - 两个长期星载小区之一的稳定 NCI/PCI；
@@ -123,9 +123,9 @@ CUCP-037 在 CU-CP 私有 position-plan controller 中增加了无副作用审�
 - 同一窗口是否有配对 `prach_ul_beam`，且 cell-local `port_id` 匹配；
 - external-execution profile 是否保留当前 active plan 的 software-gate applied snapshot。
 
-结果使用 `accept/reject/audit_only` 和机器可读原因。`accept` 只说明“提供的 metadata 与当前 CU-CP active plan/software-gate snapshot 匹配”，不验证发送方身份，也没有接收时刻 freshness/anti-replay，不说明 position steering 或 RF 已执行。DU 断连会立即隐藏 `active_has_external_apply_evidence`，只有当前连接的 matching query 才能恢复；这解决本地连接代次污染，但仍不是经过认证的跨重连 telemetry。
+consumer 默认使用 `disabled`，保持原有接入路径不变；`audit` 消费并校验 observation、记录结果，但始终继续原有接入；`strict` 只允许校验通过的接入，并要求 CU-CP 启动前已注入 ready source。校验范围止于 observation、当前 active plan、运行映射和软件日历的一致性；天线指向和 RF 执行属于设备层。DU 断连会清除对应 observation 和临时 UE context，重连后按新的 connection generation 重新校验。
 
-标准 F1AP Initial UL 目前只有 CGI、C-RNTI 和 RRC container，不携带上述 position/version/hash/RO/port 证据。生产 `handle_ue_setup_request()` 因而没有接入这个审计器，也绝不能通过 legacy beam-to-NCI table 推导 `G######`。下一步若要成为真实 admission gate，需要一个明确授权、版本化且可鉴别来源的最小 sideband；RAR 低时延路径仍留在 DU/MAC，原始 PRACH 检测仍留在 PHY/DU。
+标准 F1AP Initial UL 目前只有 CGI、C-RNTI 和 RRC container，不携带上述 position/version/hash/RO/port 信息；当前应用也没有 F1AP/DU/MAC producer。因此 `strict` 只能在外部注入 ready source 后启动，不能通过 legacy beam-to-NCI table 推导 `G######`。后续跨层工作只需对接可鉴别来源的 producer/transport；RAR 低时延路径仍留在 DU/MAC，原始 PRACH detection 仍留在 PHY/DU。
 
 相关的 C-RNTI lease key 已改为 `(DU, DU cell index, PCI, C-RNTI)`。这允许两个长期星载小区按规划复用 PCI，但当前 DU RNTI table 仍按 C-RNTI 扁平索引，所以同一 DU 的两个 cell 不能复用同一个 C-RNTI 值；不同 DU 可以复用。CUCP-038 进一步要求 generation 与完整 ACK 集合原子匹配，未知 ACK 只用原 generation 修复，普通 in-flight pool 不叠加新 generation；ICS 后释放模拟接入归属和 `control_only`/L2 规则不变。
 

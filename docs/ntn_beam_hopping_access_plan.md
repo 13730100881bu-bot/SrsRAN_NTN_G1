@@ -97,10 +97,9 @@ sequenceDiagram
     PHY->>DU: preamble index、TA估计和质量
     par 低时延关键路径
         DU->>UE: 使用预下发lease发送RAR
-    and CU-CP活动计划审计（sideband仍为proposed）
-        DU-->>F1: proposed structured initial access metadata
-        F1-->>CU: proposed position/version/hash/RO/port evidence
-        CU-->>CU: accept / reject / audit_only
+    and CU-CP活动计划校验（默认关闭的注入式consumer）
+        CU-->>CU: consume position/version/hash/RO/port observation
+        CU-->>CU: disabled / audit / strict
     end
     UE->>DU: Msg3 / RRCSetupRequest
     DU->>CU: Initial UL RRC Message
@@ -115,10 +114,10 @@ CU-CP 统一管理每个已分配 L1 的 PRACH 日历和接入资格，不代表
 |---|---|
 | 卫星/RU/PHY | 对准 G 系列 L1、接收 PRACH、相关检测，输出 preamble index、TA 和质量估计 |
 | DU/MAC | 处理同一 RO 冲突、从 CU-CP 预下发 lease 取临时 RNTI、按时发送 RAR |
-| F1AP | 当前传递标准 Initial UL 与既有 applied feedback；完整结构化接入事件仍是 proposed private sideband |
-| CU-CP | 管理日历、接入资格、RNTI lease、速率限制、异常审计和最终 RRC 接入 |
+| F1AP/DU/MAC | 标准 Initial UL 与既有 applied feedback 保持不变；尚未提供可信 position observation producer |
+| CU-CP | 管理日历、接入资格、RNTI lease、速率限制，并以 `disabled/audit/strict` 消费注入的位置 observation |
 
-完整 sideband 方案应让 CU-CP 看到 `satellite_id`、`nci/pci`、全球 L1 `position_id`、catalog/schedule version、source/calendar hash、实际 RO/端口、preamble、TA/质量和 RNTI lease。当前标准 Initial UL 只提供 CGI/C-RNTI/RRC container，不能证明 `position_id` 或 PRACH RO。CUCP-037 已提供私有纯审计器，可对完整测试输入返回 `accept/reject/audit_only`，但未接入生产 F1AP，也不使用旧 beam-to-NCI 路径猜测 L1。
+CUCP-048 已在首次 RRC Setup 前接入私有 position observation consumer。默认 `disabled` 保持原有流程；`audit` 校验并记录但不阻断；`strict` 只允许校验通过的接入，并要求启动前已注入 ready source。observation 包含 `satellite_id`、`nci/pci`、`position_id`、catalog/schedule version、source/calendar hash、实际 RO/端口等信息。标准 Initial UL 仍只提供 CGI/C-RNTI/RRC container，F1AP/DU/MAC producer 尚未接入，CU-CP 也不会从旧 beam-to-NCI 路径猜测一级波位。
 
 CUCP-038 另行修复周期性资源审计的 fail-safe 语义。旧的一秒 DU audit
 可能返回 `accepted=true` 与空 snapshot；CU-CP 若把“未提供”当成“确认不
@@ -147,8 +146,8 @@ CU-global UE identity 映射，所以 UE SR/SRS slot snapshot 明确保持 incom
 不能用空列表修复该域。SR/SRS repair 成功时保存 DU 实际 `applied_request`，避免
 DU 调整 offset/period 后反复产生同一 mismatch。
 
-这份 audit 只证明 MAC/DU software state，不证明 RAR 已发射、原始 PRACH 已
-检测或 Initial UL 携带可信 `position_id`，也不是 PHY/RU/RF telemetry。DU
+这份 audit 只说明 MAC/DU software state；标准 Initial UL 尚未由可信 producer
+提供 `position_id`，也没有 PHY/RU/RF telemetry。DU
 connection epoch、authentication、freshness/anti-replay 和 UE-slot identity
 mapping 仍需后续闭环；terminal history GC/RNTI reuse policy 也尚未冻结。
 完整 snapshot 查找已索引化以避免 O(N²) 比较，但未做 endurance 验证；在没有
@@ -175,7 +174,7 @@ L1 的 SIB19 必须在 PRACH 前可获得且未过期。缺失有效星历或 UE
 
 NCI 属于长期星载小区。L1 跨星时 position_id 不变，服务 NCI/PCI 改为目标星小区的身份；这不是 NCI 迁移。目标 ready/applied 前，源侧仍是唯一 primary。
 
-同一个稳定 NCI 可以同时负责多个一级波位。终端从一个一级波位移动到同一 NCI 下的另一个一级波位时仍处于原小区，不触发 handover；只有负责它的 NCI 改变时才标记为 `cell_change`。Paging 当前最多缩小到稳定小区，不推测具体一级波位。生产 Initial UL 尚未携带可信 `position_id`，因此这项位置变化分类暂时只用于只读查询。
+同一个稳定 NCI 可以同时负责多个一级波位。终端从一个一级波位移动到同一 NCI 下的另一个一级波位时仍处于原小区，不触发 handover；只有负责它的 NCI 改变时才标记为 `cell_change`。Paging 当前最多缩小到稳定小区，不推测具体一级波位。注入式 Initial UL consumer 已可校验 `position_id`，但标准 F1AP/DU/MAC 路径尚无可信 producer；这项位置变化分类仍用于只读查询。
 
 PCI 必须按同时可见、同频星载小区冲突图复用：节点是长期星载小区，冲突边来自至少 7 天事件驱动可见性及频率计划。PCI 不随波位跳变；旧中国一跳邻接 proxy 不能证明全球 RF 安全。
 
@@ -225,7 +224,7 @@ C++ 基站运行日志、pcap 或空口证据。
 | 完整可见清单 + 实际负责子集输入 | 已有测试覆盖 | schema v3 同时保存两份集合；exact-key 和 content hash 覆盖二者，负责 ID 必须来自完整可见清单；v1/v2 按 `assigned=visible` 兼容 |
 | CU-CP 双小区版本化计划与日历 dry-run | 已有测试覆盖 | 仅对 assigned 做确定性划分和 80/640 ms 审计；257 visible + 不超过 256 assigned 可接收，257 assigned 明确 `schedule_overflow`；activation epoch 原子切换 |
 | DU/MAC SSB/PRACH 软件 gate | 已有测试覆盖 | `applied` 仅表示匹配 version/hash/intents 的软件 snapshot；不含 position/port 或 RF evidence |
-| Initial UL active-plan audit | 已有测试覆盖 | 私有纯函数验证完整 sideband 测试输入；生产 F1AP transport、可信 provenance 与 RF evidence 均未实现 |
+| Initial UL position consumer | 已有测试覆盖 | CU-CP 支持默认关闭的 `disabled/audit/strict` 注入式消费，`strict` 需要 ready source；标准 F1AP/DU/MAC producer 与 RF 执行尚未接入 |
 | DU/MAC RNTI resource audit | 已有 focused 测试覆盖 | codec v2 区分 RNTI/UE-slot 完整性；ACK 原子校验、同 generation repair、真实 lease ledger 和可恢复 audit conflict 已闭环；resource-manager 39/39、RNTI manager 23/23 通过，UE-slot 域仍 incomplete；不是 endurance、RAR/PRACH/RF 证据 |
 | 轨道精确审计、PCI 冲突图和实际跳波束 | 规划中 | `selectedScenario=null`、`exact=false`，7 天事件审计尚未完成 |
 
@@ -252,4 +251,4 @@ C++ 基站运行日志、pcap 或空口证据。
 5. 冻结公共 epoch，运行至少 7 天事件驱动、gateway 和 N-1 审计。
 6. 生成全球 PCI 冲突图；7 天验收通过后填写 `selectedScenario` 审计记录。
 
-`80/640 ms`、20 ms occasion、2.5 ms sub-visit、`16/64`、`n10` 和 `48/8/8` 都是规划参数。128/256 只限定 actual assignment 中每小区/每星实际负责的 L1，是当前离散日历模型和 CU-CP 执行包络，不是波束数或协议常量。srsRAN 已实现 schema v3 双集合输入、两个稳定星载 NCI/PCI、负责子集的双小区划分、软件日历、持久化恢复和分开展示的只读状态；全球连续覆盖、可信 Initial UL position sideband、模拟端口到硬件句柄映射和真实 PHY/RU/RF 跳变仍属于后续工作。
+`80/640 ms`、20 ms occasion、2.5 ms sub-visit、`16/64`、`n10` 和 `48/8/8` 都是规划参数。128/256 只限定 actual assignment 中每小区/每星实际负责的 L1，是当前离散日历模型和 CU-CP 执行包络，不是波束数或协议常量。srsRAN 已实现 schema v3 双集合输入、两个稳定星载 NCI/PCI、负责子集的双小区划分、软件日历、持久化恢复、只读状态和注入式 Initial UL position consumer；标准 F1AP/DU/MAC producer、全球连续覆盖、模拟端口到硬件句柄映射和真实 PHY/RU/RF 跳变仍属于后续工作。

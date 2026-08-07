@@ -417,23 +417,32 @@ anti-replay.
 
 ## initial_access_plan_audit
 
-A CU-CP-private, side-effect-free comparison of complete proposed Initial UL
-sideband metadata with the current active plan. It checks satellite/version/
-hash, stable NCI/PCI, L1 owner, PRACH occasion phase, paired UL-beam window and
-cell-local port, returning `accept`, `reject` or `audit_only` plus a machine-
-readable reason.
+A CU-CP-private comparison of complete Initial UL position metadata with the
+current active plan. It checks satellite/version/hash, stable NCI/PCI, position
+owner, PRACH occasion phase, paired UL-beam window and cell-local port. The
+result is `accept`, `reject` or `audit_only` with a machine-readable reason.
 
-No production F1AP Initial UL transport carries all of this metadata today.
-Therefore this contract must not infer `position_id` from legacy beam-to-NCI
-state. `accept` means only that supplied metadata matches the CU-CP active-plan
-and current software-gate snapshot; it does not authenticate the sender or add
-receive-time freshness/anti-replay, is not durable across DU reconnect without
-reconciliation, and is not PHY/RU/RF proof.
+CUCP-048 adds a bounded consumer in front of RRC Setup. Its exact lookup key is
+`DU + DU cell + C-RNTI + DU connection generation`. The injected provider keeps
+at most 1,024 records for one second, detects ambiguous keys and replayed
+observation IDs, and permits one consumption attempt per record. CU-CP also
+requires the PRACH event to be non-future and less than one second old, plus a
+ready runtime mapping, a valid DU-applied active plan and an exact DU cell route
+before continuing ordinary admission.
 
-Read-only status therefore reports
-`initial_access_position_check=not_in_production_path`. The transition
-classifier above is available for checked input, but it is not wired into
-production Initial UL or handover until a trusted `position_id` source exists.
+The policy modes are `disabled`, `audit` and `strict`. `disabled` is the
+default. `audit` records the result and continues the existing admission path.
+`strict` rejects before access ownership is written and can start only with a
+ready injected source. A successful strict check creates a non-persistent UE
+context that is removed at ICS completion, UE removal, setup failure, plan
+activation, DU disconnect and restart.
+
+The observation provider is a private C++ extension contract exposed for
+programmatic `cu_cp_configuration` injection. Standard
+Initial UL messages and generated ASN.1 remain unchanged, and the current
+application does not yet construct a production lower-layer source. The
+consumer never derives `position_id` from NCI, coordinates or legacy beam
+state. See `docs/ntn_initial_ul_position_consumer.md`.
 
 ## ntn_assistance_snapshot
 

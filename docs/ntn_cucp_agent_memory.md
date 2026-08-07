@@ -543,6 +543,20 @@ For a more detailed task-to-change lookup, use
   secondary served PLMN currently fails closed for these onboard hints, while
   ordinary paging remains available. Legacy beam-derived behavior and the
   default-off terrestrial path are unchanged.
+- CUCP-048 consumes one private Initial UL position observation before RRC
+  Setup admission. The exact key is DU, CU-CP DU cell, C-RNTI and DU connection
+  generation. The injected provider is thread-safe, bounded to 1,024 records,
+  expires them after one second, rejects ambiguous keys and prevents reuse of a
+  consumed observation ID while it remains live. CU-CP separately rejects
+  PRACH event times from the future or at least one second old. `disabled`
+  preserves the existing path, `audit`
+  records the result without rejecting, and `strict` fails startup without a
+  ready provider and rejects before access ownership is written. Successful
+  strict checks create only a temporary, non-persistent UE position context;
+  ICS, UE removal, setup failure, plan activation, DU disconnect and restart
+  clear it. This task adds only the CU-CP consumer and injection boundary. A
+  production lower-layer source remains a separate, explicitly authorized
+  cross-layer task. See `docs/ntn_initial_ul_position_consumer.md`.
 
 ## Protocol References
 

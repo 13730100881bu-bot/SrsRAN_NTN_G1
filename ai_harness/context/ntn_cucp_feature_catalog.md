@@ -165,13 +165,20 @@ the base NTN capability level, but are profile-blocked from UE-specific NTN
 service, connected handover, and release/paging hints in this deployment.
 `ntn-Parameters-r17` is recorded for observability only in v1.
 
-CUCP-037 defines a private pure audit for complete proposed Initial UL sideband
-metadata. It can match the active satellite/catalog/schedule/hash, stable cell
-identity, L1 owner, PRACH occasion and paired UL port, returning
-`accept/reject/audit_only`. Standard F1AP Initial UL does not carry this complete
-metadata, so the auditor is not yet a production transport or admission hook.
-It must not infer `position_id` from the legacy beam-to-NCI mapping, and an
-accepted audit is not RF evidence.
+CUCP-037 defines a private audit for complete proposed Initial UL sideband
+metadata. It matches the active satellite/catalog/schedule/hash, stable cell
+identity, position owner, PRACH occasion and paired UL port.
+
+CUCP-048 connects that audit to RRC Setup through an injected, thread-safe
+observation provider. The provider uses the exact DU/cell/C-RNTI/connection-
+generation key, a 1,024-record bound, a one-second lifetime and one-time
+consumption. A PRACH event must not be in the future and must be less than one
+second old. `audit` records outcomes without rejecting the UE. `strict` fails
+CU-CP startup without a ready provider and rejects a mismatch before access
+ownership is created. Temporary accepted contexts are cleared by ICS, UE
+removal, plan activation, DU disconnect and restart. Standard F1AP Initial UL,
+generated ASN.1 and lower-layer code are unchanged, and `position_id` is never
+derived from legacy beam-to-NCI state.
 
 ## 7a. Resource-domain guard policy
 

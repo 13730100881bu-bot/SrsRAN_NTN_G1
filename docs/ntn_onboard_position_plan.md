@@ -313,7 +313,7 @@ cleanup queue 记录精确 schedule version、calendar hash 和原因。DU 确�
 
 运行映射只有在计划已经 active、仍在有效期内、DU 已确认同一软件日历为 `applied`，且两个 NCI/PCI 仍能唯一对应到当前 DU 小区时才进入 `ready`。pending 计划不会改变正在使用的映射，新计划失败时旧有效映射继续使用；新计划到达启用时刻后，整份映射一次性替换。DU 断开会立即隐藏映射，重连和进程重启都要先重新查询 DU。映射本身不单独写入状态文件。
 
-位置变化分为四类：同一 `position_id` 为 `no_change`；两个不同一级波位属于同一 NCI 时为 `same_cell`，不触发 handover；所属 NCI 改变时为 `cell_change`；缺少位置或可用映射时为 `unknown`。当前生产 Initial UL 和位置报告还没有可信 `position_id`，因此本轮只提供分类查询，不接入真实 handover。
+位置变化分为四类：同一 `position_id` 为 `no_change`；两个不同一级波位属于同一 NCI 时为 `same_cell`，不触发 handover；所属 NCI 改变时为 `cell_change`；缺少位置或可用映射时为 `unknown`。CUCP-048 已在首次 RRC Setup 前增加默认关闭的注入式 Initial UL 位置校验，但标准 F1AP/DU/MAC 路径尚未提供可信位置数据源；该分类仍用于查询，不接入真实 handover。
 
 每个星载小区的 NCGI 和 TAI 直接取自唯一匹配的 DU served cell：NCGI 使用该小区的 PLMN 和稳定 NCI，TAI 使用同一 PLMN 和 TAC。完整的 `PLMN+TAC` 必须在 NGAP supported TA 中恰好出现一次。缺失、重复或不匹配时，一级波位映射仍可查看，但 CU-CP 不生成该小区的 onboard release location，也不把 Paging 缩小到该小区。
 
@@ -337,7 +337,7 @@ UE 释放前，CU-CP 可以保存当前稳定小区、NCGI、TAI、schedule vers
 - 已映射一级波位总数，以及两个 NCI/PCI 各自的映射数量；
 - 两个小区的 PLMN、TAC 和 TAI 状态；
 - Paging 状态、有效 idle context 数量；
-- `initial_access_position_check=not_in_production_path`；
+- Initial UL 位置校验的 `disabled/audit/strict` 模式、数据源状态和 authority、待处理记录、临时 UE context、结果计数及最近原因；
 - 最近拒绝原因。
 
 这些字段是只读诊断，不改变状态。Digital 资源在本阶段只显示规划容量，仍标记为未绑定到真实数字业务运行态。
@@ -347,7 +347,7 @@ UE 释放前，CU-CP 可以保存当前稳定小区、NCGI、TAI、schedule vers
 - schema v1 继续兼容 dry-run，schema v2-v4 共用现有 CU-CP 执行、恢复和只读观测路径；这些兼容处理没有修改 F1AP、DU、MAC、PHY、RU/RF、Web/GIS 或 generated ASN.1。
 - legacy NTN profile 继续使用旧 `find_ntn_beam_id_by_nci`、beam-derived TAC/TAI/NGAP/Paging 和 per-beam NCI 路径；onboard execution 路径不调用这些一对一查找，也不从一级波位推导 TAC。
 - 新 L1 目录不永久保存 NCI/PCI，也不注入 legacy beam table。
-- 原始 PRACH detection 仍属于 PHY/DU/MAC；CU-CP 只管理计划、资源授权和可用 metadata 的 Initial UL 审计。
+- 原始 PRACH detection 仍属于 PHY/DU/MAC；CU-CP 已提供默认关闭的注入式 Initial UL consumer：`audit` 只记录结果，`strict` 只有在启动前注入 ready source 时才允许启用。标准 F1AP/DU/MAC producer 尚未接入。
 - 当前没有 `(nci, position_id, cell_local_port, direction) -> hardware_beam_handle` 映射，也没有设备 `prepare_bank/arm_at/cancel/query` 回执。
 - software `applied` 的含义固定为软件日历已经安装；`device_applied`、天线控制、RF 输出和全球连续覆盖由后续设备接口及系统验收给出。
 

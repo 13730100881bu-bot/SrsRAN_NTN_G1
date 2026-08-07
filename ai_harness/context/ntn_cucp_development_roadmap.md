@@ -285,6 +285,18 @@ require their exact expected result status. Production DU requests are FIFO
 through full completion, but application-level stale-generation replay is not
 yet rejected by a DU high-water mark and remains part of the anti-replay work.
 
+## CUCP-048 Initial UL position consumer
+
+Consume a private Initial UL position observation in CU-CP before RRC Setup
+admission. Use one exact DU/cell/C-RNTI/connection-generation key, bounded
+one-second storage, one-time consumption and PRACH event-time freshness. Keep the default `disabled` path,
+provide non-blocking `audit`, and make `strict` fail startup without a ready
+injected source. Match the active plan, stable cell owner, PRACH time, uplink
+port and live DU generation before existing ownership and capacity checks.
+Temporary accepted contexts are non-persistent and end at ICS, UE removal,
+setup failure, plan activation, DU disconnect or restart. This stage is the
+CU-CP consumer only; a production lower-layer producer is a separate task.
+
 ## Global sequencing rule
 
 Do not begin a later task if it depends on terminology or runtime state that has
