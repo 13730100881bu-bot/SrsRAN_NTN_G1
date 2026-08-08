@@ -1,6 +1,6 @@
 # NTN CU-CP Agent Memory
 
-Last updated: 2026-08-06
+Last updated: 2026-08-08
 
 This file is the compact handoff memory for future conversations. It keeps the
 durable NTN CU-CP design context without pulling in the old project-management
@@ -557,6 +557,26 @@ For a more detailed task-to-change lookup, use
   clear it. This task adds only the CU-CP consumer and injection boundary. A
   production lower-layer source remains a separate, explicitly authorized
   cross-layer task. See `docs/ntn_initial_ul_position_consumer.md`.
+- CUCP-049 adds safe retirement and reuse for NTN C-RNTI access leases. A
+  C-RNTI is a cell-local temporary UE identifier, assigned during access and
+  retained during the connection: CU-CP may retire it only after local
+  UE ownership has ended, a complete audit on the current DU connection reports
+  the same generation as expired, and MAC atomically rechecks the whole batch.
+  Compact generation tombstones reject delayed add/retire messages and require
+  a strictly newer generation before reuse. DU disconnect invalidates in-flight
+  evidence; restart or reconnect first imports unknown DU records into a
+  non-authorizing quarantine and completes a fresh audit. An old DU that cannot
+  confirm retirement remains usable for the existing pool flow but never makes
+  a retired number reusable. Allocation scans the finite per-DU namespace and
+  fails without publishing a partial pool when eight safe numbers are not
+  available. The feature remains behind the NTN lease mode, so terrestrial
+  default behavior is unchanged. This is software resource-state handling; it
+  does not modify PRACH detection, MAC scheduling, PHY, RU/RF, Web/GIS or
+  generated ASN.1. Focused validation completed with 52 resource-manager, 8
+  F1 CU, 6 F1 DU, 14 MAC, 11 CU-CP integration and 31 configuration/status
+  tests passing. The software-flow scenario ran three non-empty groups and
+  passed 37/37 with process cleanup. See
+  `docs/ntn_rnti_retirement_reuse.md`.
 
 ## Protocol References
 
