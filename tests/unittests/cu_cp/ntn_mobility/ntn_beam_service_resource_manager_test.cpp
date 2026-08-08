@@ -945,7 +945,7 @@ TEST(ntn_beam_service_resource_manager, when_complete_snapshot_has_duplicate_rnt
   EXPECT_EQ(decision.repairs.front().reason, "duplicate_du_rnti_snapshot");
 }
 
-TEST(ntn_beam_service_resource_manager, when_complete_snapshot_has_unknown_rnti_then_resource_domain_is_blocked)
+TEST(ntn_beam_service_resource_manager, when_complete_snapshot_has_unknown_rnti_then_it_is_quarantined)
 {
   ntn_beam_service_resource_manager manager;
   const ntn_rnti_lease_pool_update  lease_pool = make_target_handover_lease_pool();
@@ -957,14 +957,730 @@ TEST(ntn_beam_service_resource_manager, when_complete_snapshot_has_unknown_rnti_
   report.pci                    = lease_pool.pci;
   report.generation_id          = 15;
   report.rnti_snapshot_complete = true;
+  report.du_connection_generation         = 7;
+  report.rnti_retirement_capability_known = true;
+  report.rnti_retirement_supported        = true;
+  report.rnti_generation_high_water       = lease_pool.generation_id;
   report.rnti_leases.push_back({lease_pool.leases.front(), "pending", "applied_by_du", lease_pool.generation_id});
+  report.rnti_leases.push_back({lease_pool.leases.back(), "pending", "applied_by_du", lease_pool.generation_id});
   report.rnti_leases.push_back({to_rnti(0x5001), "pending", "applied_by_du", lease_pool.generation_id});
 
   const ntn_resource_audit_decision decision = manager.handle_resource_audit_report(report);
-  ASSERT_EQ(decision.repairs.size(), 1U);
-  EXPECT_EQ(decision.repairs.front().action, ntn_resource_repair_action::mark_resource_conflict);
-  EXPECT_EQ(decision.repairs.front().rnti, to_rnti(0x5001));
-  EXPECT_EQ(decision.repairs.front().reason, "unknown_du_rnti_snapshot");
+  EXPECT_TRUE(decision.repairs.empty());
+  const auto snapshot = manager.get_snapshot();
+  EXPECT_EQ(snapshot.nof_rnti_orphans_quarantined, 1U);
+  EXPECT_EQ(snapshot.nof_rnti_orphans_observed, 1U);
+  const auto orphan = std::find_if(snapshot.rnti_leases.begin(), snapshot.rnti_leases.end(), [](const auto& lease) {
+    return lease.rnti == to_rnti(0x5001);
+  });
+  ASSERT_NE(orphan, snapshot.rnti_leases.end());
+  EXPECT_EQ(orphan->state, "orphan_quarantined");
+  EXPECT_TRUE(orphan->analog_beam_id.empty());
+  EXPECT_TRUE(manager.is_rnti_excluded_for_du(report.du_index, orphan->rnti));
+}
+
+TEST(ntn_beam_service_resource_manager, expired_orphan_rnti_is_grouped_for_atomic_retirement)
+{
+  ntn_beam_service_resource_manager manager;
+
+  ntn_resource_audit_report report;
+  report.du_index                         = uint_to_du_index(3);
+  report.cell_index                       = to_du_cell_index(4);
+  report.pci                              = pci_t{44};
+  report.generation_id                    = 91;
+  report.rnti_snapshot_complete           = true;
+  report.du_connection_generation         = 12;
+  report.rnti_retirement_capability_known = true;
+  report.rnti_retirement_supported        = true;
+  report.rnti_generation_high_water       = 501;
+  report.rnti_leases.push_back({to_rnti(0x5102), "expired", "expired_by_du", 501});
+  report.rnti_leases.push_back({to_rnti(0x5101), "expired", "expired_by_du", 501});
+
+  EXPECT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+  const auto snapshot = manager.get_snapshot();
+  EXPECT_EQ(snapshot.nof_rnti_orphans_quarantined, 2U);
+  EXPECT_EQ(snapshot.nof_rnti_leases_retire_pending, 2U);
+  ASSERT_EQ(snapshot.rnti_retirement_du_statuses.size(), 1U);
+  EXPECT_TRUE(snapshot.rnti_retirement_du_statuses.front().supported);
+  EXPECT_EQ(snapshot.rnti_retirement_du_statuses.front().generation_high_water, 501U);
+
+  const auto batches = manager.get_pending_rnti_retirement_batches();
+  ASSERT_EQ(batches.size(), 1U);
+  EXPECT_EQ(batches.front().du_index, report.du_index);
+  EXPECT_EQ(batches.front().cell_index, report.cell_index);
+  EXPECT_EQ(batches.front().pci, report.pci);
+  EXPECT_EQ(batches.front().generation_id, 501U);
+  EXPECT_EQ(batches.front().du_connection_generation, 12U);
+  EXPECT_EQ(batches.front().leases, (std::vector<rnti_t>{to_rnti(0x5101), to_rnti(0x5102)}));
+}
+
+TEST(ntn_beam_service_resource_manager, rnti_retirement_is_disabled_when_du_does_not_advertise_support)
+{
+  ntn_beam_service_resource_manager manager;
+
+  ntn_resource_audit_report report;
+  report.du_index                         = uint_to_du_index(3);
+  report.cell_index                       = to_du_cell_index(4);
+  report.pci                              = pci_t{45};
+  report.generation_id                    = 911;
+  report.rnti_snapshot_complete           = true;
+  report.du_connection_generation         = 12;
+  report.rnti_retirement_capability_known = true;
+  report.rnti_retirement_supported        = false;
+  report.rnti_generation_high_water       = 502;
+  report.rnti_leases.push_back({to_rnti(0x5111), "expired", "expired_by_du", 502});
+
+  EXPECT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+  EXPECT_TRUE(manager.get_pending_rnti_retirement_batches().empty());
+  const auto snapshot = manager.get_snapshot();
+  ASSERT_EQ(snapshot.rnti_leases.size(), 1U);
+  EXPECT_EQ(snapshot.rnti_leases.front().state, "orphan_quarantined");
+  ASSERT_EQ(snapshot.rnti_retirement_du_statuses.size(), 1U);
+  EXPECT_TRUE(snapshot.rnti_retirement_du_statuses.front().capability_known);
+  EXPECT_FALSE(snapshot.rnti_retirement_du_statuses.front().supported);
+}
+
+TEST(ntn_beam_service_resource_manager, released_and_unused_rntis_retire_after_one_complete_du_audit)
+{
+  ntn_beam_service_resource_manager manager;
+  manager.set_authoritative_rnti_lease_validation_enabled(true);
+
+  ntn_rnti_lease_pool_update lease_pool;
+  lease_pool.du_index       = uint_to_du_index(0);
+  lease_pool.cell_index     = to_du_cell_index(1);
+  lease_pool.pci            = pci_t{71};
+  lease_pool.analog_beam_id = "ANALOG-ACCESS-071";
+  lease_pool.generation_id  = 601;
+  lease_pool.leases         = {to_rnti(0x5201), to_rnti(0x5202)};
+  apply_lease_pool(manager, lease_pool);
+
+  ntn_access_rnti_ownership_update ownership;
+  ownership.ue_index       = uint_to_ue_index(31);
+  ownership.du_index       = lease_pool.du_index;
+  ownership.cell_index     = lease_pool.cell_index;
+  ownership.pci            = lease_pool.pci;
+  ownership.rnti           = lease_pool.leases.front();
+  ownership.analog_beam_id = lease_pool.analog_beam_id;
+  ASSERT_TRUE(manager.register_access_rnti_ownership(ownership).accepted);
+  manager.remove_ue(ownership.ue_index);
+
+  ntn_resource_audit_report report;
+  report.du_index                         = lease_pool.du_index;
+  report.cell_index                       = lease_pool.cell_index;
+  report.pci                              = lease_pool.pci;
+  report.generation_id                    = 92;
+  report.rnti_snapshot_complete           = true;
+  report.du_connection_generation         = 13;
+  report.rnti_retirement_capability_known = true;
+  report.rnti_retirement_supported        = true;
+  report.rnti_generation_high_water       = lease_pool.generation_id;
+  for (rnti_t rnti : lease_pool.leases) {
+    report.rnti_leases.push_back({rnti, "expired", "expired_by_du", lease_pool.generation_id});
+  }
+
+  EXPECT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+  const auto batches = manager.get_pending_rnti_retirement_batches();
+  ASSERT_EQ(batches.size(), 1U);
+  EXPECT_EQ(batches.front().leases, lease_pool.leases);
+
+  const auto snapshot = manager.get_snapshot();
+  EXPECT_EQ(snapshot.nof_rnti_leases_retire_pending, 2U);
+  EXPECT_EQ(snapshot.nof_rnti_leases_expired, 0U);
+}
+
+TEST(ntn_beam_service_resource_manager, active_access_and_handover_rntis_are_never_retired_from_an_expired_du_record)
+{
+  ntn_beam_service_resource_manager manager;
+  manager.set_authoritative_rnti_lease_validation_enabled(true);
+
+  ntn_rnti_lease_pool_update lease_pool;
+  lease_pool.du_index       = uint_to_du_index(0);
+  lease_pool.cell_index     = to_du_cell_index(1);
+  lease_pool.pci            = pci_t{74};
+  lease_pool.analog_beam_id = "ANALOG-ACCESS-074";
+  lease_pool.generation_id  = 650;
+  lease_pool.leases         = {to_rnti(0x5251), to_rnti(0x5252), to_rnti(0x5253), to_rnti(0x5254), to_rnti(0x5255)};
+  apply_lease_pool(manager, lease_pool);
+
+  ASSERT_TRUE(
+      manager.mark_rnti_offered_in_rar(lease_pool.du_index, lease_pool.cell_index, lease_pool.pci, lease_pool.leases[0])
+          .accepted);
+
+  const auto register_access = [&](ue_index_t ue_index, rnti_t rnti) {
+    ntn_access_rnti_ownership_update ownership;
+    ownership.ue_index       = ue_index;
+    ownership.du_index       = lease_pool.du_index;
+    ownership.cell_index     = lease_pool.cell_index;
+    ownership.pci            = lease_pool.pci;
+    ownership.rnti           = rnti;
+    ownership.analog_beam_id = lease_pool.analog_beam_id;
+    return manager.register_access_rnti_ownership(ownership);
+  };
+  ASSERT_TRUE(register_access(uint_to_ue_index(41), lease_pool.leases[1]).accepted);
+  ASSERT_TRUE(register_access(uint_to_ue_index(42), lease_pool.leases[2]).accepted);
+  manager.release_analog_access_after_ics(uint_to_ue_index(42));
+  ASSERT_TRUE(manager
+                  .reserve_handover_target_rnti(uint_to_ue_index(43),
+                                                lease_pool.du_index,
+                                                lease_pool.cell_index,
+                                                lease_pool.pci,
+                                                lease_pool.analog_beam_id)
+                  .accepted);
+  EXPECT_FALSE(
+      manager.commit_handover_target_rnti(uint_to_ue_index(43), uint_to_ue_index(44), lease_pool.leases[4]).accepted);
+  ASSERT_TRUE(manager
+                  .reserve_handover_target_rnti(uint_to_ue_index(45),
+                                                lease_pool.du_index,
+                                                lease_pool.cell_index,
+                                                lease_pool.pci,
+                                                lease_pool.analog_beam_id)
+                  .accepted);
+  manager.remove_ue(uint_to_ue_index(43));
+  manager.remove_ue(uint_to_ue_index(45));
+
+  ntn_resource_audit_report report;
+  report.du_index                         = lease_pool.du_index;
+  report.cell_index                       = lease_pool.cell_index;
+  report.pci                              = lease_pool.pci;
+  report.generation_id                    = 96;
+  report.rnti_snapshot_complete           = true;
+  report.du_connection_generation         = 15;
+  report.rnti_retirement_capability_known = true;
+  report.rnti_retirement_supported        = true;
+  report.rnti_generation_high_water       = lease_pool.generation_id;
+  for (rnti_t rnti : lease_pool.leases) {
+    report.rnti_leases.push_back({rnti, "expired", "expired_by_du", lease_pool.generation_id});
+  }
+
+  EXPECT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+  EXPECT_TRUE(manager.get_pending_rnti_retirement_batches().empty());
+  const auto snapshot = manager.get_snapshot();
+  EXPECT_EQ(snapshot.nof_rnti_leases_offered_in_rar, 1U);
+  EXPECT_EQ(snapshot.nof_rnti_leases_initial_ul_seen, 1U);
+  EXPECT_EQ(snapshot.nof_rnti_leases_committed, 1U);
+  EXPECT_EQ(snapshot.nof_rnti_leases_conflict, 1U);
+  EXPECT_EQ(std::count_if(snapshot.rnti_leases.begin(),
+                          snapshot.rnti_leases.end(),
+                          [](const auto& lease) { return lease.state == "handover_reserved"; }),
+            1);
+}
+
+TEST(ntn_beam_service_resource_manager,
+     rnti_retirement_waits_for_new_audit_after_rejection_then_allows_higher_generation_reuse)
+{
+  ntn_beam_service_resource_manager manager;
+  manager.set_authoritative_rnti_lease_validation_enabled(true);
+
+  ntn_rnti_lease_pool_update lease_pool;
+  lease_pool.du_index       = uint_to_du_index(0);
+  lease_pool.cell_index     = to_du_cell_index(1);
+  lease_pool.pci            = pci_t{72};
+  lease_pool.analog_beam_id = "ANALOG-ACCESS-072";
+  lease_pool.generation_id  = 701;
+  lease_pool.leases         = {to_rnti(0x5301)};
+  apply_lease_pool(manager, lease_pool);
+
+  ntn_access_rnti_ownership_update ownership;
+  ownership.ue_index       = uint_to_ue_index(32);
+  ownership.du_index       = lease_pool.du_index;
+  ownership.cell_index     = lease_pool.cell_index;
+  ownership.pci            = lease_pool.pci;
+  ownership.rnti           = lease_pool.leases.front();
+  ownership.analog_beam_id = lease_pool.analog_beam_id;
+  ASSERT_TRUE(manager.register_access_rnti_ownership(ownership).accepted);
+  manager.remove_ue(ownership.ue_index);
+
+  ntn_resource_audit_report report;
+  report.du_index                         = lease_pool.du_index;
+  report.cell_index                       = lease_pool.cell_index;
+  report.pci                              = lease_pool.pci;
+  report.generation_id                    = 93;
+  report.rnti_snapshot_complete           = true;
+  report.du_connection_generation         = 14;
+  report.rnti_retirement_capability_known = true;
+  report.rnti_retirement_supported        = true;
+  report.rnti_generation_high_water       = lease_pool.generation_id;
+  report.rnti_leases.push_back({lease_pool.leases.front(), "expired", "expired_by_du", lease_pool.generation_id});
+  ASSERT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+
+  auto batches = manager.get_pending_rnti_retirement_batches();
+  ASSERT_EQ(batches.size(), 1U);
+  ASSERT_TRUE(manager.mark_rnti_retirement_sent(batches.front()));
+
+  ntn_rnti_retirement_batch partial = batches.front();
+  partial.leases.push_back(to_rnti(0x5302));
+  EXPECT_FALSE(manager.mark_rnti_retirement_result(partial, ntn_rnti_retirement_outcome::accepted, "malformed_ack"));
+  EXPECT_TRUE(manager.mark_rnti_retirement_result(
+      batches.front(), ntn_rnti_retirement_outcome::outcome_unknown, "du_response_missing"));
+  EXPECT_TRUE(manager.get_pending_rnti_retirement_batches().empty());
+  EXPECT_EQ(manager.get_snapshot().nof_rnti_leases_retire_waiting_audit, 1U);
+
+  ++report.generation_id;
+  ASSERT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+  batches = manager.get_pending_rnti_retirement_batches();
+  ASSERT_EQ(batches.size(), 1U);
+  ASSERT_TRUE(manager.mark_rnti_retirement_sent(batches.front()));
+  ASSERT_TRUE(manager.mark_rnti_retirement_result(
+      batches.front(), ntn_rnti_retirement_outcome::definitively_rejected, "du_retire_rejected"));
+  EXPECT_EQ(manager.get_snapshot().nof_rnti_retirement_rejected, 1U);
+
+  ++report.generation_id;
+  ASSERT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+  batches = manager.get_pending_rnti_retirement_batches();
+  ASSERT_EQ(batches.size(), 1U);
+  ASSERT_TRUE(manager.mark_rnti_retirement_sent(batches.front()));
+  ASSERT_TRUE(
+      manager.mark_rnti_retirement_result(batches.front(), ntn_rnti_retirement_outcome::accepted, "du_retire_ack"));
+  EXPECT_FALSE(manager.is_rnti_excluded_for_du(lease_pool.du_index, lease_pool.leases.front()));
+
+  ntn_rnti_lease_pool_update stale_reuse  = lease_pool;
+  const auto                 stale_result = manager.reserve_rnti_leases(stale_reuse);
+  EXPECT_FALSE(stale_result.accepted);
+  EXPECT_EQ(stale_result.reason, "stale_generation");
+
+  ntn_rnti_lease_pool_update safe_reuse = lease_pool;
+  ++safe_reuse.generation_id;
+  EXPECT_TRUE(manager.reserve_rnti_leases(safe_reuse).accepted);
+  const auto snapshot = manager.get_snapshot();
+  EXPECT_EQ(snapshot.nof_rnti_leases_retired, 1U);
+  EXPECT_EQ(snapshot.nof_rnti_leases_reused, 1U);
+  EXPECT_EQ(snapshot.nof_rnti_retirement_rejected, 1U);
+}
+
+TEST(ntn_beam_service_resource_manager, du_disconnect_invalidates_retirement_and_rejects_old_connection_audit)
+{
+  ntn_beam_service_resource_manager manager;
+
+  ntn_resource_audit_report report;
+  report.du_index                         = uint_to_du_index(4);
+  report.cell_index                       = to_du_cell_index(5);
+  report.pci                              = pci_t{73};
+  report.generation_id                    = 95;
+  report.rnti_snapshot_complete           = true;
+  report.du_connection_generation         = 20;
+  report.rnti_retirement_capability_known = true;
+  report.rnti_retirement_supported        = true;
+  report.rnti_generation_high_water       = 801;
+  report.rnti_leases.push_back({to_rnti(0x5401), "expired", "expired_by_du", 801});
+  ASSERT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+  const auto old_batch = manager.get_pending_rnti_retirement_batches().front();
+  ASSERT_TRUE(manager.mark_rnti_retirement_sent(old_batch));
+
+  manager.invalidate_rnti_retirement_for_du(report.du_index);
+  EXPECT_FALSE(manager.mark_rnti_retirement_result(old_batch, ntn_rnti_retirement_outcome::accepted, "late_ack"));
+  EXPECT_TRUE(manager.get_pending_rnti_retirement_batches().empty());
+
+  const auto stale = manager.handle_resource_audit_report(report);
+  ASSERT_EQ(stale.repairs.size(), 1U);
+  EXPECT_EQ(stale.repairs.front().reason, "stale_du_connection_generation");
+
+  report.du_connection_generation = 21;
+  ++report.generation_id;
+  --report.rnti_generation_high_water;
+  const auto reconnect_regression = manager.handle_resource_audit_report(report);
+  ASSERT_EQ(reconnect_regression.repairs.size(), 1U);
+  EXPECT_EQ(reconnect_regression.repairs.front().reason, "rnti_generation_high_water_regressed");
+
+  ++report.rnti_generation_high_water;
+  EXPECT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+  ASSERT_EQ(manager.get_pending_rnti_retirement_batches().size(), 1U);
+  EXPECT_EQ(manager.get_pending_rnti_retirement_batches().front().du_connection_generation, 21U);
+
+  ntn_resource_audit_report regressed = report;
+  --regressed.rnti_generation_high_water;
+  const auto regression = manager.handle_resource_audit_report(regressed);
+  ASSERT_EQ(regression.repairs.size(), 1U);
+  EXPECT_EQ(regression.repairs.front().reason, "rnti_generation_high_water_regressed");
+}
+
+TEST(ntn_beam_service_resource_manager,
+     rnti_retirement_incomplete_audit_connection_is_invalidated_before_late_complete_response)
+{
+  ntn_beam_service_resource_manager manager;
+
+  ntn_resource_audit_report report;
+  report.du_index                         = uint_to_du_index(4);
+  report.cell_index                       = to_du_cell_index(6);
+  report.pci                              = pci_t{74};
+  report.generation_id                    = 96;
+  report.rnti_snapshot_complete           = false;
+  report.du_connection_generation         = 25;
+  report.rnti_retirement_capability_known = true;
+  report.rnti_retirement_supported        = true;
+  report.rnti_generation_high_water       = 850;
+  EXPECT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+
+  auto snapshot = manager.get_snapshot();
+  ASSERT_EQ(snapshot.rnti_retirement_du_statuses.size(), 1U);
+  EXPECT_EQ(snapshot.rnti_retirement_du_statuses.front().du_connection_generation, 25U);
+  EXPECT_TRUE(snapshot.rnti_retirement_du_statuses.front().capability_known);
+  EXPECT_FALSE(snapshot.rnti_retirement_du_statuses.front().complete_audit_seen);
+
+  manager.invalidate_rnti_retirement_for_du(report.du_index);
+  report.rnti_snapshot_complete = true;
+  ++report.generation_id;
+  const auto stale = manager.handle_resource_audit_report(report);
+  ASSERT_EQ(stale.repairs.size(), 1U);
+  EXPECT_EQ(stale.repairs.front().reason, "stale_du_connection_generation");
+
+  ++report.du_connection_generation;
+  ++report.generation_id;
+  EXPECT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+  snapshot = manager.get_snapshot();
+  ASSERT_EQ(snapshot.rnti_retirement_du_statuses.size(), 1U);
+  EXPECT_EQ(snapshot.rnti_retirement_du_statuses.front().du_connection_generation, 26U);
+  EXPECT_TRUE(snapshot.rnti_retirement_du_statuses.front().complete_audit_seen);
+  EXPECT_EQ(snapshot.rnti_retirement_du_statuses.front().generation_high_water, 850U);
+}
+
+TEST(ntn_beam_service_resource_manager, lost_retirement_ack_is_confirmed_by_absence_after_reconnect)
+{
+  ntn_beam_service_resource_manager manager;
+
+  ntn_resource_audit_report report;
+  report.du_index                         = uint_to_du_index(5);
+  report.cell_index                       = to_du_cell_index(6);
+  report.pci                              = pci_t{75};
+  report.generation_id                    = 101;
+  report.rnti_snapshot_complete           = true;
+  report.du_connection_generation         = 30;
+  report.rnti_retirement_capability_known = true;
+  report.rnti_retirement_supported        = true;
+  report.rnti_generation_high_water       = 901;
+  report.rnti_leases.push_back({to_rnti(0x5501), "expired", "expired_by_du", 901});
+  ASSERT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+
+  const auto pending_batches = manager.get_pending_rnti_retirement_batches();
+  ASSERT_EQ(pending_batches.size(), 1U);
+  const ntn_rnti_retirement_batch sent_batch = pending_batches.front();
+  ASSERT_TRUE(manager.mark_rnti_retirement_sent(sent_batch));
+  ASSERT_TRUE(manager.mark_rnti_retirement_result(
+      sent_batch, ntn_rnti_retirement_outcome::outcome_unknown, "retirement_result_timeout"));
+  manager.invalidate_rnti_retirement_for_du(report.du_index);
+
+  auto snapshot = manager.get_snapshot();
+  ASSERT_EQ(snapshot.rnti_leases.size(), 1U);
+  EXPECT_EQ(snapshot.rnti_leases.front().state, "retire_waiting_audit");
+  EXPECT_TRUE(manager.is_rnti_excluded_for_du(report.du_index, to_rnti(0x5501)));
+
+  report.rnti_leases.clear();
+  const auto stale = manager.handle_resource_audit_report(report);
+  ASSERT_EQ(stale.repairs.size(), 1U);
+  EXPECT_EQ(stale.repairs.front().reason, "stale_du_connection_generation");
+  EXPECT_EQ(manager.get_snapshot().nof_rnti_leases_retired, 0U);
+
+  report.du_connection_generation = 31;
+  ++report.generation_id;
+  EXPECT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+  snapshot = manager.get_snapshot();
+  EXPECT_TRUE(snapshot.rnti_leases.empty());
+  EXPECT_EQ(snapshot.nof_rnti_leases_retired, 1U);
+  EXPECT_EQ(snapshot.nof_rnti_orphans_quarantined, 0U);
+  EXPECT_EQ(snapshot.rnti_retirement_last_reason, "retirement_confirmed_absent_by_complete_audit");
+  EXPECT_FALSE(manager.is_rnti_excluded_for_du(report.du_index, to_rnti(0x5501)));
+
+  ntn_rnti_lease_pool_update reuse;
+  reuse.du_index         = report.du_index;
+  reuse.cell_index       = report.cell_index;
+  reuse.pci              = report.pci;
+  reuse.analog_beam_id   = "ANALOG-ACCESS-075";
+  reuse.generation_id    = 901;
+  reuse.leases           = {to_rnti(0x5501)};
+  const auto stale_reuse = manager.reserve_rnti_leases(reuse);
+  EXPECT_FALSE(stale_reuse.accepted);
+  EXPECT_EQ(stale_reuse.reason, "stale_generation");
+
+  ++reuse.generation_id;
+  EXPECT_TRUE(manager.reserve_rnti_leases(reuse).accepted);
+  EXPECT_EQ(manager.get_snapshot().nof_rnti_leases_reused, 1U);
+
+  report.du_connection_generation = 30;
+  const auto old_connection       = manager.handle_resource_audit_report(report);
+  ASSERT_EQ(old_connection.repairs.size(), 1U);
+  EXPECT_EQ(old_connection.repairs.front().reason, "stale_du_connection_generation");
+}
+
+TEST(ntn_beam_service_resource_manager, partially_absent_retirement_batch_remains_atomically_quarantined)
+{
+  ntn_beam_service_resource_manager manager;
+
+  ntn_resource_audit_report report;
+  report.du_index                         = uint_to_du_index(5);
+  report.cell_index                       = to_du_cell_index(7);
+  report.pci                              = pci_t{76};
+  report.generation_id                    = 102;
+  report.rnti_snapshot_complete           = true;
+  report.du_connection_generation         = 40;
+  report.rnti_retirement_capability_known = true;
+  report.rnti_retirement_supported        = true;
+  report.rnti_generation_high_water       = 902;
+  report.rnti_leases.push_back({to_rnti(0x5511), "expired", "expired_by_du", 902});
+  report.rnti_leases.push_back({to_rnti(0x5512), "expired", "expired_by_du", 902});
+  ASSERT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+
+  const auto pending_batches = manager.get_pending_rnti_retirement_batches();
+  ASSERT_EQ(pending_batches.size(), 1U);
+  const ntn_rnti_retirement_batch sent_batch = pending_batches.front();
+  ASSERT_EQ(sent_batch.leases.size(), 2U);
+  ASSERT_TRUE(manager.mark_rnti_retirement_sent(sent_batch));
+  manager.invalidate_rnti_retirement_for_du(report.du_index);
+
+  report.du_connection_generation = 41;
+  ++report.generation_id;
+  report.rnti_leases.erase(report.rnti_leases.begin());
+  EXPECT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+
+  const auto snapshot = manager.get_snapshot();
+  ASSERT_EQ(snapshot.rnti_leases.size(), 2U);
+  EXPECT_EQ(snapshot.nof_rnti_leases_retired, 0U);
+  EXPECT_EQ(snapshot.nof_rnti_leases_retire_waiting_audit, 2U);
+  EXPECT_TRUE(manager.get_pending_rnti_retirement_batches().empty());
+  EXPECT_TRUE(manager.is_rnti_excluded_for_du(report.du_index, to_rnti(0x5511)));
+  EXPECT_TRUE(manager.is_rnti_excluded_for_du(report.du_index, to_rnti(0x5512)));
+  EXPECT_EQ(snapshot.rnti_retirement_last_reason, "partial_retirement_visibility_in_complete_audit");
+
+  report.rnti_leases.clear();
+  report.rnti_leases.push_back({to_rnti(0x5511), "expired", "expired_by_du", 902});
+  report.rnti_leases.push_back({to_rnti(0x5512), "expired", "expired_by_du", 902});
+  ++report.generation_id;
+  ASSERT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+  const auto retry_batches = manager.get_pending_rnti_retirement_batches();
+  ASSERT_EQ(retry_batches.size(), 1U);
+  ASSERT_EQ(retry_batches.front().leases.size(), 2U);
+  ASSERT_TRUE(manager.mark_rnti_retirement_sent(retry_batches.front()));
+  ASSERT_TRUE(manager.mark_rnti_retirement_result(
+      retry_batches.front(), ntn_rnti_retirement_outcome::accepted, "retry_confirmed"));
+  EXPECT_EQ(manager.get_snapshot().nof_rnti_leases_retired, 2U);
+
+  ntn_rnti_lease_pool_update reuse;
+  reuse.du_index       = report.du_index;
+  reuse.cell_index     = report.cell_index;
+  reuse.pci            = report.pci;
+  reuse.analog_beam_id = "ANALOG-ACCESS-076";
+  reuse.generation_id  = 903;
+  reuse.leases         = {to_rnti(0x5511), to_rnti(0x5512)};
+  ASSERT_TRUE(manager.reserve_rnti_leases(reuse).accepted);
+  manager.mark_rnti_lease_pool_sent_to_du(reuse);
+
+  report.rnti_generation_high_water = reuse.generation_id;
+  report.rnti_leases.clear();
+  for (rnti_t rnti : reuse.leases) {
+    report.rnti_leases.push_back({rnti, "pending", "applied_by_du", reuse.generation_id});
+  }
+  ++report.generation_id;
+  EXPECT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+  const auto reused_snapshot = manager.get_snapshot();
+  EXPECT_EQ(reused_snapshot.nof_rnti_leases_retired, 2U);
+  EXPECT_EQ(reused_snapshot.nof_rnti_leases_reused, 2U);
+  EXPECT_EQ(reused_snapshot.nof_rnti_leases_retire_waiting_audit, 0U);
+  EXPECT_EQ(reused_snapshot.nof_rnti_leases_available, 2U);
+}
+
+TEST(ntn_beam_service_resource_manager, unknown_retirement_outcome_is_confirmed_by_same_connection_audit)
+{
+  ntn_beam_service_resource_manager manager;
+
+  ntn_resource_audit_report report;
+  report.du_index                         = uint_to_du_index(5);
+  report.cell_index                       = to_du_cell_index(8);
+  report.pci                              = pci_t{79};
+  report.generation_id                    = 105;
+  report.rnti_snapshot_complete           = true;
+  report.du_connection_generation         = 70;
+  report.rnti_retirement_capability_known = true;
+  report.rnti_retirement_supported        = true;
+  report.rnti_generation_high_water       = 905;
+  report.rnti_leases.push_back({to_rnti(0x5513), "expired", "expired_by_du", 905});
+  ASSERT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+
+  const auto batches = manager.get_pending_rnti_retirement_batches();
+  ASSERT_EQ(batches.size(), 1U);
+  ASSERT_TRUE(manager.mark_rnti_retirement_sent(batches.front()));
+  ASSERT_TRUE(manager.mark_rnti_retirement_result(
+      batches.front(), ntn_rnti_retirement_outcome::outcome_unknown, "retirement_ack_missing"));
+
+  report.rnti_leases.clear();
+  ++report.generation_id;
+  EXPECT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+  const auto snapshot = manager.get_snapshot();
+  EXPECT_TRUE(snapshot.rnti_leases.empty());
+  EXPECT_EQ(snapshot.nof_rnti_leases_retired, 1U);
+  EXPECT_EQ(snapshot.rnti_retirement_last_reason, "retirement_confirmed_absent_by_complete_audit");
+}
+
+TEST(ntn_beam_service_resource_manager, empty_du_ledger_reset_requires_pool_reinstall_before_retirement_recovery)
+{
+  ntn_beam_service_resource_manager manager;
+
+  ntn_rnti_lease_pool_update active_pool;
+  active_pool.du_index       = uint_to_du_index(8);
+  active_pool.cell_index     = to_du_cell_index(10);
+  active_pool.pci            = pci_t{80};
+  active_pool.analog_beam_id = "ANALOG-ACCESS-080";
+  active_pool.generation_id  = 1000;
+  active_pool.leases         = {to_rnti(0x5541)};
+  apply_lease_pool(manager, active_pool);
+
+  ntn_resource_audit_report report;
+  report.du_index                         = active_pool.du_index;
+  report.cell_index                       = active_pool.cell_index;
+  report.pci                              = active_pool.pci;
+  report.generation_id                    = 106;
+  report.rnti_snapshot_complete           = true;
+  report.du_connection_generation         = 80;
+  report.rnti_retirement_capability_known = true;
+  report.rnti_retirement_supported        = true;
+  report.rnti_generation_high_water       = active_pool.generation_id;
+  report.rnti_leases.push_back({active_pool.leases.front(), "pending", "applied_by_du", active_pool.generation_id});
+  report.rnti_leases.push_back({to_rnti(0x5542), "expired", "expired_by_du", 999});
+  ASSERT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+
+  const auto retirement_batches = manager.get_pending_rnti_retirement_batches();
+  ASSERT_EQ(retirement_batches.size(), 1U);
+  ASSERT_TRUE(manager.mark_rnti_retirement_sent(retirement_batches.front()));
+  ASSERT_TRUE(manager.mark_rnti_retirement_result(
+      retirement_batches.front(), ntn_rnti_retirement_outcome::outcome_unknown, "retirement_ack_missing"));
+
+  ntn_resource_repair old_repair;
+  old_repair.action                   = ntn_resource_repair_action::resend_rnti_lease_pool;
+  old_repair.du_index                 = active_pool.du_index;
+  old_repair.cell_index               = active_pool.cell_index;
+  old_repair.pci                      = active_pool.pci;
+  old_repair.analog_beam_id           = active_pool.analog_beam_id;
+  old_repair.reason                   = "old_connection_repair";
+  old_repair.rnti_lease_generation_id = active_pool.generation_id;
+  old_repair.rnti_leases              = active_pool.leases;
+  EXPECT_EQ(manager.queue_resource_repair(old_repair, report.generation_id).state, "queued");
+  manager.mark_resource_repair_sent(old_repair);
+
+  manager.invalidate_rnti_retirement_for_du(report.du_index);
+  auto       snapshot     = manager.get_snapshot();
+  const auto active_lease = std::find_if(snapshot.rnti_leases.begin(),
+                                         snapshot.rnti_leases.end(),
+                                         [&](const auto& lease) { return lease.rnti == active_pool.leases.front(); });
+  ASSERT_NE(active_lease, snapshot.rnti_leases.end());
+  EXPECT_EQ(active_lease->distribution_state, "sent_to_du");
+  EXPECT_EQ(active_lease->distribution_reason, "ack_unknown:du_disconnected");
+  EXPECT_FALSE(manager.is_access_rnti_pool_ready(
+      active_pool.du_index, active_pool.cell_index, active_pool.pci, active_pool.analog_beam_id));
+  ASSERT_EQ(snapshot.resource_repairs.size(), 1U);
+  EXPECT_EQ(snapshot.resource_repairs.front().state, "invalidated");
+
+  ntn_resource_audit_report invalid_reset = report;
+  invalid_reset.du_connection_generation  = 81;
+  ++invalid_reset.generation_id;
+  invalid_reset.rnti_generation_high_water = 0;
+  const auto nonempty_reset                = manager.handle_resource_audit_report(invalid_reset);
+  ASSERT_EQ(nonempty_reset.repairs.size(), 1U);
+  EXPECT_EQ(nonempty_reset.repairs.front().reason, "rnti_generation_high_water_regressed");
+
+  invalid_reset.rnti_leases.clear();
+  invalid_reset.rnti_generation_high_water = active_pool.generation_id - 1;
+  ++invalid_reset.generation_id;
+  const auto lower_nonzero = manager.handle_resource_audit_report(invalid_reset);
+  ASSERT_EQ(lower_nonzero.repairs.size(), 1U);
+  EXPECT_EQ(lower_nonzero.repairs.front().reason, "rnti_generation_high_water_regressed");
+
+  invalid_reset.rnti_generation_high_water = 0;
+  ++invalid_reset.generation_id;
+  const auto ledger_reset = manager.handle_resource_audit_report(invalid_reset);
+  ASSERT_EQ(ledger_reset.repairs.size(), 1U);
+  EXPECT_EQ(ledger_reset.repairs.front().action, ntn_resource_repair_action::resend_rnti_lease_pool);
+  EXPECT_EQ(ledger_reset.repairs.front().rnti_leases, active_pool.leases);
+
+  snapshot = manager.get_snapshot();
+  EXPECT_EQ(snapshot.nof_rnti_leases_retired, 0U);
+  ASSERT_EQ(snapshot.rnti_retirement_du_statuses.size(), 1U);
+  EXPECT_EQ(snapshot.rnti_retirement_du_statuses.front().generation_high_water, active_pool.generation_id);
+  EXPECT_EQ(manager.queue_resource_repair(ledger_reset.repairs.front(), invalid_reset.generation_id).state, "queued");
+
+  manager.mark_rnti_lease_pool_sent_to_du(active_pool);
+  f1ap_ntn_rnti_lease_pool_result reinstall_result;
+  reinstall_result.generation_id   = active_pool.generation_id;
+  reinstall_result.accepted        = true;
+  reinstall_result.accepted_leases = active_pool.leases;
+  ASSERT_TRUE(manager.mark_rnti_lease_pool_distribution_result(active_pool, reinstall_result));
+
+  invalid_reset.rnti_generation_high_water = active_pool.generation_id;
+  invalid_reset.rnti_leases.push_back(
+      {active_pool.leases.front(), "pending", "applied_by_du", active_pool.generation_id});
+  ++invalid_reset.generation_id;
+  EXPECT_TRUE(manager.handle_resource_audit_report(invalid_reset).repairs.empty());
+  snapshot = manager.get_snapshot();
+  EXPECT_EQ(snapshot.nof_rnti_leases_retired, 1U);
+  EXPECT_EQ(snapshot.nof_rnti_leases_available, 1U);
+  EXPECT_FALSE(manager.is_rnti_excluded_for_du(report.du_index, to_rnti(0x5542)));
+}
+
+TEST(ntn_beam_service_resource_manager, missing_never_sent_orphan_is_not_confirmed_as_retired_after_reconnect)
+{
+  ntn_beam_service_resource_manager manager;
+
+  ntn_resource_audit_report report;
+  report.du_index                         = uint_to_du_index(6);
+  report.cell_index                       = to_du_cell_index(8);
+  report.pci                              = pci_t{77};
+  report.generation_id                    = 103;
+  report.rnti_snapshot_complete           = true;
+  report.du_connection_generation         = 50;
+  report.rnti_retirement_capability_known = true;
+  report.rnti_retirement_supported        = true;
+  report.rnti_generation_high_water       = 903;
+  report.rnti_leases.push_back({to_rnti(0x5521), "expired", "expired_by_du", 903});
+  ASSERT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+  ASSERT_EQ(manager.get_pending_rnti_retirement_batches().size(), 1U);
+
+  manager.invalidate_rnti_retirement_for_du(report.du_index);
+  report.rnti_leases.clear();
+  report.du_connection_generation = 51;
+  ++report.generation_id;
+  EXPECT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+
+  const auto snapshot = manager.get_snapshot();
+  ASSERT_EQ(snapshot.rnti_leases.size(), 1U);
+  EXPECT_EQ(snapshot.rnti_leases.front().state, "orphan_quarantined");
+  EXPECT_EQ(snapshot.nof_rnti_leases_retired, 0U);
+  EXPECT_TRUE(manager.is_rnti_excluded_for_du(report.du_index, to_rnti(0x5521)));
+}
+
+TEST(ntn_beam_service_resource_manager, known_non_successful_retirement_outcomes_cannot_use_absence_recovery)
+{
+  const std::vector<ntn_rnti_retirement_outcome> outcomes = {ntn_rnti_retirement_outcome::definitively_rejected,
+                                                             ntn_rnti_retirement_outcome::not_sent};
+
+  for (const ntn_rnti_retirement_outcome outcome : outcomes) {
+    SCOPED_TRACE(outcome == ntn_rnti_retirement_outcome::not_sent ? "not_sent" : "definitively_rejected");
+    ntn_beam_service_resource_manager manager;
+
+    ntn_resource_audit_report report;
+    report.du_index                         = uint_to_du_index(7);
+    report.cell_index                       = to_du_cell_index(9);
+    report.pci                              = pci_t{78};
+    report.generation_id                    = 104;
+    report.rnti_snapshot_complete           = true;
+    report.du_connection_generation         = 60;
+    report.rnti_retirement_capability_known = true;
+    report.rnti_retirement_supported        = true;
+    report.rnti_generation_high_water       = 904;
+    report.rnti_leases.push_back({to_rnti(0x5531), "expired", "expired_by_du", 904});
+    ASSERT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+
+    const auto batches = manager.get_pending_rnti_retirement_batches();
+    ASSERT_EQ(batches.size(), 1U);
+    ASSERT_TRUE(manager.mark_rnti_retirement_sent(batches.front()));
+    ASSERT_TRUE(manager.mark_rnti_retirement_result(batches.front(), outcome, "known_non_success"));
+    manager.invalidate_rnti_retirement_for_du(report.du_index);
+
+    report.rnti_leases.clear();
+    report.du_connection_generation = 61;
+    ++report.generation_id;
+    EXPECT_TRUE(manager.handle_resource_audit_report(report).repairs.empty());
+
+    const auto snapshot = manager.get_snapshot();
+    ASSERT_EQ(snapshot.rnti_leases.size(), 1U);
+    EXPECT_EQ(snapshot.nof_rnti_leases_retired, 0U);
+    EXPECT_TRUE(manager.is_rnti_excluded_for_du(report.du_index, to_rnti(0x5531)));
+  }
 }
 
 TEST(ntn_beam_service_resource_manager, accepted_complete_audit_resolves_prior_generic_audit_rejection)

@@ -129,20 +129,25 @@ static void record_ntn_calendar_prepare(const f1ap_message&      request,
   }
 }
 
-static f1ap_message
-make_gnb_du_resource_coordination_response(const f1ap_message&      request,
-                                           bool                     ntn_calendar_query_stays_ready,
-                                           bool                     ntn_calendar_query_reports_applied_early,
-                                           bool                     ntn_calendar_query_reports_zero_intents,
-                                           bool                     ntn_calendar_prepare_rejects,
-                                           bool                     ntn_calendar_prepare_reports_ready,
-                                           bool                     ntn_calendar_preflight_incomplete,
-                                           bool                     ntn_calendar_preflight_unsupported,
-                                           bool                     ntn_resource_audit_rejects,
-                                           std::array<uint16_t, 2>& last_ntn_calendar_intents_per_cell,
-                                           std::array<f1ap_ntn_access_calendar_preflight_report, 2>&
-                                               last_ntn_calendar_preflight_reports,
-                                           unsigned& ntn_calendar_clear_requests)
+static f1ap_message make_gnb_du_resource_coordination_response(
+    const f1ap_message&                                       request,
+    bool                                                      ntn_calendar_query_stays_ready,
+    bool                                                      ntn_calendar_query_reports_applied_early,
+    bool                                                      ntn_calendar_query_reports_zero_intents,
+    bool                                                      ntn_calendar_prepare_rejects,
+    bool                                                      ntn_calendar_prepare_reports_ready,
+    bool                                                      ntn_calendar_preflight_incomplete,
+    bool                                                      ntn_calendar_preflight_unsupported,
+    bool                                                      ntn_resource_audit_rejects,
+    bool                                                      ntn_resource_audit_rnti_snapshot_complete,
+    bool                                                      ntn_resource_audit_retirement_supported,
+    bool                                                      ntn_resource_audit_legacy_only,
+    bool                                                      ntn_rnti_retirement_rejects,
+    uint32_t&                                                 ntn_resource_audit_rnti_generation_high_water,
+    std::vector<f1ap_ntn_resource_audit_rnti_lease>&          ntn_resource_audit_rnti_leases,
+    std::array<uint16_t, 2>&                                  last_ntn_calendar_intents_per_cell,
+    std::array<f1ap_ntn_access_calendar_preflight_report, 2>& last_ntn_calendar_preflight_reports,
+    unsigned&                                                 ntn_calendar_clear_requests)
 {
   record_ntn_calendar_prepare(request,
                               ntn_calendar_preflight_incomplete,
@@ -213,9 +218,37 @@ make_gnb_du_resource_coordination_response(const f1ap_message&      request,
   } else if (update.has_value()) {
     f1ap_ntn_rnti_lease_pool_result result;
     result.generation_id   = update->generation_id;
-    result.accepted        = true;
-    result.accepted_leases = update->leases;
-    result.reject_reason   = "accepted_by_mock_du";
+    const bool retirement_rejected =
+        update->operation == f1ap_ntn_rnti_lease_pool_operation::retire && ntn_rnti_retirement_rejects;
+    result.accepted        = !retirement_rejected;
+    result.accepted_leases = retirement_rejected ? std::vector<rnti_t>{} : update->leases;
+    result.rejected_leases = retirement_rejected ? update->leases : std::vector<rnti_t>{};
+    result.reject_reason   = retirement_rejected ? "retirement_rejected_by_mock_du" : "accepted_by_mock_du";
+    if (result.accepted) {
+      ntn_resource_audit_rnti_generation_high_water =
+          std::max(ntn_resource_audit_rnti_generation_high_water, update->generation_id);
+      if (update->operation == f1ap_ntn_rnti_lease_pool_operation::retire) {
+        for (rnti_t retired : update->leases) {
+          ntn_resource_audit_rnti_leases.erase(std::remove_if(ntn_resource_audit_rnti_leases.begin(),
+                                                              ntn_resource_audit_rnti_leases.end(),
+                                                              [retired, &update](const auto& lease) {
+                                                                return lease.rnti == retired &&
+                                                                       lease.generation_id == update->generation_id;
+                                                              }),
+                                               ntn_resource_audit_rnti_leases.end());
+        }
+      } else if (update->operation == f1ap_ntn_rnti_lease_pool_operation::add ||
+                 update->operation == f1ap_ntn_rnti_lease_pool_operation::replace) {
+        if (update->operation == f1ap_ntn_rnti_lease_pool_operation::replace) {
+          ntn_resource_audit_rnti_leases.clear();
+        }
+        for (rnti_t lease : update->leases) {
+          ntn_resource_audit_rnti_leases.push_back({lease, "pending", "applied_by_du", update->generation_id});
+        }
+      } else if (update->operation == f1ap_ntn_rnti_lease_pool_operation::clear) {
+        ntn_resource_audit_rnti_leases.clear();
+      }
+    }
     response_container     = encode_f1ap_ntn_rnti_lease_pool_result(result);
   } else if (sib19_update.has_value()) {
     f1ap_ntn_sib19_broadcast_result result;
@@ -226,13 +259,26 @@ make_gnb_du_resource_coordination_response(const f1ap_message&      request,
     result.reject_reason = sib19_update->operation == f1ap_ntn_sib19_broadcast_operation::clear ? "cleared" : "applied";
     response_container   = encode_f1ap_ntn_sib19_broadcast_result(result);
   } else if (audit_request.has_value()) {
-    f1ap_ntn_resource_audit_result result;
-    result.generation_id             = audit_request->generation_id;
-    result.accepted                  = !ntn_resource_audit_rejects;
-    result.rnti_snapshot_complete    = false;
-    result.ue_slot_snapshot_complete = false;
-    result.reject_reason = ntn_resource_audit_rejects ? "rejected_by_mock_du" : "snapshot_unavailable_in_mock_du";
-    response_container               = encode_f1ap_ntn_resource_audit_result(result);
+    if (audit_request->request_retirement_metadata && ntn_resource_audit_legacy_only) {
+      f1ap_ntn_rnti_lease_pool_result result;
+      result.accepted      = false;
+      result.reject_reason = "malformed_ntn_rnti_lease_pool_update";
+      response_container   = encode_f1ap_ntn_rnti_lease_pool_result(result);
+    } else {
+      f1ap_ntn_resource_audit_result result;
+      result.generation_id               = audit_request->generation_id;
+      result.accepted                    = !ntn_resource_audit_rejects;
+      result.rnti_snapshot_complete      = ntn_resource_audit_rnti_snapshot_complete;
+      result.ue_slot_snapshot_complete   = false;
+      result.retirement_metadata_present = audit_request->request_retirement_metadata;
+      result.retire_supported = audit_request->request_retirement_metadata && ntn_resource_audit_retirement_supported;
+      result.rnti_generation_high_water = ntn_resource_audit_rnti_generation_high_water;
+      result.rnti_leases                = ntn_resource_audit_rnti_leases;
+      result.reject_reason = ntn_resource_audit_rejects                  ? "rejected_by_mock_du"
+                             : ntn_resource_audit_rnti_snapshot_complete ? "accepted_by_mock_du"
+                                                                         : "snapshot_unavailable_in_mock_du";
+      response_container   = encode_f1ap_ntn_resource_audit_result(result);
+    }
   } else {
     f1ap_ntn_rnti_lease_pool_result result;
     result.accepted      = false;
@@ -260,6 +306,8 @@ cu_cp_test_environment::cu_cp_test_environment(cu_cp_test_env_params params_) :
   if (params.ntn_recovered_calendar_preflight_reports.has_value()) {
     last_ntn_calendar_preflight_reports = *params.ntn_recovered_calendar_preflight_reports;
   }
+  ntn_resource_audit_rnti_generation_high_water = params.ntn_resource_audit_rnti_generation_high_water;
+  ntn_resource_audit_rnti_leases                = params.ntn_resource_audit_rnti_leases;
   // Initialize logging
   test_logger.set_level(srslog::basic_levels::debug);
   cu_cp_logger.set_level(srslog::basic_levels::debug);
@@ -425,7 +473,7 @@ cu_cp_test_environment::cu_cp_test_environment(cu_cp_test_env_params params_) :
       std::chrono::milliseconds(10000); // procedure timeouts should only occur intentionally
 
   // > F1AP config
-  cu_cp_cfg.f1ap.proc_timeout = std::chrono::milliseconds(10000); // procedure timeouts should only occur intentionally
+  cu_cp_cfg.f1ap.proc_timeout = params.f1ap_proc_timeout; // procedure timeouts should only occur intentionally
 
   // > E1AP config
   cu_cp_cfg.e1ap.proc_timeout = std::chrono::milliseconds(10000); // procedure timeouts should only occur intentionally
@@ -529,6 +577,12 @@ bool cu_cp_test_environment::wait_for_f1ap_tx_pdu(unsigned du_idx, f1ap_message&
                                                        params.ntn_calendar_preflight_incomplete,
                                                        params.ntn_calendar_preflight_unsupported,
                                                        params.ntn_resource_audit_rejects,
+                                                       params.ntn_resource_audit_rnti_snapshot_complete,
+                                                       params.ntn_resource_audit_retirement_supported,
+                                                       params.ntn_resource_audit_legacy_only,
+                                                       params.ntn_rnti_retirement_rejects,
+                                                       ntn_resource_audit_rnti_generation_high_water,
+                                                       ntn_resource_audit_rnti_leases,
                                                        last_ntn_calendar_intents_per_cell,
                                                        last_ntn_calendar_preflight_reports,
                                                        ntn_calendar_clear_requests));
@@ -571,9 +625,41 @@ void cu_cp_test_environment::respond_to_f1ap_resource_coordination_request(unsig
                                                                       params.ntn_calendar_preflight_incomplete,
                                                                       params.ntn_calendar_preflight_unsupported,
                                                                       params.ntn_resource_audit_rejects,
+                                                                      params.ntn_resource_audit_rnti_snapshot_complete,
+                                                                      params.ntn_resource_audit_retirement_supported,
+                                                                      params.ntn_resource_audit_legacy_only,
+                                                                      params.ntn_rnti_retirement_rejects,
+                                                                      ntn_resource_audit_rnti_generation_high_water,
+                                                                      ntn_resource_audit_rnti_leases,
                                                                       last_ntn_calendar_intents_per_cell,
                                                                       last_ntn_calendar_preflight_reports,
                                                                       ntn_calendar_clear_requests));
+}
+
+void cu_cp_test_environment::apply_f1ap_resource_coordination_request_without_response(unsigned            du_idx,
+                                                                                       const f1ap_message& request)
+{
+  report_fatal_error_if_not(dus.size() >= du_idx and dus[du_idx] != nullptr, "DU index out of range");
+  report_fatal_error_if_not(is_gnb_du_resource_coordination_request(request),
+                            "Expected GNB-DU Resource Coordination Request");
+  (void)make_gnb_du_resource_coordination_response(request,
+                                                   params.ntn_calendar_query_stays_ready,
+                                                   params.ntn_calendar_query_reports_applied_early,
+                                                   params.ntn_calendar_query_reports_zero_intents,
+                                                   params.ntn_calendar_prepare_rejects,
+                                                   params.ntn_calendar_prepare_reports_ready,
+                                                   params.ntn_calendar_preflight_incomplete,
+                                                   params.ntn_calendar_preflight_unsupported,
+                                                   params.ntn_resource_audit_rejects,
+                                                   params.ntn_resource_audit_rnti_snapshot_complete,
+                                                   params.ntn_resource_audit_retirement_supported,
+                                                   params.ntn_resource_audit_legacy_only,
+                                                   params.ntn_rnti_retirement_rejects,
+                                                   ntn_resource_audit_rnti_generation_high_water,
+                                                   ntn_resource_audit_rnti_leases,
+                                                   last_ntn_calendar_intents_per_cell,
+                                                   last_ntn_calendar_preflight_reports,
+                                                   ntn_calendar_clear_requests);
 }
 
 void cu_cp_test_environment::drain_f1ap_resource_coordination_requests(unsigned du_idx)
@@ -600,6 +686,12 @@ void cu_cp_test_environment::drain_f1ap_resource_coordination_requests(unsigned 
                                                        params.ntn_calendar_preflight_incomplete,
                                                        params.ntn_calendar_preflight_unsupported,
                                                        params.ntn_resource_audit_rejects,
+                                                       params.ntn_resource_audit_rnti_snapshot_complete,
+                                                       params.ntn_resource_audit_retirement_supported,
+                                                       params.ntn_resource_audit_legacy_only,
+                                                       params.ntn_rnti_retirement_rejects,
+                                                       ntn_resource_audit_rnti_generation_high_water,
+                                                       ntn_resource_audit_rnti_leases,
                                                        last_ntn_calendar_intents_per_cell,
                                                        last_ntn_calendar_preflight_reports,
                                                        ntn_calendar_clear_requests));

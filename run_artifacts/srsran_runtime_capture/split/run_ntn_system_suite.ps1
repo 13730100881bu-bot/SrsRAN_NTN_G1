@@ -5,6 +5,7 @@ param(
     "ntn_connected_mobility_sim",
     "ntn_paging_sim",
     "ntn_resource_repair_sim",
+    "ntn_rnti_retirement_sim",
     "ntn_cli_observability_sim"
   ),
   [ValidateSet("live", "sim", "all")]
@@ -424,12 +425,24 @@ function Invoke-CtestScenario {
     if ($Build) {
       Invoke-FocusedBuild -Targets @($Definition.BuildTarget) | Set-Content -LiteralPath (Join-Path $scenarioOut "build.log") -Encoding UTF8
     }
-    $regex = Format-BashSingleQuoted -Value ([string]$Definition.Regex)
     $repoWsl = Format-BashSingleQuoted -Value (Convert-ToWslPath $RepoWin)
-    $cmd = "cd $repoWsl && ctest --test-dir build/ai-clean -R $regex --output-on-failure"
-    $output = Invoke-WslBash -TimeoutSeconds $TimeoutSeconds -Command $cmd
-    Set-Content -LiteralPath $stdoutPath -Encoding UTF8 -Value $output
-    return New-ScenarioResult -Name $Name -Kind "sim" -Status "pass" -Reason "focused ctest passed" -ArtifactPath $scenarioOut
+    $regexValues = if ($Definition.ContainsKey("RegexGroups")) {
+      @($Definition.RegexGroups)
+    } else {
+      @([string]$Definition.Regex)
+    }
+    $outputs = [System.Collections.Generic.List[string]]::new()
+    foreach ($regexValue in $regexValues) {
+      if ([string]::IsNullOrWhiteSpace([string]$regexValue)) {
+        throw "Scenario '$Name' contains an empty CTest filter"
+      }
+      $regex = Format-BashSingleQuoted -Value ([string]$regexValue)
+      $cmd = "cd $repoWsl && ctest --test-dir build/ai-clean -R $regex --output-on-failure --no-tests=error"
+      $outputs.Add("=== ctest group: $regexValue ===")
+      $outputs.Add([string](Invoke-WslBash -TimeoutSeconds $TimeoutSeconds -Command $cmd))
+    }
+    Set-Content -LiteralPath $stdoutPath -Encoding UTF8 -Value $outputs
+    return New-ScenarioResult -Name $Name -Kind "sim" -Status "pass" -Reason "focused ctest groups passed ($($regexValues.Count))" -ArtifactPath $scenarioOut
   } catch {
     New-Item -ItemType Directory -Force -Path $scenarioOut | Out-Null
     Set-Content -LiteralPath $stdoutPath -Encoding UTF8 -Value $_.Exception.Message

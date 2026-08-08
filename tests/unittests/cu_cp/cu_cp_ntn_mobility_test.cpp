@@ -26,8 +26,8 @@
 #include "lib/cu_cp/ntn_mobility/ntn_onboard_position_plan_state.h"
 #include "lib/cu_cp/ntn_mobility/ntn_plan_version_anchor.h"
 #include "lib/f1ap/asn1_helpers.h"
-#include "lib/ngap/ngap_asn1_helpers.h"
 #include "lib/ngap/ngap_asn1_converters.h"
+#include "lib/ngap/ngap_asn1_helpers.h"
 #include "lib/rrc/ue/rrc_measurement_types_asn1_converters.h"
 #include "nlohmann/json.hpp"
 #include "tests/test_doubles/e1ap/e1ap_test_message_validators.h"
@@ -45,6 +45,7 @@
 #include "srsran/asn1/rrc_nr/ul_dcch_msg_ies.h"
 #include "srsran/cu_cp/cu_cp_command_handler.h"
 #include "srsran/f1ap/ntn_access_calendar.h"
+#include "srsran/f1ap/ntn_rnti_lease_pool.h"
 #include "srsran/f1ap/ntn_ul_slot_resource_request.h"
 #include "srsran/ngap/ngap_handover.h"
 #include "srsran/nrppa/nrppa_pdu.h"
@@ -58,12 +59,13 @@
 #include <fstream>
 #include <gtest/gtest.h>
 #include <iterator>
-#include <memory>
+#include <limits>
 #include <mbedtls/base64.h>
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/entropy.h>
 #include <mbedtls/md.h>
 #include <mbedtls/pk.h>
+#include <memory>
 #include <set>
 #include <thread>
 #include <utility>
@@ -778,6 +780,17 @@ ntn_location_mobility_config make_access_service_layer_ntn_mobility_config()
   return cfg;
 }
 
+ntn_location_mobility_config make_single_cell_rnti_retirement_ntn_mobility_config()
+{
+  ntn_location_mobility_config cfg         = make_access_service_layer_ntn_mobility_config();
+  cfg.max_nof_served_beams                 = 1;
+  cfg.max_nof_loaded_digital_service_beams = 1;
+  cfg.beams.resize(1);
+  cfg.analog_beams.front().center_digital_beam_id = cfg.beams.front().beam_id;
+  cfg.analog_beams.front().child_digital_beam_ids = {cfg.beams.front().beam_id};
+  return cfg;
+}
+
 ntn_location_mobility_config make_multi_beam_load_balancing_ntn_mobility_config(bool overlapping_children)
 {
   ntn_location_mobility_config cfg = make_access_service_layer_ntn_mobility_config();
@@ -1192,6 +1205,31 @@ std::optional<unsigned> connect_du_for_ntn_beam_cells(cu_cp_test_environment&   
 std::optional<unsigned> connect_du_for_ntn_beams(cu_cp_test_environment& env)
 {
   return connect_du_for_ntn_beam_cells(env, {0, 1});
+}
+
+bool is_test_gnb_du_resource_coordination_request(const f1ap_message& pdu)
+{
+  return pdu.pdu.type().value == asn1::f1ap::f1ap_pdu_c::types_opts::init_msg &&
+         pdu.pdu.init_msg().value.type().value ==
+             asn1::f1ap::f1ap_elem_procs_o::init_msg_c::types_opts::gnb_du_res_coordination_request;
+}
+
+std::optional<f1ap_ntn_resource_audit_request> decode_test_ntn_resource_audit_request(const f1ap_message& pdu)
+{
+  if (!is_test_gnb_du_resource_coordination_request(pdu)) {
+    return std::nullopt;
+  }
+  const auto& request = pdu.pdu.init_msg().value.gnb_du_res_coordination_request();
+  return decode_f1ap_ntn_resource_audit_request(request->eutra_nr_cell_res_coordination_req_container);
+}
+
+std::optional<f1ap_ntn_rnti_lease_pool_update> decode_test_ntn_rnti_lease_update(const f1ap_message& pdu)
+{
+  if (!is_test_gnb_du_resource_coordination_request(pdu)) {
+    return std::nullopt;
+  }
+  const auto& request = pdu.pdu.init_msg().value.gnb_du_res_coordination_request();
+  return decode_f1ap_ntn_rnti_lease_pool_update(request->eutra_nr_cell_res_coordination_req_container);
 }
 
 f1ap_message
@@ -7589,6 +7627,600 @@ TEST(cu_cp_ntn_mobility_test, explicit_du_audit_rejection_reaches_conflict_accou
   EXPECT_GT(after.nof_ntn_resource_audit_repair_actions, before.nof_ntn_resource_audit_repair_actions);
   EXPECT_GT(after.nof_ntn_resource_repairs_blocked_conflict, before.nof_ntn_resource_repairs_blocked_conflict);
   EXPECT_EQ(after.last_ntn_resource_audit_reason, "rejected_by_mock_du");
+}
+
+TEST(cu_cp_ntn_mobility_test, rnti_retirement_expired_orphan_is_retired_before_higher_generation_reuse)
+{
+  constexpr uint32_t orphan_generation = 41;
+  const rnti_t       orphan_rnti       = to_rnti(0x4601);
+
+  cu_cp_test_env_params params;
+  params.ntn_location_mobility                         = make_single_cell_rnti_retirement_ntn_mobility_config();
+  params.ntn_resource_audit_rnti_snapshot_complete     = true;
+  params.ntn_resource_audit_retirement_supported       = true;
+  params.ntn_resource_audit_rnti_generation_high_water = orphan_generation;
+  params.ntn_resource_audit_rnti_leases                = {{orphan_rnti, "expired", "expired_by_du", orphan_generation}};
+  cu_cp_test_environment env(std::move(params));
+  env.run_ng_setup();
+  const std::optional<unsigned> du_idx = connect_du_for_ntn_beam_cells(env, {0});
+  ASSERT_TRUE(du_idx.has_value());
+
+  cu_cp_ntn_command_handler& ntn_handler = env.get_cu_cp().get_command_handler().get_ntn_command_handler();
+  ntn_repair_command         audit_command;
+  audit_command.mode  = ntn_repair_mode::apply;
+  audit_command.scope = ntn_repair_scope::resources;
+  ASSERT_TRUE(ntn_handler.handle_ntn_repair_command(audit_command).accepted);
+
+  f1ap_message audit_request_pdu;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      du_idx.value(), audit_request_pdu, std::chrono::milliseconds{1000}));
+  const auto audit_request = decode_test_ntn_resource_audit_request(audit_request_pdu);
+  ASSERT_TRUE(audit_request.has_value());
+  EXPECT_TRUE(audit_request->request_retirement_metadata);
+  env.respond_to_f1ap_resource_coordination_request(du_idx.value(), audit_request_pdu);
+
+  f1ap_message retire_request_pdu;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      du_idx.value(), retire_request_pdu, std::chrono::milliseconds{1000}));
+  const auto retire_update = decode_test_ntn_rnti_lease_update(retire_request_pdu);
+  ASSERT_TRUE(retire_update.has_value());
+  EXPECT_EQ(retire_update->operation, f1ap_ntn_rnti_lease_pool_operation::retire);
+  EXPECT_EQ(retire_update->generation_id, orphan_generation);
+  EXPECT_EQ(retire_update->expiry_ms, 0U);
+  ASSERT_EQ(retire_update->leases.size(), 1U);
+  EXPECT_EQ(retire_update->leases.front(), orphan_rnti);
+  env.respond_to_f1ap_resource_coordination_request(du_idx.value(), retire_request_pdu);
+
+  ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{1000}, [&]() {
+    const cu_cp_ntn_runtime_status status = ntn_handler.get_current_ntn_runtime_status();
+    return status.ntn_rnti_retirement_capability == "supported" &&
+           status.last_ntn_rnti_retirement_reason == "retirement_confirmed_by_du";
+  }));
+  const cu_cp_ntn_runtime_status retired_status = ntn_handler.get_current_ntn_runtime_status();
+  EXPECT_EQ(retired_status.ntn_rnti_generation_high_water, orphan_generation);
+  EXPECT_EQ(retired_status.nof_ntn_rnti_retired, 1U);
+  EXPECT_EQ(retired_status.nof_ntn_rnti_quarantined, 0U);
+
+  ASSERT_TRUE(ntn_handler.handle_ntn_satellite_state_update(make_ecef(0.0, 0.0, 500000.0)));
+  f1ap_message replacement_pool_pdu;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      du_idx.value(), replacement_pool_pdu, std::chrono::milliseconds{1000}));
+  const auto replacement_pool = decode_test_ntn_rnti_lease_update(replacement_pool_pdu);
+  ASSERT_TRUE(replacement_pool.has_value());
+  EXPECT_EQ(replacement_pool->operation, f1ap_ntn_rnti_lease_pool_operation::add);
+  EXPECT_EQ(replacement_pool->generation_id, orphan_generation + 1);
+  EXPECT_NE(std::find(replacement_pool->leases.begin(), replacement_pool->leases.end(), orphan_rnti),
+            replacement_pool->leases.end());
+  EXPECT_EQ(ntn_handler.get_current_ntn_runtime_status().ntn_rnti_generation_high_water, orphan_generation + 1);
+  EXPECT_EQ(ntn_handler.get_current_ntn_runtime_status().nof_ntn_rnti_reused, 1U);
+  env.respond_to_f1ap_resource_coordination_request(du_idx.value(), replacement_pool_pdu);
+  env.drain_f1ap_resource_coordination_requests(du_idx.value());
+}
+
+TEST(cu_cp_ntn_mobility_test, rnti_retirement_legacy_du_keeps_expired_orphan_quarantined)
+{
+  constexpr uint32_t orphan_generation = 57;
+  const rnti_t       orphan_rnti       = to_rnti(0x4601);
+
+  cu_cp_test_env_params params;
+  params.ntn_location_mobility                         = make_single_cell_rnti_retirement_ntn_mobility_config();
+  params.ntn_resource_audit_rnti_snapshot_complete     = true;
+  params.ntn_resource_audit_legacy_only                = true;
+  params.ntn_resource_audit_rnti_generation_high_water = orphan_generation;
+  params.ntn_resource_audit_rnti_leases                = {{orphan_rnti, "expired", "expired_by_du", orphan_generation}};
+  cu_cp_test_environment env(std::move(params));
+  env.run_ng_setup();
+  const std::optional<unsigned> du_idx = connect_du_for_ntn_beam_cells(env, {0});
+  ASSERT_TRUE(du_idx.has_value());
+
+  cu_cp_ntn_command_handler& ntn_handler = env.get_cu_cp().get_command_handler().get_ntn_command_handler();
+  ntn_repair_command         audit_command;
+  audit_command.mode  = ntn_repair_mode::apply;
+  audit_command.scope = ntn_repair_scope::resources;
+  ASSERT_TRUE(ntn_handler.handle_ntn_repair_command(audit_command).accepted);
+
+  f1ap_message capability_request_pdu;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      du_idx.value(), capability_request_pdu, std::chrono::milliseconds{1000}));
+  const auto capability_request = decode_test_ntn_resource_audit_request(capability_request_pdu);
+  ASSERT_TRUE(capability_request.has_value());
+  EXPECT_TRUE(capability_request->request_retirement_metadata);
+  env.respond_to_f1ap_resource_coordination_request(du_idx.value(), capability_request_pdu);
+  ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{1000}, [&]() {
+    return ntn_handler.get_current_ntn_runtime_status().ntn_rnti_retirement_capability == "unsupported";
+  }));
+
+  ASSERT_TRUE(ntn_handler.handle_ntn_repair_command(audit_command).accepted);
+  f1ap_message fallback_audit_pdu;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      du_idx.value(), fallback_audit_pdu, std::chrono::milliseconds{1000}));
+  const auto fallback_audit = decode_test_ntn_resource_audit_request(fallback_audit_pdu);
+  ASSERT_TRUE(fallback_audit.has_value());
+  EXPECT_FALSE(fallback_audit->request_retirement_metadata);
+  env.respond_to_f1ap_resource_coordination_request(du_idx.value(), fallback_audit_pdu);
+
+  ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{1000}, [&]() {
+    const cu_cp_ntn_runtime_status status = ntn_handler.get_current_ntn_runtime_status();
+    return status.nof_ntn_resource_audit_responses_accepted >= 1U &&
+           status.ntn_rnti_generation_high_water == orphan_generation;
+  }));
+  const cu_cp_ntn_runtime_status after_fallback = ntn_handler.get_current_ntn_runtime_status();
+  EXPECT_EQ(after_fallback.ntn_rnti_retirement_capability, "unsupported");
+  EXPECT_EQ(after_fallback.nof_ntn_rnti_retire_unsupported, 1U);
+  EXPECT_EQ(after_fallback.nof_ntn_rnti_quarantined, 1U);
+  const ntn_beam_service_resource_snapshot fallback_resources =
+      ntn_handler.get_current_ntn_beam_service_resource_snapshot();
+  ASSERT_EQ(fallback_resources.rnti_retirement_du_statuses.size(), 1U);
+  EXPECT_TRUE(fallback_resources.rnti_retirement_du_statuses.front().capability_known);
+  EXPECT_FALSE(fallback_resources.rnti_retirement_du_statuses.front().supported);
+
+  ASSERT_TRUE(ntn_handler.handle_ntn_satellite_state_update(make_ecef(0.0, 0.0, 500000.0)));
+  f1ap_message replacement_pool_pdu;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      du_idx.value(), replacement_pool_pdu, std::chrono::milliseconds{1000}));
+  const auto replacement_pool = decode_test_ntn_rnti_lease_update(replacement_pool_pdu);
+  ASSERT_TRUE(replacement_pool.has_value());
+  EXPECT_EQ(replacement_pool->operation, f1ap_ntn_rnti_lease_pool_operation::add);
+  EXPECT_EQ(replacement_pool->generation_id, orphan_generation + 1);
+  EXPECT_EQ(std::find(replacement_pool->leases.begin(), replacement_pool->leases.end(), orphan_rnti),
+            replacement_pool->leases.end());
+  env.respond_to_f1ap_resource_coordination_request(du_idx.value(), replacement_pool_pdu);
+  env.drain_f1ap_resource_coordination_requests(du_idx.value());
+}
+
+TEST(cu_cp_ntn_mobility_test, rnti_retirement_namespace_exhaustion_never_publishes_a_partial_pool)
+{
+  constexpr uint16_t lease_min        = 0x4601;
+  constexpr uint16_t lease_max        = 0xffef;
+  constexpr uint32_t lease_generation = 91;
+
+  cu_cp_test_env_params params;
+  params.ntn_location_mobility                         = make_single_cell_rnti_retirement_ntn_mobility_config();
+  params.ntn_resource_audit_rnti_snapshot_complete     = true;
+  params.ntn_resource_audit_retirement_supported       = true;
+  params.ntn_resource_audit_rnti_generation_high_water = lease_generation;
+  params.ntn_resource_audit_rnti_leases.reserve(static_cast<unsigned>(lease_max - lease_min) + 1U);
+  for (uint32_t value = lease_min; value <= lease_max; ++value) {
+    params.ntn_resource_audit_rnti_leases.push_back(
+        {to_rnti(static_cast<uint16_t>(value)), "pending", "applied_by_du", lease_generation});
+  }
+
+  cu_cp_test_environment env(std::move(params));
+  env.run_ng_setup();
+  const std::optional<unsigned> du_idx = connect_du_for_ntn_beam_cells(env, {0});
+  ASSERT_TRUE(du_idx.has_value());
+
+  cu_cp_ntn_command_handler& ntn_handler = env.get_cu_cp().get_command_handler().get_ntn_command_handler();
+  ntn_repair_command         audit_command;
+  audit_command.mode  = ntn_repair_mode::apply;
+  audit_command.scope = ntn_repair_scope::resources;
+  ASSERT_TRUE(ntn_handler.handle_ntn_repair_command(audit_command).accepted);
+  env.drain_f1ap_resource_coordination_requests(du_idx.value());
+  ASSERT_TRUE(env.tick_until(std::chrono::seconds{5}, [&]() {
+    return ntn_handler.get_current_ntn_runtime_status().ntn_rnti_retirement_capability == "supported";
+  }));
+
+  ASSERT_TRUE(ntn_handler.handle_ntn_satellite_state_update(make_ecef(0.0, 0.0, 500000.0)));
+  ASSERT_TRUE(env.tick_until(std::chrono::seconds{5}, [&]() {
+    return ntn_handler.get_current_ntn_runtime_status().nof_ntn_rnti_namespace_exhausted > 0U;
+  }));
+  const ntn_beam_service_resource_snapshot resource_snapshot =
+      ntn_handler.get_current_ntn_beam_service_resource_snapshot();
+  EXPECT_EQ(resource_snapshot.nof_rnti_leases_reserved, 0U);
+  EXPECT_EQ(resource_snapshot.nof_rnti_leases_available, 0U);
+  env.drain_f1ap_resource_coordination_requests(du_idx.value());
+}
+
+TEST(cu_cp_ntn_mobility_test, rnti_retirement_generation_exhaustion_stops_new_pool_allocation)
+{
+  cu_cp_test_env_params params;
+  params.ntn_location_mobility                         = make_single_cell_rnti_retirement_ntn_mobility_config();
+  params.ntn_resource_audit_rnti_snapshot_complete     = true;
+  params.ntn_resource_audit_retirement_supported       = true;
+  params.ntn_resource_audit_rnti_generation_high_water = std::numeric_limits<uint32_t>::max();
+  cu_cp_test_environment env(std::move(params));
+  env.run_ng_setup();
+  const std::optional<unsigned> du_idx = connect_du_for_ntn_beam_cells(env, {0});
+  ASSERT_TRUE(du_idx.has_value());
+
+  cu_cp_ntn_command_handler& ntn_handler = env.get_cu_cp().get_command_handler().get_ntn_command_handler();
+  ntn_repair_command         audit_command;
+  audit_command.mode  = ntn_repair_mode::apply;
+  audit_command.scope = ntn_repair_scope::resources;
+  ASSERT_TRUE(ntn_handler.handle_ntn_repair_command(audit_command).accepted);
+  env.drain_f1ap_resource_coordination_requests(du_idx.value());
+  ASSERT_EQ(ntn_handler.get_current_ntn_runtime_status().ntn_rnti_generation_high_water,
+            std::numeric_limits<uint32_t>::max());
+
+  ASSERT_TRUE(ntn_handler.handle_ntn_satellite_state_update(make_ecef(0.0, 0.0, 500000.0)));
+  ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{1000}, [&]() {
+    return ntn_handler.get_current_ntn_runtime_status().nof_ntn_rnti_generation_exhausted > 0U;
+  }));
+  const ntn_beam_service_resource_snapshot resource_snapshot =
+      ntn_handler.get_current_ntn_beam_service_resource_snapshot();
+  EXPECT_EQ(resource_snapshot.nof_rnti_leases_reserved, 0U);
+  env.drain_f1ap_resource_coordination_requests(du_idx.value());
+}
+
+TEST(cu_cp_ntn_mobility_test, rnti_retirement_incomplete_audit_reports_capability_without_reconciling_du)
+{
+  constexpr uint32_t reported_generation = 101;
+
+  cu_cp_test_env_params params;
+  params.ntn_location_mobility                         = make_single_cell_rnti_retirement_ntn_mobility_config();
+  params.ntn_resource_audit_rnti_snapshot_complete     = false;
+  params.ntn_resource_audit_retirement_supported       = true;
+  params.ntn_resource_audit_rnti_generation_high_water = reported_generation;
+  cu_cp_test_environment env(std::move(params));
+  env.run_ng_setup();
+  const std::optional<unsigned> du_idx = connect_du_for_ntn_beam_cells(env, {0});
+  ASSERT_TRUE(du_idx.has_value());
+
+  cu_cp_ntn_command_handler& ntn_handler = env.get_cu_cp().get_command_handler().get_ntn_command_handler();
+  ntn_repair_command         audit_command;
+  audit_command.mode  = ntn_repair_mode::apply;
+  audit_command.scope = ntn_repair_scope::resources;
+  ASSERT_TRUE(ntn_handler.handle_ntn_repair_command(audit_command).accepted);
+
+  f1ap_message audit_pdu;
+  ASSERT_TRUE(
+      env.wait_for_f1ap_tx_pdu_without_auto_response(du_idx.value(), audit_pdu, std::chrono::milliseconds{1000}));
+  const auto audit_request = decode_test_ntn_resource_audit_request(audit_pdu);
+  ASSERT_TRUE(audit_request.has_value());
+  EXPECT_TRUE(audit_request->request_retirement_metadata);
+  env.respond_to_f1ap_resource_coordination_request(du_idx.value(), audit_pdu);
+
+  ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{1000}, [&]() {
+    return ntn_handler.get_current_ntn_runtime_status().ntn_rnti_retirement_capability == "supported";
+  }));
+  const ntn_beam_service_resource_snapshot audit_snapshot =
+      ntn_handler.get_current_ntn_beam_service_resource_snapshot();
+  ASSERT_EQ(audit_snapshot.rnti_retirement_du_statuses.size(), 1U);
+  EXPECT_TRUE(audit_snapshot.rnti_retirement_du_statuses.front().capability_known);
+  EXPECT_TRUE(audit_snapshot.rnti_retirement_du_statuses.front().supported);
+  EXPECT_FALSE(audit_snapshot.rnti_retirement_du_statuses.front().complete_audit_seen);
+  EXPECT_EQ(audit_snapshot.rnti_retirement_du_statuses.front().generation_high_water, reported_generation);
+  EXPECT_EQ(audit_snapshot.nof_rnti_leases_reserved, 0U);
+  EXPECT_EQ(audit_snapshot.nof_rnti_leases_retire_pending, 0U);
+  EXPECT_EQ(audit_snapshot.nof_rnti_leases_retire_sent, 0U);
+
+  ASSERT_TRUE(ntn_handler.handle_ntn_satellite_state_update(make_ecef(0.0, 0.0, 500000.0)));
+  env.tick_until(std::chrono::milliseconds{100}, []() { return false; });
+  const ntn_beam_service_resource_snapshot after_update =
+      ntn_handler.get_current_ntn_beam_service_resource_snapshot();
+  EXPECT_EQ(after_update.nof_rnti_leases_reserved, 0U);
+  EXPECT_EQ(after_update.nof_rnti_leases_sent_to_du, 0U);
+  env.drain_f1ap_resource_coordination_requests(du_idx.value());
+}
+
+TEST(cu_cp_ntn_mobility_test,
+     rnti_reconnect_fresh_cu_restart_quarantines_unknown_du_records_and_retires_only_expired)
+{
+  constexpr uint32_t recovered_generation = 109;
+  const rnti_t       pending_rnti         = to_rnti(0x4601);
+  const rnti_t       consumed_rnti        = to_rnti(0x4602);
+  const rnti_t       expired_rnti         = to_rnti(0x4603);
+
+  // A new environment represents a restarted CU-CP: it has no local lease records, while the DU retains its ledger.
+  cu_cp_test_env_params params;
+  params.ntn_location_mobility                         = make_single_cell_rnti_retirement_ntn_mobility_config();
+  params.ntn_resource_audit_rnti_snapshot_complete     = true;
+  params.ntn_resource_audit_retirement_supported       = true;
+  params.ntn_resource_audit_rnti_generation_high_water = recovered_generation;
+  params.ntn_resource_audit_rnti_leases = {{pending_rnti, "pending", "applied_by_du", recovered_generation},
+                                           {consumed_rnti, "consumed_by_mac", "applied_by_du", recovered_generation},
+                                           {expired_rnti, "expired", "expired_by_du", recovered_generation}};
+  cu_cp_test_environment env(std::move(params));
+  env.run_ng_setup();
+  const std::optional<unsigned> du_idx = connect_du_for_ntn_beam_cells(env, {0});
+  ASSERT_TRUE(du_idx.has_value());
+
+  cu_cp_ntn_command_handler& ntn_handler = env.get_cu_cp().get_command_handler().get_ntn_command_handler();
+  ntn_repair_command         audit_command;
+  audit_command.mode  = ntn_repair_mode::apply;
+  audit_command.scope = ntn_repair_scope::resources;
+  ASSERT_TRUE(ntn_handler.handle_ntn_repair_command(audit_command).accepted);
+
+  f1ap_message audit_pdu;
+  ASSERT_TRUE(
+      env.wait_for_f1ap_tx_pdu_without_auto_response(du_idx.value(), audit_pdu, std::chrono::milliseconds{1000}));
+  ASSERT_TRUE(decode_test_ntn_resource_audit_request(audit_pdu).has_value());
+  env.respond_to_f1ap_resource_coordination_request(du_idx.value(), audit_pdu);
+
+  f1ap_message retire_pdu;
+  ASSERT_TRUE(
+      env.wait_for_f1ap_tx_pdu_without_auto_response(du_idx.value(), retire_pdu, std::chrono::milliseconds{1000}));
+  const auto retire_update = decode_test_ntn_rnti_lease_update(retire_pdu);
+  ASSERT_TRUE(retire_update.has_value());
+  EXPECT_EQ(retire_update->operation, f1ap_ntn_rnti_lease_pool_operation::retire);
+  EXPECT_EQ(retire_update->generation_id, recovered_generation);
+  ASSERT_EQ(retire_update->leases.size(), 1U);
+  EXPECT_EQ(retire_update->leases.front(), expired_rnti);
+  env.respond_to_f1ap_resource_coordination_request(du_idx.value(), retire_pdu);
+
+  ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{1000}, [&]() {
+    const cu_cp_ntn_runtime_status status = ntn_handler.get_current_ntn_runtime_status();
+    return status.nof_ntn_rnti_retired == 1U && status.nof_ntn_rnti_quarantined == 2U;
+  }));
+  const ntn_beam_service_resource_snapshot recovered_snapshot =
+      ntn_handler.get_current_ntn_beam_service_resource_snapshot();
+  EXPECT_EQ(recovered_snapshot.nof_rnti_orphans_quarantined, 2U);
+  EXPECT_EQ(recovered_snapshot.rnti_leases.size(), 2U);
+  EXPECT_TRUE(std::any_of(recovered_snapshot.rnti_leases.begin(),
+                          recovered_snapshot.rnti_leases.end(),
+                          [pending_rnti](const ntn_rnti_lease& lease) {
+                            return lease.rnti == pending_rnti && lease.state == "orphan_quarantined";
+                          }));
+  EXPECT_TRUE(std::any_of(recovered_snapshot.rnti_leases.begin(),
+                          recovered_snapshot.rnti_leases.end(),
+                          [consumed_rnti](const ntn_rnti_lease& lease) {
+                            return lease.rnti == consumed_rnti && lease.state == "orphan_quarantined";
+                          }));
+
+  ASSERT_TRUE(ntn_handler.handle_ntn_satellite_state_update(make_ecef(0.0, 0.0, 500000.0)));
+  f1ap_message replacement_pool_pdu;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      du_idx.value(), replacement_pool_pdu, std::chrono::milliseconds{1000}));
+  const auto replacement_pool = decode_test_ntn_rnti_lease_update(replacement_pool_pdu);
+  ASSERT_TRUE(replacement_pool.has_value());
+  EXPECT_EQ(replacement_pool->operation, f1ap_ntn_rnti_lease_pool_operation::add);
+  EXPECT_EQ(replacement_pool->generation_id, recovered_generation + 1);
+  ASSERT_EQ(replacement_pool->leases.size(), 8U);
+  EXPECT_EQ(std::find(replacement_pool->leases.begin(), replacement_pool->leases.end(), pending_rnti),
+            replacement_pool->leases.end());
+  EXPECT_EQ(std::find(replacement_pool->leases.begin(), replacement_pool->leases.end(), consumed_rnti),
+            replacement_pool->leases.end());
+  EXPECT_NE(std::find(replacement_pool->leases.begin(), replacement_pool->leases.end(), expired_rnti),
+            replacement_pool->leases.end());
+  env.respond_to_f1ap_resource_coordination_request(du_idx.value(), replacement_pool_pdu);
+  env.drain_f1ap_resource_coordination_requests(du_idx.value());
+}
+
+TEST(cu_cp_ntn_mobility_test, rnti_reconnect_downlink_only_configured_cell_remains_an_audit_target)
+{
+  cu_cp_test_env_params params;
+  params.ntn_location_mobility                               = make_single_cell_rnti_retirement_ntn_mobility_config();
+  params.ntn_location_mobility->beams.front().uplink_enabled = false;
+  params.ntn_location_mobility->analog_beams.front().uplink_enabled = false;
+  params.ntn_resource_audit_rnti_snapshot_complete                  = true;
+  params.ntn_resource_audit_retirement_supported                    = true;
+  cu_cp_test_environment env(std::move(params));
+  env.run_ng_setup();
+  const std::optional<unsigned> du_idx = connect_du_for_ntn_beam_cells(env, {0});
+  ASSERT_TRUE(du_idx.has_value());
+
+  cu_cp_ntn_command_handler& ntn_handler = env.get_cu_cp().get_command_handler().get_ntn_command_handler();
+  ntn_repair_command         audit_command;
+  audit_command.mode                 = ntn_repair_mode::apply;
+  audit_command.scope                = ntn_repair_scope::resources;
+  const ntn_repair_response response = ntn_handler.handle_ntn_repair_command(audit_command);
+  ASSERT_TRUE(response.accepted);
+  EXPECT_EQ(response.audit_targets, 1U);
+
+  f1ap_message audit_pdu;
+  ASSERT_TRUE(
+      env.wait_for_f1ap_tx_pdu_without_auto_response(du_idx.value(), audit_pdu, std::chrono::milliseconds{1000}));
+  const auto audit = decode_test_ntn_resource_audit_request(audit_pdu);
+  ASSERT_TRUE(audit.has_value());
+  EXPECT_EQ(audit->cell_index, to_du_cell_index(0));
+  EXPECT_TRUE(audit->request_retirement_metadata);
+  env.respond_to_f1ap_resource_coordination_request(du_idx.value(), audit_pdu);
+  env.drain_f1ap_resource_coordination_requests(du_idx.value());
+}
+
+TEST(cu_cp_ntn_mobility_test, rnti_reconnect_requires_new_complete_audit_before_retirement_resumes)
+{
+  constexpr uint32_t orphan_generation = 73;
+  const rnti_t       orphan_rnti       = to_rnti(0x4601);
+
+  cu_cp_test_env_params params;
+  params.ntn_location_mobility                         = make_single_cell_rnti_retirement_ntn_mobility_config();
+  params.ntn_resource_audit_rnti_snapshot_complete     = true;
+  params.ntn_resource_audit_retirement_supported       = true;
+  params.ntn_resource_audit_rnti_generation_high_water = orphan_generation;
+  params.ntn_resource_audit_rnti_leases                = {{orphan_rnti, "expired", "expired_by_du", orphan_generation}};
+  params.f1ap_proc_timeout                             = std::chrono::milliseconds{20};
+  cu_cp_test_environment env(std::move(params));
+  env.run_ng_setup();
+  const std::optional<unsigned> initial_du = connect_du_for_ntn_beam_cells(env, {0});
+  ASSERT_TRUE(initial_du.has_value());
+
+  cu_cp_ntn_command_handler& ntn_handler = env.get_cu_cp().get_command_handler().get_ntn_command_handler();
+  ntn_repair_command         audit_command;
+  audit_command.mode  = ntn_repair_mode::apply;
+  audit_command.scope = ntn_repair_scope::resources;
+  ASSERT_TRUE(ntn_handler.handle_ntn_repair_command(audit_command).accepted);
+
+  f1ap_message initial_audit_pdu;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      initial_du.value(), initial_audit_pdu, std::chrono::milliseconds{1000}));
+  ASSERT_TRUE(decode_test_ntn_resource_audit_request(initial_audit_pdu).has_value());
+  env.respond_to_f1ap_resource_coordination_request(initial_du.value(), initial_audit_pdu);
+
+  f1ap_message old_connection_retire_pdu;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      initial_du.value(), old_connection_retire_pdu, std::chrono::milliseconds{1000}));
+  const auto old_connection_retire = decode_test_ntn_rnti_lease_update(old_connection_retire_pdu);
+  ASSERT_TRUE(old_connection_retire.has_value());
+  EXPECT_EQ(old_connection_retire->operation, f1ap_ntn_rnti_lease_pool_operation::retire);
+  EXPECT_EQ(old_connection_retire->generation_id, orphan_generation);
+
+  // Let the unanswered procedure time out before destroying the mock transport. The production path uses the same
+  // fail-closed state after either a timeout or a disconnection, while this keeps the test worker teardown bounded.
+  EXPECT_FALSE(env.tick_until(std::chrono::milliseconds{25}, []() { return false; }, false));
+  ASSERT_TRUE(env.drop_du_connection(initial_du.value()));
+  const cu_cp_ntn_runtime_status disconnected = ntn_handler.get_current_ntn_runtime_status();
+  EXPECT_EQ(disconnected.ntn_rnti_retirement_capability, "unknown");
+  EXPECT_EQ(disconnected.last_ntn_rnti_retirement_reason, "du_disconnected_awaiting_complete_audit");
+  EXPECT_EQ(disconnected.nof_ntn_rnti_quarantined, 1U);
+
+  const std::optional<unsigned> reconnected_du = connect_du_for_ntn_beam_cells(env, {0});
+  ASSERT_TRUE(reconnected_du.has_value());
+  f1ap_message premature_retire_pdu;
+  EXPECT_FALSE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      reconnected_du.value(), premature_retire_pdu, std::chrono::milliseconds{50}));
+  EXPECT_EQ(ntn_handler.get_current_ntn_runtime_status().ntn_rnti_retirement_capability, "unknown");
+
+  ASSERT_TRUE(ntn_handler.handle_ntn_repair_command(audit_command).accepted);
+  f1ap_message reconnect_audit_pdu;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      reconnected_du.value(), reconnect_audit_pdu, std::chrono::milliseconds{1000}));
+  const auto reconnect_audit = decode_test_ntn_resource_audit_request(reconnect_audit_pdu);
+  ASSERT_TRUE(reconnect_audit.has_value());
+  EXPECT_TRUE(reconnect_audit->request_retirement_metadata);
+  env.respond_to_f1ap_resource_coordination_request(reconnected_du.value(), reconnect_audit_pdu);
+
+  f1ap_message new_connection_retire_pdu;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      reconnected_du.value(), new_connection_retire_pdu, std::chrono::milliseconds{1000}));
+  const auto new_connection_retire = decode_test_ntn_rnti_lease_update(new_connection_retire_pdu);
+  ASSERT_TRUE(new_connection_retire.has_value());
+  EXPECT_EQ(new_connection_retire->operation, f1ap_ntn_rnti_lease_pool_operation::retire);
+  EXPECT_EQ(new_connection_retire->generation_id, orphan_generation);
+  ASSERT_EQ(new_connection_retire->leases.size(), 1U);
+  EXPECT_EQ(new_connection_retire->leases.front(), orphan_rnti);
+  env.respond_to_f1ap_resource_coordination_request(reconnected_du.value(), new_connection_retire_pdu);
+
+  ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{1000}, [&]() {
+    const cu_cp_ntn_runtime_status status = ntn_handler.get_current_ntn_runtime_status();
+    return status.ntn_rnti_retirement_capability == "supported" &&
+           status.last_ntn_rnti_retirement_reason == "retirement_confirmed_by_du";
+  }));
+  env.drain_f1ap_resource_coordination_requests(reconnected_du.value());
+}
+
+TEST(cu_cp_ntn_mobility_test, rnti_reconnect_recovers_when_retirement_applied_but_ack_was_lost)
+{
+  constexpr uint32_t orphan_generation = 79;
+  const rnti_t       orphan_rnti       = to_rnti(0x4601);
+
+  cu_cp_test_env_params params;
+  params.ntn_location_mobility                         = make_single_cell_rnti_retirement_ntn_mobility_config();
+  params.ntn_resource_audit_rnti_snapshot_complete     = true;
+  params.ntn_resource_audit_retirement_supported       = true;
+  params.ntn_resource_audit_rnti_generation_high_water = orphan_generation;
+  params.ntn_resource_audit_rnti_leases                = {{orphan_rnti, "expired", "expired_by_du", orphan_generation}};
+  params.f1ap_proc_timeout                             = std::chrono::milliseconds{20};
+  cu_cp_test_environment env(std::move(params));
+  env.run_ng_setup();
+  const std::optional<unsigned> initial_du = connect_du_for_ntn_beam_cells(env, {0});
+  ASSERT_TRUE(initial_du.has_value());
+
+  cu_cp_ntn_command_handler& ntn_handler = env.get_cu_cp().get_command_handler().get_ntn_command_handler();
+  ntn_repair_command         audit_command;
+  audit_command.mode  = ntn_repair_mode::apply;
+  audit_command.scope = ntn_repair_scope::resources;
+  ASSERT_TRUE(ntn_handler.handle_ntn_repair_command(audit_command).accepted);
+
+  f1ap_message initial_audit_pdu;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      initial_du.value(), initial_audit_pdu, std::chrono::milliseconds{1000}));
+  ASSERT_TRUE(decode_test_ntn_resource_audit_request(initial_audit_pdu).has_value());
+  env.respond_to_f1ap_resource_coordination_request(initial_du.value(), initial_audit_pdu);
+
+  f1ap_message retire_pdu;
+  ASSERT_TRUE(
+      env.wait_for_f1ap_tx_pdu_without_auto_response(initial_du.value(), retire_pdu, std::chrono::milliseconds{1000}));
+  const auto retire_update = decode_test_ntn_rnti_lease_update(retire_pdu);
+  ASSERT_TRUE(retire_update.has_value());
+  ASSERT_EQ(retire_update->operation, f1ap_ntn_rnti_lease_pool_operation::retire);
+  ASSERT_EQ(retire_update->generation_id, orphan_generation);
+  // The DU applies the atomic retirement, but its acknowledgement is lost with the connection.
+  env.apply_f1ap_resource_coordination_request_without_response(initial_du.value(), retire_pdu);
+  // Complete the unanswered F1 procedure before tearing down the mock transport. The subsequent complete audit is
+  // still the only authority that can prove that the DU committed the retirement.
+  EXPECT_FALSE(env.tick_until(std::chrono::milliseconds{25}, []() { return false; }, false));
+  ASSERT_TRUE(env.drop_du_connection(initial_du.value()));
+  EXPECT_EQ(ntn_handler.get_current_ntn_runtime_status().nof_ntn_rnti_retired, 0U);
+
+  const std::optional<unsigned> reconnected_du = connect_du_for_ntn_beam_cells(env, {0});
+  ASSERT_TRUE(reconnected_du.has_value());
+  ASSERT_TRUE(ntn_handler.handle_ntn_repair_command(audit_command).accepted);
+  f1ap_message reconnect_audit_pdu;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      reconnected_du.value(), reconnect_audit_pdu, std::chrono::milliseconds{1000}));
+  ASSERT_TRUE(decode_test_ntn_resource_audit_request(reconnect_audit_pdu).has_value());
+  env.respond_to_f1ap_resource_coordination_request(reconnected_du.value(), reconnect_audit_pdu);
+
+  ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{1000}, [&]() {
+    const cu_cp_ntn_runtime_status status = ntn_handler.get_current_ntn_runtime_status();
+    return status.ntn_rnti_retirement_capability == "supported" && status.nof_ntn_rnti_retired == 1U;
+  }));
+  EXPECT_EQ(ntn_handler.get_current_ntn_runtime_status().nof_ntn_rnti_quarantined, 0U);
+
+  ASSERT_TRUE(ntn_handler.handle_ntn_satellite_state_update(make_ecef(0.0, 0.0, 500000.0)));
+  f1ap_message replacement_pool_pdu;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      reconnected_du.value(), replacement_pool_pdu, std::chrono::milliseconds{1000}));
+  const auto replacement_pool = decode_test_ntn_rnti_lease_update(replacement_pool_pdu);
+  ASSERT_TRUE(replacement_pool.has_value());
+  EXPECT_EQ(replacement_pool->operation, f1ap_ntn_rnti_lease_pool_operation::add);
+  EXPECT_EQ(replacement_pool->generation_id, orphan_generation + 1);
+  EXPECT_NE(std::find(replacement_pool->leases.begin(), replacement_pool->leases.end(), orphan_rnti),
+            replacement_pool->leases.end());
+  env.respond_to_f1ap_resource_coordination_request(reconnected_du.value(), replacement_pool_pdu);
+  env.drain_f1ap_resource_coordination_requests(reconnected_du.value());
+}
+
+TEST(cu_cp_ntn_mobility_test, rnti_reconnect_hides_applied_pool_until_new_complete_audit)
+{
+  cu_cp_test_env_params params;
+  params.ntn_location_mobility                     = make_single_cell_rnti_retirement_ntn_mobility_config();
+  params.ntn_resource_audit_rnti_snapshot_complete = true;
+  params.ntn_resource_audit_retirement_supported   = true;
+  cu_cp_test_environment env(std::move(params));
+  env.run_ng_setup();
+  const std::optional<unsigned> initial_du = connect_du_for_ntn_beam_cells(env, {0});
+  ASSERT_TRUE(initial_du.has_value());
+
+  cu_cp_ntn_command_handler& ntn_handler = env.get_cu_cp().get_command_handler().get_ntn_command_handler();
+  ntn_repair_command         audit_command;
+  audit_command.mode  = ntn_repair_mode::apply;
+  audit_command.scope = ntn_repair_scope::resources;
+  ASSERT_TRUE(ntn_handler.handle_ntn_repair_command(audit_command).accepted);
+  f1ap_message initial_audit_pdu;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      initial_du.value(), initial_audit_pdu, std::chrono::milliseconds{1000}));
+  ASSERT_TRUE(decode_test_ntn_resource_audit_request(initial_audit_pdu).has_value());
+  env.respond_to_f1ap_resource_coordination_request(initial_du.value(), initial_audit_pdu);
+  ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{1000}, [&]() {
+    return ntn_handler.get_current_ntn_runtime_status().ntn_rnti_retirement_capability == "supported";
+  }));
+
+  ASSERT_TRUE(ntn_handler.handle_ntn_satellite_state_update(make_ecef(0.0, 0.0, 500000.0)));
+  f1ap_message pool_pdu;
+  ASSERT_TRUE(
+      env.wait_for_f1ap_tx_pdu_without_auto_response(initial_du.value(), pool_pdu, std::chrono::milliseconds{1000}));
+  const auto pool_update = decode_test_ntn_rnti_lease_update(pool_pdu);
+  ASSERT_TRUE(pool_update.has_value());
+  ASSERT_EQ(pool_update->operation, f1ap_ntn_rnti_lease_pool_operation::add);
+  ASSERT_EQ(pool_update->leases.size(), 8U);
+  env.respond_to_f1ap_resource_coordination_request(initial_du.value(), pool_pdu);
+  ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{1000}, [&]() {
+    return ntn_handler.get_current_ntn_beam_service_resource_snapshot().nof_rnti_leases_applied_by_du == 8U;
+  }));
+  env.drain_f1ap_resource_coordination_requests(initial_du.value());
+
+  ASSERT_TRUE(env.drop_du_connection(initial_du.value()));
+  const ntn_beam_service_resource_snapshot disconnected = ntn_handler.get_current_ntn_beam_service_resource_snapshot();
+  EXPECT_EQ(disconnected.nof_rnti_leases_applied_by_du, 0U);
+  EXPECT_EQ(ntn_handler.get_current_ntn_runtime_status().ntn_rnti_retirement_capability, "unknown");
+
+  const std::optional<unsigned> reconnected_du = connect_du_for_ntn_beam_cells(env, {0});
+  ASSERT_TRUE(reconnected_du.has_value());
+  ASSERT_TRUE(ntn_handler.handle_ntn_repair_command(audit_command).accepted);
+  f1ap_message reconnect_audit_pdu;
+  ASSERT_TRUE(env.wait_for_f1ap_tx_pdu_without_auto_response(
+      reconnected_du.value(), reconnect_audit_pdu, std::chrono::milliseconds{1000}));
+  ASSERT_TRUE(decode_test_ntn_resource_audit_request(reconnect_audit_pdu).has_value());
+  EXPECT_EQ(ntn_handler.get_current_ntn_beam_service_resource_snapshot().nof_rnti_leases_applied_by_du, 0U);
+  env.respond_to_f1ap_resource_coordination_request(reconnected_du.value(), reconnect_audit_pdu);
+  ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{1000}, [&]() {
+    const auto status   = ntn_handler.get_current_ntn_runtime_status();
+    const auto snapshot = ntn_handler.get_current_ntn_beam_service_resource_snapshot();
+    return status.ntn_rnti_retirement_capability == "supported" && snapshot.nof_rnti_leases_applied_by_du == 8U;
+  }));
+  env.drain_f1ap_resource_coordination_requests(reconnected_du.value());
 }
 
 TEST(cu_cp_ntn_mobility_test, ntn_repair_apply_sib19_refresh_keeps_unchanged_payload_deduplicated)

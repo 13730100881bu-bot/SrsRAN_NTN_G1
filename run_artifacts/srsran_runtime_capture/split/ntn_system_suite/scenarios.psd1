@@ -39,6 +39,18 @@
     Required    = $true
   }
 
+  ntn_rnti_retirement_sim = @{
+    Type        = "ctest_filter"
+    Purpose     = "Simulated NTN C-RNTI allocation, expiry, atomic retirement, higher-generation reuse, and DU reconnect recovery"
+    BuildTarget = @("ntn_mobility_test", "cu_cp_test", "mac_test")
+    RegexGroups = @(
+      "ntn_beam_service_resource_manager.*(rnti.*retire|retirement|du_disconnect|du_ledger_reset|never_sent_orphan)",
+      "cu_cp_ntn_mobility_test.*(rnti_retirement|rnti_reconnect)_",
+      "rnti_manager_test.*(retire|generation|terrestrial)"
+    )
+    Required    = $true
+  }
+
   ntn_nrppa_sim = @{
     Type        = "ctest_filter"
     Purpose     = "Simulated NRPPa transport, TRP information, positioning information, measurement, activation, and assistance-control coverage"

@@ -93,6 +93,13 @@ struct cu_cp_test_env_params {
   std::optional<std::array<uint16_t, 2>>                                  ntn_recovered_calendar_intents_per_cell;
   std::optional<std::array<f1ap_ntn_access_calendar_preflight_report, 2>> ntn_recovered_calendar_preflight_reports;
   bool                                                   ntn_resource_audit_rejects              = false;
+  bool                                            ntn_resource_audit_rnti_snapshot_complete     = false;
+  bool                                            ntn_resource_audit_retirement_supported       = true;
+  bool                                            ntn_resource_audit_legacy_only                = false;
+  uint32_t                                        ntn_resource_audit_rnti_generation_high_water = 0;
+  std::vector<f1ap_ntn_resource_audit_rnti_lease> ntn_resource_audit_rnti_leases;
+  bool                                            ntn_rnti_retirement_rejects = false;
+  std::chrono::milliseconds                       f1ap_proc_timeout{10000};
 };
 
 class cu_cp_test_environment
@@ -219,6 +226,10 @@ public:
   /// Send the standard mock-DU response for a previously popped resource-coordination request.
   void respond_to_f1ap_resource_coordination_request(unsigned du_idx, const f1ap_message& request);
 
+  /// Apply a request to the mock DU ledger but intentionally drop its response.
+  /// This models a DU that committed an atomic update immediately before the transport connection was lost.
+  void apply_f1ap_resource_coordination_request_without_response(unsigned du_idx, const f1ap_message& request);
+
   void drain_f1ap_resource_coordination_requests(unsigned du_idx);
 
   unsigned nof_ntn_calendar_clear_requests() const { return ntn_calendar_clear_requests; }
@@ -315,6 +326,8 @@ private:
   std::array<uint16_t, 2>                                                  last_ntn_calendar_intents_per_cell{};
   std::array<f1ap_ntn_access_calendar_preflight_report, 2>                 last_ntn_calendar_preflight_reports{};
   unsigned                                                                 ntn_calendar_clear_requests = 0;
+  uint32_t                                        ntn_resource_audit_rnti_generation_high_water        = 0;
+  std::vector<f1ap_ntn_resource_audit_rnti_lease> ntn_resource_audit_rnti_leases;
 
   /// CU-CP instance.
   std::unique_ptr<cu_cp> cu_cp_inst;

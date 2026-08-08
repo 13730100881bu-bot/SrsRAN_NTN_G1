@@ -28,8 +28,8 @@
 #include "srsran/f1ap/ntn_rnti_lease_pool.h"
 #include "srsran/support/async/async_test_utils.h"
 #include "fmt/format.h"
-#include <gtest/gtest.h>
 #include <array>
+#include <gtest/gtest.h>
 #include <limits>
 
 using namespace srsran;
@@ -440,6 +440,25 @@ TEST(f1ap_ntn_rnti_lease_pool_container_test, valid_update_round_trips)
   ASSERT_EQ(decoded->leases.size(), update.leases.size());
   EXPECT_EQ(decoded->leases[0], update.leases[0]);
   EXPECT_EQ(decoded->leases[1], update.leases[1]);
+  EXPECT_EQ(buffer[7], '1');
+}
+
+TEST(f1ap_ntn_rnti_lease_pool_container_test, retire_uses_v2_and_v1_cannot_encode_retire)
+{
+  auto update        = make_lease_update();
+  update.operation   = f1ap_ntn_rnti_lease_pool_operation::retire;
+  update.expiry_ms   = 0;
+  byte_buffer buffer = encode_f1ap_ntn_rnti_lease_pool_update(update);
+
+  ASSERT_EQ(buffer[7], '2');
+  const auto decoded = decode_f1ap_ntn_rnti_lease_pool_update(buffer);
+  ASSERT_TRUE(decoded.has_value());
+  EXPECT_EQ(decoded->operation, f1ap_ntn_rnti_lease_pool_operation::retire);
+  EXPECT_EQ(decoded->expiry_ms, 0U);
+  EXPECT_EQ(decoded->leases, update.leases);
+
+  buffer[7] = '1';
+  EXPECT_FALSE(decode_f1ap_ntn_rnti_lease_pool_update(buffer).has_value());
 }
 
 TEST(f1ap_ntn_rnti_lease_pool_container_test, malformed_magic_is_rejected)
@@ -486,6 +505,40 @@ TEST(f1ap_ntn_resource_audit_container_test, valid_audit_request_and_result_roun
   ASSERT_EQ(decoded_result->ue_slots.size(), 1U);
   EXPECT_EQ(decoded_result->ue_slots.front().ue_index, uint_to_ue_index(7));
   EXPECT_EQ(decoded_result->ue_slots.front().request.sr_slot_offset, std::optional<unsigned>{3U});
+  EXPECT_FALSE(decoded_request->request_retirement_metadata);
+  EXPECT_FALSE(decoded_result->retirement_metadata_present);
+}
+
+TEST(f1ap_ntn_resource_audit_container_test, retirement_capability_request_and_v3_result_round_trip)
+{
+  f1ap_ntn_resource_audit_request request;
+  request.du_index                    = uint_to_du_index(2);
+  request.cell_index                  = to_du_cell_index(1);
+  request.pci                         = pci_t{17};
+  request.generation_id               = 100;
+  request.request_retirement_metadata = true;
+
+  const byte_buffer request_buffer = encode_f1ap_ntn_resource_audit_request(request);
+  ASSERT_EQ(request_buffer[7], '2');
+  const auto decoded_request = decode_f1ap_ntn_resource_audit_request(request_buffer);
+  ASSERT_TRUE(decoded_request.has_value());
+  EXPECT_TRUE(decoded_request->request_retirement_metadata);
+
+  f1ap_ntn_resource_audit_result result;
+  result.generation_id               = request.generation_id;
+  result.accepted                    = true;
+  result.rnti_snapshot_complete      = true;
+  result.retirement_metadata_present = true;
+  result.retire_supported            = true;
+  result.rnti_generation_high_water  = 77;
+
+  const byte_buffer result_buffer = encode_f1ap_ntn_resource_audit_result(result);
+  ASSERT_EQ(result_buffer[7], '3');
+  const auto decoded_result = decode_f1ap_ntn_resource_audit_result(result_buffer);
+  ASSERT_TRUE(decoded_result.has_value());
+  EXPECT_TRUE(decoded_result->retirement_metadata_present);
+  EXPECT_TRUE(decoded_result->retire_supported);
+  EXPECT_EQ(decoded_result->rnti_generation_high_water, 77U);
 }
 
 TEST(f1ap_ntn_sib19_broadcast_container_test, valid_update_and_result_round_trip)

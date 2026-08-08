@@ -25,8 +25,8 @@
 #include "srsran/asn1/f1ap/f1ap_pdu_contents.h"
 #include "srsran/f1ap/ntn_access_calendar.h"
 #include "srsran/f1ap/ntn_rnti_lease_pool.h"
-#include <gtest/gtest.h>
 #include <array>
+#include <gtest/gtest.h>
 #include <vector>
 
 using namespace srsran;
@@ -259,6 +259,33 @@ TEST_F(f1ap_du_gnbdu_resource_coordination_test, valid_update_is_forwarded_to_du
   EXPECT_EQ(decoded->accepted_leases, update.leases);
 }
 
+TEST_F(f1ap_du_gnbdu_resource_coordination_test, retire_v2_is_forwarded_to_du_configurator_and_acked)
+{
+  auto update      = make_lease_update();
+  update.operation = f1ap_ntn_rnti_lease_pool_operation::retire;
+  update.expiry_ms = 0;
+
+  f1ap_ntn_rnti_lease_pool_result next_result;
+  next_result.generation_id                           = update.generation_id;
+  next_result.accepted                                = true;
+  next_result.accepted_leases                         = update.leases;
+  next_result.reject_reason                           = "accepted";
+  f1ap_du_cfg_handler.next_ntn_rnti_lease_pool_result = next_result;
+
+  f1ap->handle_message(make_resource_coordination_request(17, update));
+
+  ASSERT_TRUE(f1ap_du_cfg_handler.last_ntn_rnti_lease_pool_update.has_value());
+  EXPECT_EQ(f1ap_du_cfg_handler.last_ntn_rnti_lease_pool_update->operation, f1ap_ntn_rnti_lease_pool_operation::retire);
+  EXPECT_EQ(f1ap_du_cfg_handler.last_ntn_rnti_lease_pool_update->expiry_ms, 0U);
+
+  const auto& asn1_resp = f1c_gw.last_tx_pdu().pdu.successful_outcome().value.gnb_du_res_coordination_resp();
+  const auto  decoded =
+      decode_f1ap_ntn_rnti_lease_pool_result(asn1_resp->eutra_nr_cell_res_coordination_req_ack_container);
+  ASSERT_TRUE(decoded.has_value());
+  EXPECT_TRUE(decoded->accepted);
+  EXPECT_EQ(decoded->accepted_leases, update.leases);
+}
+
 TEST_F(f1ap_du_gnbdu_resource_coordination_test, valid_access_calendar_is_forwarded_to_du_boundary_and_acked)
 {
   const auto update = make_access_calendar_update();
@@ -376,6 +403,38 @@ TEST_F(f1ap_du_gnbdu_resource_coordination_test, valid_audit_request_is_forwarde
   ASSERT_EQ(decoded->rnti_leases.size(), 1U);
   EXPECT_EQ(decoded->rnti_leases.front().rnti, to_rnti(0x4701));
   EXPECT_EQ(decoded->rnti_leases.front().generation_id, 23U);
+}
+
+TEST_F(f1ap_du_gnbdu_resource_coordination_test, v2_audit_request_returns_v3_retirement_metadata)
+{
+  f1ap_ntn_resource_audit_request request;
+  request.du_index                    = uint_to_du_index(0);
+  request.cell_index                  = to_du_cell_index(1);
+  request.pci                         = pci_t{17};
+  request.generation_id               = 92;
+  request.request_retirement_metadata = true;
+
+  f1ap_ntn_resource_audit_result next_result;
+  next_result.generation_id                          = request.generation_id;
+  next_result.accepted                               = true;
+  next_result.rnti_snapshot_complete                 = true;
+  next_result.retirement_metadata_present            = true;
+  next_result.retire_supported                       = true;
+  next_result.rnti_generation_high_water             = 81;
+  next_result.reject_reason                          = "ue_slot_snapshot_incomplete";
+  f1ap_du_cfg_handler.next_ntn_resource_audit_result = next_result;
+
+  f1ap->handle_message(make_resource_coordination_request(19, request));
+
+  ASSERT_TRUE(f1ap_du_cfg_handler.last_ntn_resource_audit_request.has_value());
+  EXPECT_TRUE(f1ap_du_cfg_handler.last_ntn_resource_audit_request->request_retirement_metadata);
+  const auto& asn1_resp = f1c_gw.last_tx_pdu().pdu.successful_outcome().value.gnb_du_res_coordination_resp();
+  const auto  decoded =
+      decode_f1ap_ntn_resource_audit_result(asn1_resp->eutra_nr_cell_res_coordination_req_ack_container);
+  ASSERT_TRUE(decoded.has_value());
+  EXPECT_TRUE(decoded->retirement_metadata_present);
+  EXPECT_TRUE(decoded->retire_supported);
+  EXPECT_EQ(decoded->rnti_generation_high_water, 81U);
 }
 
 TEST_F(f1ap_du_gnbdu_resource_coordination_test, valid_sib19_update_is_forwarded_to_du_configurator_and_acked)

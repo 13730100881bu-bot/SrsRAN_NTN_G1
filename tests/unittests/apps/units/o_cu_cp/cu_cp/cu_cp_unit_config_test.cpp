@@ -31,9 +31,9 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <gtest/gtest.h>
 #include <map>
 #include <set>
-#include <gtest/gtest.h>
 #include <yaml-cpp/yaml.h>
 
 using namespace srsran;
@@ -1398,6 +1398,18 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_service_area_paging_counters)
   command_handler.ntn.runtime.nof_ntn_resource_audit_rnti_incomplete    = 200;
   command_handler.ntn.runtime.nof_ntn_resource_audit_ue_slot_incomplete = 201;
   command_handler.ntn.runtime.last_ntn_resource_audit_reason             = "ue_slot_snapshot_incomplete";
+  command_handler.ntn.runtime.ntn_rnti_retirement_capability                 = "supported";
+  command_handler.ntn.runtime.ntn_rnti_generation_high_water                 = 202;
+  command_handler.ntn.runtime.nof_ntn_rnti_retire_pending                    = 5;
+  command_handler.ntn.runtime.nof_ntn_rnti_retire_sent                       = 6;
+  command_handler.ntn.runtime.nof_ntn_rnti_quarantined                       = 7;
+  command_handler.ntn.runtime.nof_ntn_rnti_retired                           = 203;
+  command_handler.ntn.runtime.nof_ntn_rnti_reused                            = 204;
+  command_handler.ntn.runtime.nof_ntn_rnti_retire_rejected                   = 205;
+  command_handler.ntn.runtime.nof_ntn_rnti_retire_unsupported                = 8;
+  command_handler.ntn.runtime.nof_ntn_rnti_namespace_exhausted               = 9;
+  command_handler.ntn.runtime.nof_ntn_rnti_generation_exhausted              = 10;
+  command_handler.ntn.runtime.last_ntn_rnti_retirement_reason                = "retirement_confirmed_by_du";
   command_handler.ntn.runtime.nof_ntn_inactive_contexts                 = 97;
   command_handler.ntn.runtime.nof_ntn_inactive_contexts_expired         = 98;
   command_handler.ntn.runtime.nof_ntn_inactive_suspend_requested        = 99;
@@ -1444,6 +1456,17 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_service_area_paging_counters)
   command_handler.ntn.resource_snapshot.nof_rnti_leases_released       = 34;
   command_handler.ntn.resource_snapshot.nof_rnti_leases_expired        = 35;
   command_handler.ntn.resource_snapshot.nof_rnti_leases_conflict       = 36;
+  command_handler.ntn.resource_snapshot.nof_rnti_leases_retire_pending       = 5;
+  command_handler.ntn.resource_snapshot.nof_rnti_leases_retire_sent          = 6;
+  command_handler.ntn.resource_snapshot.nof_rnti_leases_retire_waiting_audit = 4;
+  command_handler.ntn.resource_snapshot.nof_rnti_orphans_quarantined         = 7;
+  command_handler.ntn.resource_snapshot.nof_rnti_leases_retired              = 203;
+  command_handler.ntn.resource_snapshot.nof_rnti_leases_reused               = 204;
+  command_handler.ntn.resource_snapshot.nof_rnti_retirement_rejected         = 205;
+  command_handler.ntn.resource_snapshot.nof_rnti_orphans_observed            = 206;
+  command_handler.ntn.resource_snapshot.rnti_retirement_last_reason          = "retirement_confirmed_by_du";
+  command_handler.ntn.resource_snapshot.rnti_retirement_du_statuses.push_back(
+      {srs_cu_cp::uint_to_du_index(2), 17, true, true, true, 202});
   command_handler.ntn.resource_snapshot.nof_resource_repairs_queued    = 45;
   command_handler.ntn.resource_snapshot.nof_resource_repairs_sent      = 46;
   command_handler.ntn.resource_snapshot.nof_resource_repairs_applied   = 47;
@@ -1486,7 +1509,8 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_service_area_paging_counters)
   ASSERT_NE(output.find("NTN access DU: assigned_analog=12 unassigned_analog=4 same_du_service=60 split_du_service=4"),
             std::string::npos);
   ASSERT_NE(output.find("NTN pre-service relocation: pending=2 active=1 blocked=3"), std::string::npos);
-  ASSERT_NE(output.find("NTN connected handover: candidate=4 preloaded=5 resource_preparing=42 resource_applied=43 active=7 blocked=6 rollback=44"),
+  ASSERT_NE(output.find("NTN connected handover: candidate=4 preloaded=5 resource_preparing=42 resource_applied=43 "
+                        "active=7 blocked=6 rollback=44"),
             std::string::npos);
   ASSERT_NE(output.find("NTN UE access/service: access_only=8 binding_pending=9 binding_blocked=10 service_bound=11"),
             std::string::npos);
@@ -1575,12 +1599,24 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_service_area_paging_counters)
   ASSERT_NE(output.find("timeline_steps=10 horizon_ms=10000 lead_ms=3000 entries=6 exits=7 "
                         "earliest_upcoming_ms=2000 earliest_drain_ms=3000"),
             std::string::npos);
-  ASSERT_NE(output.find("NTN resource manager: rnti_owned=22 rnti_conflicts=23 digital_slot_active=24 sent=37 applied=38 rejected=39 cleared=25 cleared_by_du=40 rollback=41"),
+  ASSERT_NE(output.find("NTN resource manager: rnti_owned=22 rnti_conflicts=23 digital_slot_active=24 sent=37 "
+                        "applied=38 rejected=39 cleared=25 cleared_by_du=40 rollback=41"),
             std::string::npos);
-  ASSERT_NE(output.find("NTN RNTI leases: reserved=26 available=27 sent=28 applied=29 rejected=30 offered=31 consumed=42 initial_ul=32 committed=33 released=34 expired=35 conflicts=36"),
+  ASSERT_NE(output.find("NTN RNTI leases: reserved=26 available=27 sent=28 applied=29 rejected=30 offered=31 "
+                        "consumed=42 initial_ul=32 committed=33 released=34 expired=35 conflicts=36"),
+            std::string::npos);
+  ASSERT_NE(output.find("NTN RNTI lifecycle: retire_pending=5 retire_sent=6 waiting_audit=4 "
+                        "orphan_quarantined=7 retired=203 reused=204 retire_rejected=205 "
+                        "orphan_observed=206 reason=retirement_confirmed_by_du"),
             std::string::npos);
   ASSERT_NE(output.find("NTN resource audit: generation=194 queries=195 accepted=196 mismatches=197 repairs=198 "
                         "failures=199 rnti_incomplete=200 ue_slot_incomplete=201 reason=ue_slot_snapshot_incomplete"),
+            std::string::npos);
+  ASSERT_NE(output.find("NTN RNTI retirement: capability=supported generation_high_water=202 unsupported=8 "
+                        "namespace_exhausted=9 generation_exhausted=10 reason=retirement_confirmed_by_du"),
+            std::string::npos);
+  ASSERT_NE(output.find("NTN RNTI retirement DU: du=2 connection_generation=17 capability=supported "
+                        "complete_audit=true generation_high_water=202"),
             std::string::npos);
   ASSERT_NE(output.find("NTN resource repairs: queued=45 sent=46 applied=47 failed=48 retry_exhausted=49 conflicts=50"),
             std::string::npos);
@@ -1588,7 +1624,8 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_service_area_paging_counters)
                         "slot_intents=192 repair_records=193 "
                         "last_reason=du_missing_service_pair_ul_sr_srs_assignment"),
             std::string::npos);
-  ASSERT_NE(output.find("NTN resource domain: analog_cap_blocked=14 digital_cap_blocked=15 conflict_blocked=16 active_reuse_groups=17"),
+  ASSERT_NE(output.find("NTN resource domain: analog_cap_blocked=14 digital_cap_blocked=15 conflict_blocked=16 "
+                        "active_reuse_groups=17"),
             std::string::npos);
   ASSERT_NE(output.find("NTN SIB19 broadcast: desired=51 sent=52 applied=53 rejected=54 cleared=55 stale=56"),
             std::string::npos);

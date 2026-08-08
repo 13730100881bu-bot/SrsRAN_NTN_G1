@@ -62,6 +62,7 @@ The v1 registry includes:
 - `ntn_connected_mobility_sim`: simulated connected mobility coverage through focused CTest.
 - `ntn_paging_sim`: simulated NTN paging coverage through focused CTest.
 - `ntn_resource_repair_sim`: simulated RNTI/SR/SRS resource audit and repair coverage.
+- `ntn_rnti_retirement_sim`: simulated C-RNTI expiry, atomic retirement, higher-generation reuse, and DU reconnect recovery.
 - `ntn_nrppa_sim`: simulated NRPPa and positioning transport coverage.
 - `ntn_cli_observability_sim`: simulated CLI observability coverage.
 
