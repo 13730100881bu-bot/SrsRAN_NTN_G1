@@ -27,6 +27,7 @@
 #include "srsran/ran/nr_cgi.h"
 #include "srsran/ran/pci.h"
 #include "srsran/ran/rnti.h"
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -87,6 +88,7 @@ struct ntn_rnti_lease {
   rnti_t      rnti     = rnti_t::INVALID_RNTI;
   std::string analog_beam_id;
   uint32_t    generation_id = 0;
+  uint64_t                du_connection_generation = 0;
   std::string state  = "none";
   std::string reason = "none";
   std::string distribution_state = "desired";
@@ -173,6 +175,13 @@ struct ntn_resource_audit_report {
   bool                                  rnti_snapshot_complete = false;
   /// True only when the DU returned an authoritative, complete per-UE SR/SRS snapshot for the requested cell.
   bool                                  ue_slot_snapshot_complete = false;
+  /// Identifies the live DU connection that produced this report. Zero keeps legacy in-process callers compatible.
+  uint64_t du_connection_generation = 0;
+  /// True when the DU explicitly advertised whether safe terminal-lease retirement is supported.
+  bool rnti_retirement_capability_known = false;
+  bool rnti_retirement_supported        = false;
+  /// Highest lease generation retained by the DU/MAC anti-replay ledger.
+  uint32_t                                   rnti_generation_high_water = 0;
   std::string                           reject_reason;
   std::vector<ntn_resource_audit_rnti_lease> rnti_leases;
   std::vector<ntn_resource_audit_ue_slot>    ue_slots;
@@ -215,6 +224,26 @@ struct ntn_resource_audit_decision {
   std::vector<ntn_resource_repair> repairs;
 };
 
+/// Exact, atomically retired group of terminal C-RNTI leases.
+struct ntn_rnti_retirement_batch {
+  du_index_t              du_index                 = du_index_t::invalid;
+  srsran::du_cell_index_t cell_index               = srsran::INVALID_DU_CELL_INDEX;
+  pci_t                   pci                      = INVALID_PCI;
+  uint32_t                generation_id            = 0;
+  uint64_t                du_connection_generation = 0;
+  std::vector<rnti_t>     leases;
+};
+
+/// Read-only recovery status for one DU's C-RNTI retirement capability.
+struct ntn_rnti_retirement_du_status {
+  du_index_t du_index                 = du_index_t::invalid;
+  uint64_t   du_connection_generation = 0;
+  bool       capability_known         = false;
+  bool       supported                = false;
+  bool       complete_audit_seen      = false;
+  uint32_t   generation_high_water    = 0;
+};
+
 /// Public read-only CU-CP repair executor state for one authoritative NTN repair action.
 struct ntn_resource_repair_record {
   ntn_resource_repair_action action = ntn_resource_repair_action::none;
@@ -252,6 +281,7 @@ struct ntn_beam_service_resource_snapshot {
   std::vector<ntn_access_rnti_ownership>       access_rnti_ownerships;
   std::vector<ntn_digital_slot_resource_intent> digital_slot_intents;
   std::vector<ntn_resource_repair_record>       resource_repairs;
+  std::vector<ntn_rnti_retirement_du_status>    rnti_retirement_du_statuses;
   unsigned nof_rnti_leases_reserved        = 0;
   unsigned nof_rnti_leases_sent_to_du      = 0;
   unsigned nof_rnti_leases_applied_by_du   = 0;
@@ -264,6 +294,15 @@ struct ntn_beam_service_resource_snapshot {
   unsigned nof_rnti_leases_released        = 0;
   unsigned nof_rnti_leases_expired         = 0;
   unsigned nof_rnti_leases_conflict        = 0;
+  unsigned                                      nof_rnti_leases_retire_pending        = 0;
+  unsigned                                      nof_rnti_leases_retire_sent           = 0;
+  unsigned                                      nof_rnti_leases_retire_waiting_audit  = 0;
+  unsigned                                      nof_rnti_orphans_quarantined          = 0;
+  uint64_t                                      nof_rnti_leases_retired               = 0;
+  uint64_t                                      nof_rnti_leases_reused                = 0;
+  uint64_t                                      nof_rnti_retirement_rejected          = 0;
+  uint64_t                                      nof_rnti_orphans_observed             = 0;
+  std::string                                   rnti_retirement_last_reason           = "none";
   unsigned nof_access_rnti_owned     = 0;
   unsigned nof_access_rnti_conflicts = 0;
   unsigned nof_digital_slot_desired        = 0;

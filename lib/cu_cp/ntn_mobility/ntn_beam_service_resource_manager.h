@@ -31,6 +31,8 @@
 namespace srsran {
 namespace srs_cu_cp {
 
+enum class ntn_rnti_retirement_outcome { accepted, definitively_rejected, outcome_unknown, not_sent };
+
 /// CU-CP-only manager for NTN access ownership and digital service slot-resource intent.
 class ntn_beam_service_resource_manager
 {
@@ -119,6 +121,25 @@ public:
 
   ntn_resource_audit_decision handle_resource_audit_report(const ntn_resource_audit_report& report);
 
+  /// Returns stable, exact groups that may be retired after a complete audit of the current DU connection.
+  std::vector<ntn_rnti_retirement_batch> get_pending_rnti_retirement_batches() const;
+
+  /// Marks an exact pending batch as sent. A partial or stale batch is rejected atomically.
+  bool mark_rnti_retirement_sent(const ntn_rnti_retirement_batch& batch);
+
+  /// Applies an exact retirement result. Only an unknown outcome remains eligible for absence confirmation.
+  bool mark_rnti_retirement_result(const ntn_rnti_retirement_batch& batch,
+                                   ntn_rnti_retirement_outcome      outcome,
+                                   std::string                      reason);
+
+  /// Invalidates retirement eligibility and late completions when a DU connection is lost.
+  void invalidate_rnti_retirement_for_du(du_index_t du_index);
+
+  /// Complete per-DU exclusion set used by the bounded CU-CP allocator.
+  std::set<rnti_t> get_rnti_allocation_exclusions(du_index_t du_index) const;
+
+  bool is_rnti_excluded_for_du(du_index_t du_index, rnti_t rnti) const;
+
   ntn_resource_repair_record queue_resource_repair(const ntn_resource_repair& repair, uint32_t generation_id);
 
   void mark_resource_repair_sent(const ntn_resource_repair& repair);
@@ -144,6 +165,21 @@ private:
                                 pci_t,
                                 rnti_t,
                                 std::string>;
+  using retirement_group_key = std::tuple<du_index_t, srsran::du_cell_index_t, pci_t, uint32_t, uint64_t>;
+  using retired_rnti_key     = std::pair<du_index_t, rnti_t>;
+
+  struct retirement_du_state {
+    uint64_t du_connection_generation          = 0;
+    uint64_t invalidated_connection_generation = 0;
+    uint64_t observed_connection_generation    = 0;
+    bool     capability_known                  = false;
+    bool     supported                         = false;
+    bool     observed_capability_known         = false;
+    bool     observed_supported                = false;
+    bool     complete_audit_seen               = false;
+    uint32_t generation_high_water             = 0;
+    uint32_t observed_generation_high_water    = 0;
+  };
 
   static bool is_valid_access_ownership_update(const ntn_access_rnti_ownership_update& update);
   static bool is_valid_lease_pool_update(const ntn_rnti_lease_pool_update& update);
@@ -158,12 +194,22 @@ private:
   std::map<rnti_key, ue_index_t> access_owner_by_rnti;
   std::map<ue_index_t, rnti_key> access_rnti_key_by_ue;
   std::map<rnti_key, ntn_rnti_lease> rnti_leases_by_key;
+  std::set<rnti_key>                                      orphan_rnti_keys;
+  std::set<rnti_key>                                      retirement_attempted_rnti_keys;
+  std::map<retirement_group_key, std::set<rnti_key>>      retirement_attempted_batches;
+  std::map<retired_rnti_key, uint32_t>                    retired_generation_by_du_rnti;
+  std::map<du_index_t, retirement_du_state>               rnti_retirement_by_du;
   std::map<ue_index_t, ntn_access_rnti_ownership> access_ownership_by_ue;
   std::map<ue_index_t, ntn_digital_slot_resource_intent> digital_slot_intent_by_ue;
   std::map<ue_index_t, f1ap_ntn_ul_slot_resource_request> cached_slot_requests_by_ue;
   std::map<ue_index_t, f1ap_ntn_ul_slot_resource_request> applied_slot_requests_by_ue;
   std::map<repair_key, ntn_resource_repair_record> resource_repairs_by_key;
   bool authoritative_rnti_lease_validation_enabled = false;
+  uint64_t                                                nof_rnti_leases_retired                     = 0;
+  uint64_t                                                nof_rnti_leases_reused                      = 0;
+  uint64_t                                                nof_rnti_retirement_rejected                = 0;
+  uint64_t                                                nof_rnti_orphans_observed                   = 0;
+  std::string                                             rnti_retirement_last_reason                 = "none";
 };
 
 } // namespace srs_cu_cp

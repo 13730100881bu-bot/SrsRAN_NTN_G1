@@ -39,7 +39,7 @@
 
 namespace srsran {
 
-enum class f1ap_ntn_rnti_lease_pool_operation : uint8_t { replace = 0, add = 1, clear = 2 };
+enum class f1ap_ntn_rnti_lease_pool_operation : uint8_t { replace = 0, add = 1, clear = 2, retire = 3 };
 
 struct f1ap_ntn_rnti_lease_pool_update {
   gnb_du_id_t                              gnb_du_id = gnb_du_id_t::invalid;
@@ -67,6 +67,8 @@ struct f1ap_ntn_resource_audit_request {
   du_cell_index_t       cell_index = INVALID_DU_CELL_INDEX;
   pci_t                 pci = INVALID_PCI;
   uint32_t              generation_id = 0;
+  /// Requests the DU's safe RNTI retirement capability and generation high-water metadata.
+  bool request_retirement_metadata = false;
 };
 
 struct f1ap_ntn_resource_audit_rnti_lease {
@@ -89,6 +91,10 @@ struct f1ap_ntn_resource_audit_result {
   bool                                          rnti_snapshot_complete = false;
   /// True only when ue_slots contains the complete DU per-UE SR/SRS snapshot for the requested cell.
   bool                                          ue_slot_snapshot_complete = false;
+  /// Present only in the V3 result returned for a V2 retirement-capability request.
+  bool                                            retirement_metadata_present = false;
+  bool                                            retire_supported            = false;
+  uint32_t                                        rnti_generation_high_water  = 0;
   std::string                                   reject_reason;
   std::vector<f1ap_ntn_resource_audit_rnti_lease> rnti_leases;
   std::vector<f1ap_ntn_resource_audit_ue_slot>    ue_slots;
@@ -375,9 +381,11 @@ decode_f1ap_ntn_sib19_broadcast_result(const byte_buffer& container)
 
 inline byte_buffer encode_f1ap_ntn_rnti_lease_pool_update(const f1ap_ntn_rnti_lease_pool_update& update)
 {
-  static constexpr std::array<uint8_t, 8> magic = {'R', 'N', 'T', 'L', 'S', 'E', '0', '1'};
+  static constexpr std::array<uint8_t, 8> v1_magic = {'R', 'N', 'T', 'L', 'S', 'E', '0', '1'};
+  static constexpr std::array<uint8_t, 8> v2_magic = {'R', 'N', 'T', 'L', 'S', 'E', '0', '2'};
 
   std::vector<uint8_t> payload;
+  const auto&          magic = update.operation == f1ap_ntn_rnti_lease_pool_operation::retire ? v2_magic : v1_magic;
   payload.insert(payload.end(), magic.begin(), magic.end());
 
   const auto write_u8 = [&payload](uint8_t value) { payload.push_back(value); };
@@ -420,18 +428,22 @@ inline byte_buffer encode_f1ap_ntn_rnti_lease_pool_update(const f1ap_ntn_rnti_le
 inline std::optional<f1ap_ntn_rnti_lease_pool_update>
 decode_f1ap_ntn_rnti_lease_pool_update(const byte_buffer& container)
 {
-  static constexpr std::array<uint8_t, 8> magic = {'R', 'N', 'T', 'L', 'S', 'E', '0', '1'};
+  static constexpr std::array<uint8_t, 7> magic_prefix = {'R', 'N', 'T', 'L', 'S', 'E', '0'};
 
-  if (container.length() < magic.size() + 31) {
+  if (container.length() < magic_prefix.size() + 1 + 31) {
     return std::nullopt;
   }
-  for (unsigned i = 0; i != magic.size(); ++i) {
-    if (container[i] != magic[i]) {
+  for (unsigned i = 0; i != magic_prefix.size(); ++i) {
+    if (container[i] != magic_prefix[i]) {
       return std::nullopt;
     }
   }
+  const uint8_t codec_version = container[magic_prefix.size()];
+  if (codec_version != '1' && codec_version != '2') {
+    return std::nullopt;
+  }
 
-  size_t offset = magic.size();
+  size_t     offset  = magic_prefix.size() + 1;
   const auto read_u8 = [&container, &offset](uint8_t& value) {
     if (offset + 1 > container.length()) {
       return false;
@@ -470,7 +482,7 @@ decode_f1ap_ntn_rnti_lease_pool_update(const byte_buffer& container)
   };
 
   uint64_t du_id = 0;
-  uint16_t du_idx = 0;
+  uint16_t du_idx     = 0;
   uint16_t cell_idx = 0;
   uint64_t nci = 0;
   uint16_t pci = 0;
@@ -493,7 +505,8 @@ decode_f1ap_ntn_rnti_lease_pool_update(const byte_buffer& container)
       !read_u16(analog_len)) {
     return std::nullopt;
   }
-  if (operation > static_cast<uint8_t>(f1ap_ntn_rnti_lease_pool_operation::clear)) {
+  if ((codec_version == '1' && operation > static_cast<uint8_t>(f1ap_ntn_rnti_lease_pool_operation::clear)) ||
+      (codec_version == '2' && operation != static_cast<uint8_t>(f1ap_ntn_rnti_lease_pool_operation::retire))) {
     return std::nullopt;
   }
   if (offset + analog_len > container.length()) {
@@ -608,8 +621,7 @@ decode_f1ap_ntn_rnti_lease_pool_result(const byte_buffer& container)
     if (offset + 4 > container.length()) {
       return false;
     }
-    value = (static_cast<uint32_t>(container[offset]) << 24U) |
-            (static_cast<uint32_t>(container[offset + 1]) << 16U) |
+    value = (static_cast<uint32_t>(container[offset]) << 24U) | (static_cast<uint32_t>(container[offset + 1]) << 16U) |
             (static_cast<uint32_t>(container[offset + 2]) << 8U) | static_cast<uint32_t>(container[offset + 3]);
     offset += 4;
     return true;
@@ -660,9 +672,11 @@ decode_f1ap_ntn_rnti_lease_pool_result(const byte_buffer& container)
 
 inline byte_buffer encode_f1ap_ntn_resource_audit_request(const f1ap_ntn_resource_audit_request& request)
 {
-  static constexpr std::array<uint8_t, 8> magic = {'N', 'T', 'A', 'U', 'D', 'Q', '0', '1'};
+  static constexpr std::array<uint8_t, 8> v1_magic = {'N', 'T', 'A', 'U', 'D', 'Q', '0', '1'};
+  static constexpr std::array<uint8_t, 8> v2_magic = {'N', 'T', 'A', 'U', 'D', 'Q', '0', '2'};
 
   std::vector<uint8_t> payload;
+  const auto&          magic = request.request_retirement_metadata ? v2_magic : v1_magic;
   payload.insert(payload.end(), magic.begin(), magic.end());
 
   const auto write_u16 = [&payload](uint16_t value) {
@@ -687,18 +701,22 @@ inline byte_buffer encode_f1ap_ntn_resource_audit_request(const f1ap_ntn_resourc
 inline std::optional<f1ap_ntn_resource_audit_request>
 decode_f1ap_ntn_resource_audit_request(const byte_buffer& container)
 {
-  static constexpr std::array<uint8_t, 8> magic = {'N', 'T', 'A', 'U', 'D', 'Q', '0', '1'};
+  static constexpr std::array<uint8_t, 7> magic_prefix = {'N', 'T', 'A', 'U', 'D', 'Q', '0'};
 
-  if (container.length() != magic.size() + 10) {
+  if (container.length() != magic_prefix.size() + 1 + 10) {
     return std::nullopt;
   }
-  for (unsigned i = 0; i != magic.size(); ++i) {
-    if (container[i] != magic[i]) {
+  for (unsigned i = 0; i != magic_prefix.size(); ++i) {
+    if (container[i] != magic_prefix[i]) {
       return std::nullopt;
     }
   }
+  const uint8_t codec_version = container[magic_prefix.size()];
+  if (codec_version != '1' && codec_version != '2') {
+    return std::nullopt;
+  }
 
-  size_t offset = magic.size();
+  size_t     offset   = magic_prefix.size() + 1;
   const auto read_u16 = [&container, &offset](uint16_t& value) {
     if (offset + 2 > container.length()) {
       return false;
@@ -711,8 +729,7 @@ decode_f1ap_ntn_resource_audit_request(const byte_buffer& container)
     if (offset + 4 > container.length()) {
       return false;
     }
-    value = (static_cast<uint32_t>(container[offset]) << 24U) |
-            (static_cast<uint32_t>(container[offset + 1]) << 16U) |
+    value = (static_cast<uint32_t>(container[offset]) << 24U) | (static_cast<uint32_t>(container[offset + 1]) << 16U) |
             (static_cast<uint32_t>(container[offset + 2]) << 8U) | static_cast<uint32_t>(container[offset + 3]);
     offset += 4;
     return true;
@@ -731,14 +748,17 @@ decode_f1ap_ntn_resource_audit_request(const byte_buffer& container)
   request.du_index   = srs_cu_cp::uint_to_du_index(du_index);
   request.cell_index = to_du_cell_index(cell_index);
   request.pci        = pci;
+  request.request_retirement_metadata = codec_version == '2';
   return request;
 }
 
 inline byte_buffer encode_f1ap_ntn_resource_audit_result(const f1ap_ntn_resource_audit_result& result)
 {
-  static constexpr std::array<uint8_t, 8> magic = {'N', 'T', 'A', 'U', 'D', 'R', '0', '2'};
+  static constexpr std::array<uint8_t, 8> v2_magic = {'N', 'T', 'A', 'U', 'D', 'R', '0', '2'};
+  static constexpr std::array<uint8_t, 8> v3_magic = {'N', 'T', 'A', 'U', 'D', 'R', '0', '3'};
 
   std::vector<uint8_t> payload;
+  const auto&          magic = result.retirement_metadata_present ? v3_magic : v2_magic;
   payload.insert(payload.end(), magic.begin(), magic.end());
 
   const auto write_u8 = [&payload](uint8_t value) { payload.push_back(value); };
@@ -787,6 +807,12 @@ inline byte_buffer encode_f1ap_ntn_resource_audit_result(const f1ap_ntn_resource
   completeness_flags |= result.rnti_snapshot_complete ? 0x01U : 0U;
   completeness_flags |= result.ue_slot_snapshot_complete ? 0x02U : 0U;
   write_u8(completeness_flags);
+  if (result.retirement_metadata_present) {
+    uint8_t retirement_flags = 0x01U;
+    retirement_flags |= result.retire_supported ? 0x02U : 0U;
+    write_u8(retirement_flags);
+    write_u32(result.rnti_generation_high_water);
+  }
   write_string(result.reject_reason);
   write_u16(static_cast<uint16_t>(result.rnti_leases.size()));
   for (const auto& lease : result.rnti_leases) {
@@ -805,8 +831,7 @@ inline byte_buffer encode_f1ap_ntn_resource_audit_result(const f1ap_ntn_resource
   return byte_buffer::create(span<const uint8_t>(payload.data(), payload.size())).value();
 }
 
-inline std::optional<f1ap_ntn_resource_audit_result>
-decode_f1ap_ntn_resource_audit_result(const byte_buffer& container)
+inline std::optional<f1ap_ntn_resource_audit_result> decode_f1ap_ntn_resource_audit_result(const byte_buffer& container)
 {
   static constexpr std::array<uint8_t, 7> magic_prefix = {'N', 'T', 'A', 'U', 'D', 'R', '0'};
 
@@ -819,7 +844,7 @@ decode_f1ap_ntn_resource_audit_result(const byte_buffer& container)
     }
   }
   const uint8_t codec_version = container[magic_prefix.size()];
-  if (codec_version != '1' && codec_version != '2') {
+  if (codec_version != '1' && codec_version != '2' && codec_version != '3') {
     return std::nullopt;
   }
 
@@ -843,8 +868,7 @@ decode_f1ap_ntn_resource_audit_result(const byte_buffer& container)
     if (offset + 4 > container.length()) {
       return false;
     }
-    value = (static_cast<uint32_t>(container[offset]) << 24U) |
-            (static_cast<uint32_t>(container[offset + 1]) << 16U) |
+    value = (static_cast<uint32_t>(container[offset]) << 24U) | (static_cast<uint32_t>(container[offset + 1]) << 16U) |
             (static_cast<uint32_t>(container[offset + 2]) << 8U) | static_cast<uint32_t>(container[offset + 3]);
     offset += 4;
     return true;
@@ -906,21 +930,28 @@ decode_f1ap_ntn_resource_audit_result(const byte_buffer& container)
 
   f1ap_ntn_resource_audit_result result;
   uint8_t accepted = 0;
-  uint8_t  completeness_flags = 0;
+  uint8_t                        completeness_flags = 0;
+  uint8_t                        retirement_flags   = 0;
   uint16_t nof_leases         = 0;
   uint16_t nof_slots          = 0;
   if (!read_u32(result.generation_id) || !read_u8(accepted) || accepted > 1) {
     return std::nullopt;
   }
-  if (codec_version == '2' && (!read_u8(completeness_flags) || (completeness_flags & 0xfcU) != 0)) {
+  if (codec_version != '1' && (!read_u8(completeness_flags) || (completeness_flags & 0xfcU) != 0)) {
+    return std::nullopt;
+  }
+  if (codec_version == '3' && (!read_u8(retirement_flags) || (retirement_flags & 0xfcU) != 0 ||
+                               (retirement_flags & 0x01U) == 0 || !read_u32(result.rnti_generation_high_water))) {
     return std::nullopt;
   }
   if (!read_string(result.reject_reason) || !read_u16(nof_leases)) {
     return std::nullopt;
   }
   result.accepted = accepted == 1;
-  result.rnti_snapshot_complete    = codec_version == '2' && (completeness_flags & 0x01U) != 0;
-  result.ue_slot_snapshot_complete = codec_version == '2' && (completeness_flags & 0x02U) != 0;
+  result.rnti_snapshot_complete      = codec_version != '1' && (completeness_flags & 0x01U) != 0;
+  result.ue_slot_snapshot_complete   = codec_version != '1' && (completeness_flags & 0x02U) != 0;
+  result.retirement_metadata_present = codec_version == '3';
+  result.retire_supported            = codec_version == '3' && (retirement_flags & 0x02U) != 0;
   result.rnti_leases.reserve(nof_leases);
   for (unsigned i = 0; i != nof_leases; ++i) {
     uint16_t rnti_value = 0;
@@ -929,7 +960,7 @@ decode_f1ap_ntn_resource_audit_result(const byte_buffer& container)
       return std::nullopt;
     }
     lease.rnti = to_rnti(rnti_value);
-    if (codec_version == '2' && !read_u32(lease.generation_id)) {
+    if (codec_version != '1' && !read_u32(lease.generation_id)) {
       return std::nullopt;
     }
     if (!read_string(lease.state) || !read_string(lease.distribution_state)) {

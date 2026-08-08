@@ -118,6 +118,14 @@ ntn_beam_service_resource_manager::reserve_rnti_leases(const ntn_rnti_lease_pool
                                                           return std::get<0>(entry.first) == du_index &&
                                                                  std::get<3>(entry.first) == rnti;
                                                         });
+    const auto     retired_generation         = retired_generation_by_du_rnti.find({update.du_index, rnti});
+    if (retired_generation != retired_generation_by_du_rnti.end() &&
+        update.generation_id <= retired_generation->second) {
+      result.accepted = false;
+      result.state    = "conflict";
+      result.reason   = "stale_generation";
+      return result;
+    }
     if (!leases_in_update.emplace(rnti).second || rnti_leases_by_key.find(key) != rnti_leases_by_key.end() ||
         access_owner_by_rnti.find(key) != access_owner_by_rnti.end() || used_in_du_lease_namespace ||
         used_in_du_owner_namespace) {
@@ -141,6 +149,10 @@ ntn_beam_service_resource_manager::reserve_rnti_leases(const ntn_rnti_lease_pool
     lease.distribution_state  = "desired";
     lease.distribution_reason = "local_reservation";
     rnti_leases_by_key.emplace(rnti_key{update.du_index, update.cell_index, update.pci, rnti}, std::move(lease));
+    if (retired_generation_by_du_rnti.find({update.du_index, rnti}) != retired_generation_by_du_rnti.end()) {
+      ++nof_rnti_leases_reused;
+      rnti_retirement_last_reason = "retired_rnti_reused";
+    }
     ++result.nof_leases_reserved;
   }
 
@@ -364,7 +376,9 @@ unsigned ntn_beam_service_resource_manager::expire_rnti_leases_for_analog_beam(c
   unsigned nof_expired = 0;
   for (auto& entry : rnti_leases_by_key) {
     ntn_rnti_lease& lease = entry.second;
-    if (lease.analog_beam_id != analog_beam_id || lease.state == "committed") {
+    // Closing an access window expires only unused leases. RAR, Initial UL, committed and handover records remain
+    // quarantined until their own UE lifecycle reaches an explicit terminal state.
+    if (lease.analog_beam_id != analog_beam_id || lease.state != "reserved") {
       continue;
     }
     lease.state  = "expired";
@@ -883,38 +897,229 @@ ntn_beam_service_resource_manager::handle_resource_audit_report(const ntn_resour
     }
   };
 
+  // Capability metadata is independent of whether the lease list is complete. Keep observations from an incomplete
+  // list separate from the authoritative connection and generation high-water used by the retirement decisions below.
+  // This keeps OAM useful without allowing an incomplete response to authorize work or to mask a legitimate ledger
+  // reset reported by the first complete audit after a reconnect.
+  if (report.rnti_retirement_capability_known && !report.rnti_snapshot_complete) {
+    auto& du_retirement = rnti_retirement_by_du[report.du_index];
+    const uint64_t known_connection = du_retirement.du_connection_generation != 0
+                                          ? du_retirement.du_connection_generation
+                                          : du_retirement.observed_connection_generation;
+    const bool live_connection =
+        (known_connection == 0 || known_connection == report.du_connection_generation) &&
+        (du_retirement.invalidated_connection_generation == 0 ||
+         report.du_connection_generation > du_retirement.invalidated_connection_generation);
+    if (live_connection) {
+      du_retirement.observed_connection_generation = report.du_connection_generation;
+      du_retirement.observed_capability_known      = true;
+      du_retirement.observed_supported             = report.rnti_retirement_supported;
+      du_retirement.observed_generation_high_water =
+          std::max(du_retirement.observed_generation_high_water, report.rnti_generation_high_water);
+    }
+  }
+
   if (report.rnti_snapshot_complete) {
     bool                                                  rnti_snapshot_valid = true;
     std::map<rnti_t, const ntn_resource_audit_rnti_lease*> observed_rntis;
+    std::set<rnti_t>                                       rntis_in_other_local_cells;
+    for (const auto& entry : rnti_leases_by_key) {
+      if (std::get<0>(entry.first) == report.du_index &&
+          (std::get<1>(entry.first) != report.cell_index || std::get<2>(entry.first) != report.pci)) {
+        rntis_in_other_local_cells.emplace(std::get<3>(entry.first));
+      }
+    }
+    for (const auto& entry : access_owner_by_rnti) {
+      if (std::get<0>(entry.first) == report.du_index &&
+          (std::get<1>(entry.first) != report.cell_index || std::get<2>(entry.first) != report.pci)) {
+        rntis_in_other_local_cells.emplace(std::get<3>(entry.first));
+      }
+    }
+    auto&      du_retirement = rnti_retirement_by_du[report.du_index];
+    const bool new_connection_after_invalidation =
+        du_retirement.du_connection_generation == 0 && du_retirement.invalidated_connection_generation != 0 &&
+        report.du_connection_generation > du_retirement.invalidated_connection_generation;
+    const bool ledger_reset_snapshot = new_connection_after_invalidation && report.rnti_leases.empty() &&
+                                       report.rnti_retirement_capability_known && report.rnti_retirement_supported &&
+                                       report.rnti_generation_high_water == 0;
+    const uint64_t known_connection = du_retirement.du_connection_generation != 0
+                                          ? du_retirement.du_connection_generation
+                                          : du_retirement.observed_connection_generation;
+    const bool stale_connection = (known_connection != 0 && report.du_connection_generation != known_connection) ||
+                                  (du_retirement.invalidated_connection_generation != 0 &&
+                                   report.du_connection_generation <= du_retirement.invalidated_connection_generation);
+    const uint32_t known_generation_high_water =
+        std::max(du_retirement.generation_high_water, du_retirement.observed_generation_high_water);
+    const bool high_water_regressed =
+        report.rnti_retirement_capability_known && known_generation_high_water != 0 &&
+        report.rnti_generation_high_water < known_generation_high_water && !ledger_reset_snapshot;
+    if (stale_connection || high_water_regressed) {
+      ntn_resource_repair repair;
+      repair.action     = ntn_resource_repair_action::mark_resource_conflict;
+      repair.du_index   = report.du_index;
+      repair.cell_index = report.cell_index;
+      repair.pci        = report.pci;
+      repair.reason     = stale_connection ? "stale_du_connection_generation" : "rnti_generation_high_water_regressed";
+      decision.repairs.push_back(std::move(repair));
+      rnti_snapshot_valid = false;
+    }
     for (const ntn_resource_audit_rnti_lease& du_lease : report.rnti_leases) {
       const bool supported_state =
           (du_lease.state == "pending" && du_lease.distribution_state == "applied_by_du") ||
           (du_lease.state == "consumed_by_mac" && du_lease.distribution_state == "applied_by_du") ||
           (du_lease.state == "expired" && du_lease.distribution_state == "expired_by_du");
       const bool duplicate_rnti = !observed_rntis.emplace(du_lease.rnti, &du_lease).second;
-      const auto local_lease =
+      const auto exact_local_lease =
           rnti_leases_by_key.find(rnti_key{report.du_index, report.cell_index, report.pci, du_lease.rnti});
-      const bool known_rnti = local_lease != rnti_leases_by_key.end();
+      const bool known_rnti = exact_local_lease != rnti_leases_by_key.end();
       const bool generation_matches =
-          known_rnti && du_lease.generation_id != 0 && du_lease.generation_id == local_lease->second.generation_id;
-      if (duplicate_rnti || !supported_state || !known_rnti || !generation_matches) {
+          !known_rnti ||
+          (du_lease.generation_id != 0 && du_lease.generation_id == exact_local_lease->second.generation_id);
+      const bool used_in_other_local_cell =
+          !known_rnti && rntis_in_other_local_cells.find(du_lease.rnti) != rntis_in_other_local_cells.end();
+      if (!rnti_snapshot_valid || duplicate_rnti || !is_crnti(du_lease.rnti) || du_lease.generation_id == 0 ||
+          !supported_state || !generation_matches || used_in_other_local_cell) {
         ntn_resource_repair repair;
         repair.action     = ntn_resource_repair_action::mark_resource_conflict;
         repair.du_index   = report.du_index;
         repair.cell_index = report.cell_index;
         repair.pci        = report.pci;
         repair.rnti       = du_lease.rnti;
-        repair.reason     = duplicate_rnti     ? "duplicate_du_rnti_snapshot"
-                            : !supported_state ? "unsupported_du_rnti_snapshot_state"
-                            : !known_rnti      ? "unknown_du_rnti_snapshot"
-                                               : "stale_du_rnti_snapshot_generation";
-        decision.repairs.push_back(std::move(repair));
+        repair.reason     = duplicate_rnti                ? "duplicate_du_rnti_snapshot"
+                            : !is_crnti(du_lease.rnti)    ? "invalid_du_rnti_snapshot"
+                            : du_lease.generation_id == 0 ? "invalid_du_rnti_snapshot_generation"
+                            : !supported_state            ? "unsupported_du_rnti_snapshot_state"
+                            : !generation_matches         ? "stale_du_rnti_snapshot_generation"
+                            : used_in_other_local_cell    ? "du_rnti_cell_mismatch"
+                                                          : "stale_du_connection_generation";
+        if (decision.repairs.empty()) {
+          decision.repairs.push_back(std::move(repair));
+        }
         rnti_snapshot_valid = false;
         break;
       }
     }
 
     if (rnti_snapshot_valid) {
+      if (du_retirement.du_connection_generation == 0) {
+        du_retirement.du_connection_generation = report.du_connection_generation;
+      }
+      if (report.rnti_retirement_capability_known) {
+        du_retirement.capability_known = true;
+        du_retirement.supported        = report.rnti_retirement_supported;
+        du_retirement.generation_high_water =
+            std::max(du_retirement.generation_high_water, report.rnti_generation_high_water);
+      }
+      du_retirement.observed_connection_generation = report.du_connection_generation;
+      du_retirement.observed_capability_known      = du_retirement.capability_known;
+      du_retirement.observed_supported             = du_retirement.supported;
+      du_retirement.observed_generation_high_water = du_retirement.generation_high_water;
+      du_retirement.complete_audit_seen = true;
+      const bool retirement_supported   = du_retirement.capability_known && du_retirement.supported;
+
+      for (const auto& observed : observed_rntis) {
+        const ntn_resource_audit_rnti_lease& du_lease = *observed.second;
+        const rnti_key                       key{report.du_index, report.cell_index, report.pci, du_lease.rnti};
+        if (rnti_leases_by_key.find(key) != rnti_leases_by_key.end()) {
+          continue;
+        }
+
+        const bool can_retire = retirement_supported && du_retirement.generation_high_water >= du_lease.generation_id;
+        ntn_rnti_lease orphan;
+        orphan.du_index                 = report.du_index;
+        orphan.cell_index               = report.cell_index;
+        orphan.pci                      = report.pci;
+        orphan.rnti                     = du_lease.rnti;
+        orphan.generation_id            = du_lease.generation_id;
+        orphan.du_connection_generation = report.du_connection_generation;
+        orphan.state              = du_lease.state == "expired" && can_retire ? "retire_pending" : "orphan_quarantined";
+        orphan.reason             = du_lease.state == "expired" && can_retire ? "expired_orphan_confirmed_by_du"
+                                                                              : "unknown_du_rnti_quarantined";
+        orphan.distribution_state = du_lease.distribution_state;
+        orphan.distribution_reason = "du_audit_snapshot";
+        rnti_leases_by_key.emplace(key, std::move(orphan));
+        orphan_rnti_keys.emplace(key);
+        ++nof_rnti_orphans_observed;
+        rnti_retirement_last_reason = du_lease.state == "expired" && can_retire ? "expired_orphan_ready_for_retirement"
+                                                                                : "unknown_du_rnti_quarantined";
+      }
+
+      // A retirement response may be lost immediately before a DU disconnect. After reconnect, an authoritative
+      // complete snapshot can confirm removal only for the exact previously-sent batch. Partial disappearance keeps
+      // every member isolated so one response can never release only part of an atomic retirement request.
+      std::vector<retirement_group_key> retirement_batches_confirmed_absent;
+      std::map<rnti_key, uint32_t>      partially_absent_retirement_generations;
+      for (const auto& attempted_batch : retirement_attempted_batches) {
+        const retirement_group_key& group                = attempted_batch.first;
+        const du_index_t            attempted_du         = std::get<0>(group);
+        const auto                  attempted_cell       = std::get<1>(group);
+        const pci_t                 attempted_pci        = std::get<2>(group);
+        const uint32_t              attempted_generation = std::get<3>(group);
+        const uint64_t              attempted_connection = std::get<4>(group);
+        const bool same_live_connection = attempted_connection == report.du_connection_generation &&
+                                          du_retirement.du_connection_generation == report.du_connection_generation;
+        const bool recovered_connection =
+            du_retirement.invalidated_connection_generation != 0 &&
+            attempted_connection <= du_retirement.invalidated_connection_generation &&
+            report.du_connection_generation > du_retirement.invalidated_connection_generation;
+        if (attempted_du != report.du_index || attempted_cell != report.cell_index || attempted_pci != report.pci ||
+            attempted_connection == 0 || (!same_live_connection && !recovered_connection) || ledger_reset_snapshot) {
+          continue;
+        }
+
+        bool any_absent = false;
+        bool all_absent = true;
+        bool all_safe   = retirement_supported && du_retirement.generation_high_water >= attempted_generation;
+        for (const rnti_key& key : attempted_batch.second) {
+          const auto lease_it = rnti_leases_by_key.find(key);
+          if (lease_it == rnti_leases_by_key.end() || lease_it->second.generation_id != attempted_generation ||
+              retirement_attempted_rnti_keys.count(key) == 0) {
+            any_absent = true;
+            all_safe   = false;
+            continue;
+          }
+
+          const ntn_rnti_lease& lease  = lease_it->second;
+          const bool            absent = observed_rntis.count(lease.rnti) == 0;
+          const bool            cu_owned =
+              lease.ue_index != ue_index_t::invalid ||
+              std::any_of(access_owner_by_rnti.begin(), access_owner_by_rnti.end(), [&](const auto& owner) {
+                return std::get<0>(owner.first) == lease.du_index && std::get<3>(owner.first) == lease.rnti;
+              });
+          any_absent                          = any_absent || absent;
+          all_absent                          = all_absent && absent;
+          const bool lease_connection_matches = same_live_connection
+                                                    ? lease.du_connection_generation == attempted_connection
+                                                    : lease.du_connection_generation == 0;
+          all_safe = all_safe && !cu_owned && lease_connection_matches &&
+                     (lease.state == "retire_waiting_audit" || lease.state == "orphan_quarantined");
+        }
+
+        if (all_absent && all_safe) {
+          retirement_batches_confirmed_absent.push_back(group);
+        } else if (any_absent) {
+          for (const rnti_key& key : attempted_batch.second) {
+            partially_absent_retirement_generations.emplace(key, attempted_generation);
+          }
+        }
+      }
+      for (const retirement_group_key& group : retirement_batches_confirmed_absent) {
+        const auto attempted_batch = retirement_attempted_batches.find(group);
+        for (const rnti_key& key : attempted_batch->second) {
+          const ntn_rnti_lease& lease              = rnti_leases_by_key.at(key);
+          auto&                 retired_generation = retired_generation_by_du_rnti[{lease.du_index, lease.rnti}];
+          retired_generation                       = std::max(retired_generation, lease.generation_id);
+          orphan_rnti_keys.erase(key);
+          retirement_attempted_rnti_keys.erase(key);
+          rnti_leases_by_key.erase(key);
+          ++nof_rnti_leases_retired;
+        }
+        retirement_attempted_batches.erase(attempted_batch);
+        rnti_retirement_last_reason = "retirement_confirmed_absent_by_complete_audit";
+      }
+      if (!partially_absent_retirement_generations.empty()) {
+        rnti_retirement_last_reason = "partial_retirement_visibility_in_complete_audit";
+      }
       std::map<std::pair<std::string, uint32_t>, ntn_resource_repair> rnti_repairs_by_analog_generation;
       for (auto& entry : rnti_leases_by_key) {
         ntn_rnti_lease& lease = entry.second;
@@ -922,9 +1127,25 @@ ntn_beam_service_resource_manager::handle_resource_audit_report(const ntn_resour
           continue;
         }
 
+        const auto partial_attempt = partially_absent_retirement_generations.find(entry.first);
+        if (partial_attempt != partially_absent_retirement_generations.end() &&
+            lease.generation_id == partial_attempt->second && retirement_attempted_rnti_keys.count(entry.first) != 0 &&
+            (lease.state == "retire_waiting_audit" || lease.state == "orphan_quarantined")) {
+          lease.state  = "retire_waiting_audit";
+          lease.reason = "partial_retirement_visibility_in_complete_audit";
+          continue;
+        }
+
         const auto du_lease_it = observed_rntis.find(lease.rnti);
         const auto* du_lease   = du_lease_it != observed_rntis.end() ? du_lease_it->second : nullptr;
         if (du_lease != nullptr) {
+          lease.du_connection_generation = report.du_connection_generation;
+          const bool orphan              = orphan_rnti_keys.count(entry.first) != 0;
+          const bool can_retire = retirement_supported && du_retirement.generation_high_water >= lease.generation_id;
+          if (du_lease->state == "expired") {
+            lease.distribution_state  = "expired_by_du";
+            lease.distribution_reason = "du_audit_snapshot";
+          }
           if (du_lease->state == "pending" && lease.state == "reserved" &&
               (lease.distribution_state == "sent_to_du" || lease.distribution_state == "applied_by_du")) {
             lease.distribution_state  = "applied_by_du";
@@ -936,12 +1157,28 @@ ntn_beam_service_resource_manager::handle_resource_audit_report(const ntn_resour
             lease.reason              = "du_audit_consumed_by_mac";
             lease.distribution_state  = "applied_by_du";
             lease.distribution_reason = "du_audit_snapshot";
-          } else if (du_lease->state == "expired" && (lease.state == "reserved" || lease.state == "offered_in_rar" ||
-                                                      lease.state == "consumed_by_du")) {
+          } else if (du_lease->state == "expired" && lease.state == "reserved") {
             lease.state               = "expired";
             lease.reason              = "du_lease_expired";
+          }
+
+          const bool locally_terminal =
+              lease.state == "released" || lease.state == "expired" || lease.state == "retire_waiting_audit";
+          if (du_lease->state == "expired" && can_retire &&
+              (locally_terminal || (orphan && lease.state == "orphan_quarantined"))) {
+            lease.state               = "retire_pending";
+            lease.reason              = orphan ? "expired_orphan_confirmed_by_du" : "terminal_lease_confirmed_by_du";
             lease.distribution_state  = "expired_by_du";
-            lease.distribution_reason = "du_audit_snapshot";
+            lease.distribution_reason = "retirement_audit";
+          } else if (orphan && lease.state != "retire_sent" && lease.state != "retire_pending") {
+            const bool retirement_was_attempted = retirement_attempted_rnti_keys.count(entry.first) != 0;
+            lease.state = retirement_was_attempted ? "retire_waiting_audit" : "orphan_quarantined";
+            lease.reason =
+                retirement_was_attempted ? "previous_retirement_requires_audit" : "unknown_du_rnti_quarantined";
+          } else if (du_lease->state != "expired" &&
+                     (lease.state == "retire_pending" || lease.state == "retire_waiting_audit")) {
+            lease.state  = "retire_waiting_audit";
+            lease.reason = "du_no_longer_reports_expired";
           }
         }
 
@@ -949,7 +1186,8 @@ ntn_beam_service_resource_manager::handle_resource_audit_report(const ntn_resour
         // committed or expired, it must never be reinserted by the audit repair loop.
         const bool ack_unknown = lease.distribution_state == "sent_to_du" &&
                                  lease.distribution_reason.rfind("ack_unknown", 0) == 0;
-        if (lease.state != "reserved" || (lease.distribution_state != "applied_by_du" && !ack_unknown)) {
+        if (orphan_rnti_keys.count(entry.first) != 0 || lease.state != "reserved" ||
+            (lease.distribution_state != "applied_by_du" && !ack_unknown)) {
           continue;
         }
         const bool du_has_pending_lease = du_lease != nullptr && du_lease->state == "pending" &&
@@ -1074,6 +1312,292 @@ ntn_beam_service_resource_manager::handle_resource_audit_report(const ntn_resour
   return decision;
 }
 
+std::vector<ntn_rnti_retirement_batch> ntn_beam_service_resource_manager::get_pending_rnti_retirement_batches() const
+{
+  std::map<retirement_group_key, ntn_rnti_retirement_batch> batches_by_group;
+  for (const auto& entry : rnti_leases_by_key) {
+    const ntn_rnti_lease& lease = entry.second;
+    if (lease.state != "retire_pending") {
+      continue;
+    }
+    const retirement_group_key group{
+        lease.du_index, lease.cell_index, lease.pci, lease.generation_id, lease.du_connection_generation};
+    auto& batch                    = batches_by_group[group];
+    batch.du_index                 = lease.du_index;
+    batch.cell_index               = lease.cell_index;
+    batch.pci                      = lease.pci;
+    batch.generation_id            = lease.generation_id;
+    batch.du_connection_generation = lease.du_connection_generation;
+    batch.leases.push_back(lease.rnti);
+  }
+
+  std::vector<ntn_rnti_retirement_batch> batches;
+  batches.reserve(batches_by_group.size());
+  for (auto& entry : batches_by_group) {
+    batches.push_back(std::move(entry.second));
+  }
+  return batches;
+}
+
+bool ntn_beam_service_resource_manager::mark_rnti_retirement_sent(const ntn_rnti_retirement_batch& batch)
+{
+  if (batch.du_index == du_index_t::invalid || batch.cell_index == srsran::INVALID_DU_CELL_INDEX ||
+      batch.pci == INVALID_PCI || batch.generation_id == 0 || batch.leases.empty()) {
+    return false;
+  }
+  const auto du_state = rnti_retirement_by_du.find(batch.du_index);
+  if (du_state == rnti_retirement_by_du.end() || !du_state->second.capability_known || !du_state->second.supported ||
+      !du_state->second.complete_audit_seen ||
+      du_state->second.du_connection_generation != batch.du_connection_generation ||
+      du_state->second.generation_high_water < batch.generation_id) {
+    return false;
+  }
+
+  std::vector<rnti_t> requested = batch.leases;
+  std::sort(requested.begin(), requested.end());
+  if (std::adjacent_find(requested.begin(), requested.end()) != requested.end() ||
+      !std::all_of(requested.begin(), requested.end(), is_crnti)) {
+    return false;
+  }
+  std::vector<rnti_t> pending;
+  for (const auto& entry : rnti_leases_by_key) {
+    const ntn_rnti_lease& lease = entry.second;
+    if (lease.du_index == batch.du_index && lease.cell_index == batch.cell_index && lease.pci == batch.pci &&
+        lease.generation_id == batch.generation_id &&
+        lease.du_connection_generation == batch.du_connection_generation && lease.state == "retire_pending") {
+      pending.push_back(lease.rnti);
+    }
+  }
+  if (requested != pending) {
+    return false;
+  }
+
+  std::set<rnti_key> requested_keys;
+  for (rnti_t rnti : requested) {
+    requested_keys.emplace(batch.du_index, batch.cell_index, batch.pci, rnti);
+  }
+  std::vector<retirement_group_key> previous_attempts;
+  for (const auto& attempted_batch : retirement_attempted_batches) {
+    const bool intersects = std::any_of(requested_keys.begin(), requested_keys.end(), [&](const rnti_key& key) {
+      return attempted_batch.second.count(key) != 0;
+    });
+    if (!intersects) {
+      continue;
+    }
+    if (attempted_batch.second != requested_keys) {
+      return false;
+    }
+    previous_attempts.push_back(attempted_batch.first);
+  }
+  for (const retirement_group_key& group : previous_attempts) {
+    retirement_attempted_batches.erase(group);
+  }
+
+  for (rnti_t rnti : requested) {
+    const rnti_key key{batch.du_index, batch.cell_index, batch.pci, rnti};
+    auto           lease = rnti_leases_by_key.find(key);
+    lease->second.state  = "retire_sent";
+    lease->second.reason = "retirement_sent_to_du";
+    retirement_attempted_rnti_keys.emplace(key);
+  }
+  const retirement_group_key group{
+      batch.du_index, batch.cell_index, batch.pci, batch.generation_id, batch.du_connection_generation};
+  retirement_attempted_batches.emplace(group, std::move(requested_keys));
+  rnti_retirement_last_reason = "retirement_sent_to_du";
+  return true;
+}
+
+bool ntn_beam_service_resource_manager::mark_rnti_retirement_result(const ntn_rnti_retirement_batch& batch,
+                                                                    ntn_rnti_retirement_outcome      outcome,
+                                                                    std::string                      reason)
+{
+  if (batch.du_index == du_index_t::invalid || batch.cell_index == srsran::INVALID_DU_CELL_INDEX ||
+      batch.pci == INVALID_PCI || batch.generation_id == 0 || batch.leases.empty()) {
+    return false;
+  }
+  const auto du_state = rnti_retirement_by_du.find(batch.du_index);
+  if (du_state == rnti_retirement_by_du.end() || !du_state->second.capability_known || !du_state->second.supported ||
+      !du_state->second.complete_audit_seen ||
+      du_state->second.du_connection_generation != batch.du_connection_generation ||
+      du_state->second.generation_high_water < batch.generation_id) {
+    return false;
+  }
+
+  std::vector<rnti_t> requested = batch.leases;
+  std::sort(requested.begin(), requested.end());
+  if (std::adjacent_find(requested.begin(), requested.end()) != requested.end()) {
+    return false;
+  }
+  std::vector<rnti_t> sent;
+  for (const auto& entry : rnti_leases_by_key) {
+    const ntn_rnti_lease& lease = entry.second;
+    if (lease.du_index == batch.du_index && lease.cell_index == batch.cell_index && lease.pci == batch.pci &&
+        lease.generation_id == batch.generation_id &&
+        lease.du_connection_generation == batch.du_connection_generation && lease.state == "retire_sent") {
+      sent.push_back(lease.rnti);
+    }
+  }
+  if (requested != sent) {
+    return false;
+  }
+
+  const retirement_group_key group{
+      batch.du_index, batch.cell_index, batch.pci, batch.generation_id, batch.du_connection_generation};
+  const auto attempted_batch = retirement_attempted_batches.find(group);
+  if (attempted_batch == retirement_attempted_batches.end()) {
+    return false;
+  }
+  const std::set<rnti_key> attempted_keys                   = attempted_batch->second;
+  const auto               clear_attempts_for_exact_members = [&]() {
+    std::vector<retirement_group_key> attempts_to_clear;
+    for (const auto& attempt : retirement_attempted_batches) {
+      if (attempt.second == attempted_keys) {
+        attempts_to_clear.push_back(attempt.first);
+      }
+    }
+    for (const retirement_group_key& attempt : attempts_to_clear) {
+      retirement_attempted_batches.erase(attempt);
+    }
+  };
+
+  if (outcome == ntn_rnti_retirement_outcome::accepted) {
+    for (rnti_t rnti : requested) {
+      const rnti_key key{batch.du_index, batch.cell_index, batch.pci, rnti};
+      const auto     owner = access_owner_by_rnti.find(key);
+      const auto     lease = rnti_leases_by_key.find(key);
+      if (owner != access_owner_by_rnti.end() || lease == rnti_leases_by_key.end() ||
+          lease->second.ue_index != ue_index_t::invalid) {
+        return false;
+      }
+    }
+    for (rnti_t rnti : requested) {
+      const rnti_key key{batch.du_index, batch.cell_index, batch.pci, rnti};
+      auto&          retired_generation = retired_generation_by_du_rnti[{batch.du_index, rnti}];
+      retired_generation                = std::max(retired_generation, batch.generation_id);
+      orphan_rnti_keys.erase(key);
+      retirement_attempted_rnti_keys.erase(key);
+      rnti_leases_by_key.erase(key);
+      ++nof_rnti_leases_retired;
+    }
+    clear_attempts_for_exact_members();
+    rnti_retirement_last_reason = reason.empty() ? "retirement_confirmed_by_du" : std::move(reason);
+    return true;
+  }
+
+  const bool retain_attempt = outcome == ntn_rnti_retirement_outcome::outcome_unknown;
+  if (reason.empty()) {
+    switch (outcome) {
+      case ntn_rnti_retirement_outcome::definitively_rejected:
+        reason = "retirement_definitively_rejected";
+        break;
+      case ntn_rnti_retirement_outcome::outcome_unknown:
+        reason = "retirement_result_unknown";
+        break;
+      case ntn_rnti_retirement_outcome::not_sent:
+        reason = "retirement_not_sent";
+        break;
+      case ntn_rnti_retirement_outcome::accepted:
+        break;
+    }
+  }
+  for (rnti_t rnti : requested) {
+    const rnti_key key{batch.du_index, batch.cell_index, batch.pci, rnti};
+    auto           lease = rnti_leases_by_key.find(key);
+    lease->second.state  = outcome == ntn_rnti_retirement_outcome::not_sent ? "retire_pending" : "retire_waiting_audit";
+    lease->second.reason = reason;
+    if (!retain_attempt) {
+      retirement_attempted_rnti_keys.erase(key);
+    }
+    if (outcome == ntn_rnti_retirement_outcome::definitively_rejected) {
+      ++nof_rnti_retirement_rejected;
+    }
+  }
+  if (!retain_attempt) {
+    clear_attempts_for_exact_members();
+  }
+  rnti_retirement_last_reason = std::move(reason);
+  return true;
+}
+
+void ntn_beam_service_resource_manager::invalidate_rnti_retirement_for_du(du_index_t du_index)
+{
+  auto& du_state = rnti_retirement_by_du[du_index];
+  du_state.invalidated_connection_generation =
+      std::max({du_state.invalidated_connection_generation,
+                du_state.du_connection_generation,
+                du_state.observed_connection_generation});
+  du_state.du_connection_generation          = 0;
+  du_state.observed_connection_generation    = 0;
+  du_state.capability_known                  = false;
+  du_state.supported                         = false;
+  du_state.observed_capability_known         = false;
+  du_state.observed_supported                = false;
+  du_state.complete_audit_seen               = false;
+  du_state.observed_generation_high_water = 0;
+  for (auto& entry : rnti_leases_by_key) {
+    ntn_rnti_lease& lease = entry.second;
+    if (lease.du_index != du_index) {
+      continue;
+    }
+    if (lease.distribution_state == "sent_to_du" || lease.distribution_state == "applied_by_du") {
+      lease.distribution_state       = "sent_to_du";
+      lease.distribution_reason      = "ack_unknown:du_disconnected";
+      lease.du_connection_generation = 0;
+    }
+    if (lease.state != "retire_pending" && lease.state != "retire_sent" && lease.state != "retire_waiting_audit") {
+      continue;
+    }
+    lease.du_connection_generation = 0;
+    if (orphan_rnti_keys.count(entry.first) != 0) {
+      const bool retirement_was_sent = retirement_attempted_rnti_keys.count(entry.first) != 0;
+      lease.state                    = retirement_was_sent ? "retire_waiting_audit" : "orphan_quarantined";
+      lease.reason                   = retirement_was_sent ? "du_disconnected_orphan_retire_requires_audit"
+                                                           : "du_disconnected_orphan_requires_audit";
+    } else {
+      lease.state  = "retire_waiting_audit";
+      lease.reason = "du_disconnected_retirement_requires_audit";
+    }
+  }
+  for (auto& entry : resource_repairs_by_key) {
+    ntn_resource_repair_record& repair = entry.second;
+    if (repair.du_index != du_index || repair.action != ntn_resource_repair_action::resend_rnti_lease_pool ||
+        (repair.state != "queued" && repair.state != "sent")) {
+      continue;
+    }
+    repair.state       = "invalidated";
+    repair.reason      = "du_disconnected_repair_invalidated";
+    repair.retry_count = 0;
+  }
+  rnti_retirement_last_reason = "du_disconnected_retirement_invalidated";
+}
+
+std::set<rnti_t> ntn_beam_service_resource_manager::get_rnti_allocation_exclusions(du_index_t du_index) const
+{
+  std::set<rnti_t> exclusions;
+  for (const auto& entry : rnti_leases_by_key) {
+    if (entry.second.du_index == du_index) {
+      exclusions.emplace(entry.second.rnti);
+    }
+  }
+  for (const auto& entry : access_owner_by_rnti) {
+    if (std::get<0>(entry.first) == du_index) {
+      exclusions.emplace(std::get<3>(entry.first));
+    }
+  }
+  return exclusions;
+}
+
+bool ntn_beam_service_resource_manager::is_rnti_excluded_for_du(du_index_t du_index, rnti_t rnti) const
+{
+  return std::any_of(
+             rnti_leases_by_key.begin(),
+             rnti_leases_by_key.end(),
+             [&](const auto& entry) { return entry.second.du_index == du_index && entry.second.rnti == rnti; }) ||
+         std::any_of(access_owner_by_rnti.begin(), access_owner_by_rnti.end(), [&](const auto& entry) {
+           return std::get<0>(entry.first) == du_index && std::get<3>(entry.first) == rnti;
+         });
+}
+
 ntn_resource_repair_record ntn_beam_service_resource_manager::queue_resource_repair(const ntn_resource_repair& repair,
                                                                                     uint32_t generation_id)
 {
@@ -1171,7 +1695,9 @@ void ntn_beam_service_resource_manager::remove_ue(ue_index_t ue_index)
   }
   access_ownership_by_ue.erase(ue_index);
   for (auto& entry : rnti_leases_by_key) {
-    if (entry.second.ue_index == ue_index) {
+    if (entry.second.ue_index == ue_index &&
+        (entry.second.state == "initial_ul_seen" || entry.second.state == "committed" ||
+         entry.second.state == "consumed_by_du" || entry.second.state == "offered_in_rar")) {
       entry.second.state    = "released";
       entry.second.reason   = "ue_removed";
       entry.second.ue_index = ue_index_t::invalid;
@@ -1218,6 +1744,9 @@ ntn_beam_service_resource_snapshot ntn_beam_service_resource_manager::get_snapsh
   snapshot.rnti_leases.reserve(rnti_leases_by_key.size());
   for (const auto& entry : rnti_leases_by_key) {
     snapshot.rnti_leases.push_back(entry.second);
+    if (orphan_rnti_keys.count(entry.first) != 0) {
+      ++snapshot.nof_rnti_orphans_quarantined;
+    }
     if (entry.second.state == "reserved") {
       ++snapshot.nof_rnti_leases_reserved;
       if (entry.second.distribution_state == "applied_by_du") {
@@ -1237,6 +1766,12 @@ ntn_beam_service_resource_snapshot ntn_beam_service_resource_manager::get_snapsh
       ++snapshot.nof_rnti_leases_expired;
     } else if (entry.second.state == "conflict") {
       ++snapshot.nof_rnti_leases_conflict;
+    } else if (entry.second.state == "retire_pending") {
+      ++snapshot.nof_rnti_leases_retire_pending;
+    } else if (entry.second.state == "retire_sent") {
+      ++snapshot.nof_rnti_leases_retire_sent;
+    } else if (entry.second.state == "retire_waiting_audit") {
+      ++snapshot.nof_rnti_leases_retire_waiting_audit;
     }
     if (entry.second.distribution_state == "sent_to_du") {
       ++snapshot.nof_rnti_leases_sent_to_du;
@@ -1245,6 +1780,27 @@ ntn_beam_service_resource_snapshot ntn_beam_service_resource_manager::get_snapsh
     } else if (entry.second.distribution_state == "rejected_by_du") {
       ++snapshot.nof_rnti_leases_rejected_by_du;
     }
+  }
+
+  snapshot.nof_rnti_leases_retired      = nof_rnti_leases_retired;
+  snapshot.nof_rnti_leases_reused       = nof_rnti_leases_reused;
+  snapshot.nof_rnti_retirement_rejected = nof_rnti_retirement_rejected;
+  snapshot.nof_rnti_orphans_observed    = nof_rnti_orphans_observed;
+  snapshot.rnti_retirement_last_reason  = rnti_retirement_last_reason;
+  snapshot.rnti_retirement_du_statuses.reserve(rnti_retirement_by_du.size());
+  for (const auto& entry : rnti_retirement_by_du) {
+    ntn_rnti_retirement_du_status status;
+    status.du_index = entry.first;
+    status.du_connection_generation = entry.second.complete_audit_seen
+                                          ? entry.second.du_connection_generation
+                                          : entry.second.observed_connection_generation;
+    status.capability_known = entry.second.complete_audit_seen ? entry.second.capability_known
+                                                               : entry.second.observed_capability_known;
+    status.supported = entry.second.complete_audit_seen ? entry.second.supported : entry.second.observed_supported;
+    status.complete_audit_seen = entry.second.complete_audit_seen;
+    status.generation_high_water = entry.second.complete_audit_seen ? entry.second.generation_high_water
+                                                                    : entry.second.observed_generation_high_water;
+    snapshot.rnti_retirement_du_statuses.push_back(status);
   }
 
   snapshot.access_rnti_ownerships.reserve(access_ownership_by_ue.size());

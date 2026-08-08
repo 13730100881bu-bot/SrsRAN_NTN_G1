@@ -144,8 +144,18 @@ public:
       result.reason = "invalid_generation";
       return result;
     }
-    if (request.operation != mac_ntn_rnti_lease_pool_operation::clear && request.expiry_ms == 0) {
+    if ((request.operation == mac_ntn_rnti_lease_pool_operation::replace ||
+         request.operation == mac_ntn_rnti_lease_pool_operation::add) &&
+        request.expiry_ms == 0) {
       result.reason = "invalid_expiry";
+      return result;
+    }
+    if (request.operation == mac_ntn_rnti_lease_pool_operation::retire && request.expiry_ms != 0) {
+      result.reason = "invalid_expiry";
+      return result;
+    }
+    if (request.operation == mac_ntn_rnti_lease_pool_operation::retire && request.leases.empty()) {
+      result.reason = "empty_retirement";
       return result;
     }
 
@@ -153,11 +163,39 @@ public:
     purge_expired_terrestrial_rnti_reservations_locked(now);
     refresh_ntn_rnti_lease_states_locked(request.cell_index, now);
     if (request.operation == mac_ntn_rnti_lease_pool_operation::clear) {
+      const auto cell_generation = ntn_cell_generation_high_water.find(request.cell_index);
+      if (request.generation_id == 0) {
+        if (cell_generation != ntn_cell_generation_high_water.end() ||
+            ntn_rnti_leases.find(request.cell_index) != ntn_rnti_leases.end()) {
+          result.reason = "invalid_generation";
+          return result;
+        }
+        ntn_cell_lease_mode_enabled[request.cell_index] = false;
+        result.accepted                                 = true;
+        result.reason                                   = "accepted";
+        return result;
+      }
+      if (cell_generation == ntn_cell_generation_high_water.end()) {
+        result.reason = "lease_not_found";
+        return result;
+      }
+      if (request.generation_id < cell_generation->second) {
+        result.reason = "stale_generation";
+        return result;
+      }
+      if (request.generation_id != cell_generation->second) {
+        result.reason = "generation_mismatch";
+        return result;
+      }
+      retain_cell_tombstones_locked(request.cell_index);
       ntn_rnti_leases.erase(request.cell_index);
       ntn_cell_lease_mode_enabled[request.cell_index] = false;
       result.accepted                                 = true;
       result.reason                                   = "accepted";
       return result;
+    }
+    if (request.operation == mac_ntn_rnti_lease_pool_operation::retire) {
+      return retire_ntn_rnti_leases_locked(request);
     }
 
     std::vector<ntn_rnti_lease_record> replacement;
@@ -177,6 +215,11 @@ public:
       // This acknowledges the original update without refreshing expiry or resurrecting terminal state.
       const bool idempotent_add = request.operation == mac_ntn_rnti_lease_pool_operation::add && exists_in_cell &&
                                   existing_record->generation_id == request.generation_id;
+      const auto tombstone_it = ntn_rnti_retired_generations.find(rnti);
+      const bool stale_generation =
+          !idempotent_add &&
+          ((tombstone_it != ntn_rnti_retired_generations.end() && request.generation_id <= tombstone_it->second) ||
+           request.generation_id <= ntn_rnti_generation_high_water);
       const bool already_tracked =
           request.operation == mac_ntn_rnti_lease_pool_operation::add && exists_in_cell && !idempotent_add;
       const bool replaces_terminal =
@@ -185,11 +228,12 @@ public:
       const bool tracked_in_other_cell = has_tracked_ntn_rnti_in_other_cell_locked(request.cell_index, rnti);
       const bool terrestrial_rnti_pending =
           terrestrial_rnti_reservations.find(rnti) != terrestrial_rnti_reservations.end();
-      if (!is_crnti(rnti) || duplicate_in_request || already_tracked || replaces_terminal || tracked_in_other_cell ||
-          terrestrial_rnti_pending || (this->has_rnti(rnti) && !idempotent_add)) {
+      if (!is_crnti(rnti) || duplicate_in_request || stale_generation || already_tracked || replaces_terminal ||
+          tracked_in_other_cell || terrestrial_rnti_pending || (this->has_rnti(rnti) && !idempotent_add)) {
         result.rejected_leases = request.leases;
         result.reason          = !is_crnti(rnti)            ? "invalid_rnti"
                                  : duplicate_in_request     ? "duplicate_lease"
+                                 : stale_generation         ? "stale_generation"
                                  : already_tracked          ? "duplicate_lease"
                                  : replaces_terminal        ? "terminal_lease"
                                  : tracked_in_other_cell    ? "rnti_tracked_in_other_cell"
@@ -210,6 +254,8 @@ public:
         for (const ntn_rnti_lease_record& existing : existing_it->second) {
           if (existing.state != ntn_rnti_lease_state::pending) {
             replacement.push_back(existing);
+          } else if (request_rntis.find(existing.rnti) == request_rntis.end()) {
+            retain_tombstone_locked(existing.rnti, existing.generation_id);
           }
         }
       }
@@ -219,6 +265,9 @@ public:
       records.insert(records.end(), replacement.begin(), replacement.end());
     }
     ntn_cell_lease_mode_enabled[request.cell_index] = true;
+    ntn_cell_generation_high_water[request.cell_index] =
+        std::max(ntn_cell_generation_high_water[request.cell_index], request.generation_id);
+    ntn_rnti_generation_high_water                  = std::max(ntn_rnti_generation_high_water, request.generation_id);
     result.accepted_leases                          = request.leases;
     result.accepted                                 = true;
     result.reason                                   = "accepted";
@@ -249,6 +298,7 @@ public:
   void clear_ntn_rnti_leases(du_cell_index_t cell_index)
   {
     std::lock_guard<std::mutex> lock(ntn_lease_mutex);
+    retain_cell_tombstones_locked(cell_index);
     ntn_rnti_leases.erase(cell_index);
   }
 
@@ -314,6 +364,8 @@ public:
     std::lock_guard<std::mutex> lock(ntn_lease_mutex);
     refresh_ntn_rnti_lease_states_locked(cell_index, now);
     result.complete           = true;
+    result.retirement_supported       = true;
+    result.rnti_generation_high_water = ntn_rnti_generation_high_water;
     auto mode_it              = ntn_cell_lease_mode_enabled.find(cell_index);
     result.lease_mode_enabled = global_mode || (mode_it != ntn_cell_lease_mode_enabled.end() && mode_it->second);
 
@@ -376,6 +428,102 @@ private:
     });
   }
 
+  void retain_tombstone_locked(rnti_t rnti, uint32_t generation_id)
+  {
+    auto [it, inserted] = ntn_rnti_retired_generations.emplace(rnti, generation_id);
+    if (!inserted) {
+      it->second = std::max(it->second, generation_id);
+    }
+    ntn_rnti_generation_high_water = std::max(ntn_rnti_generation_high_water, generation_id);
+  }
+
+  void retain_cell_tombstones_locked(du_cell_index_t cell_index)
+  {
+    const auto records_it = ntn_rnti_leases.find(cell_index);
+    if (records_it == ntn_rnti_leases.end()) {
+      return;
+    }
+    for (const ntn_rnti_lease_record& record : records_it->second) {
+      retain_tombstone_locked(record.rnti, record.generation_id);
+    }
+  }
+
+  mac_ntn_rnti_lease_pool_result retire_ntn_rnti_leases_locked(const mac_ntn_rnti_lease_pool_update& request)
+  {
+    mac_ntn_rnti_lease_pool_result result;
+    std::set<rnti_t>               request_rntis;
+    const auto                     records_it = ntn_rnti_leases.find(request.cell_index);
+
+    // Validate the complete batch before modifying either the active ledger or the replay tombstones.
+    for (rnti_t rnti : request.leases) {
+      if (!is_crnti(rnti)) {
+        result.reason = "invalid_rnti";
+      } else if (!request_rntis.emplace(rnti).second) {
+        result.reason = "duplicate_lease";
+      } else if (this->has_rnti(rnti)) {
+        result.reason = "active_rnti";
+      } else if (terrestrial_rnti_reservations.find(rnti) != terrestrial_rnti_reservations.end()) {
+        result.reason = "terrestrial_rnti_pending";
+      } else if (has_tracked_ntn_rnti_in_other_cell_locked(request.cell_index, rnti)) {
+        result.reason = "rnti_tracked_in_other_cell";
+      }
+      if (!result.reason.empty()) {
+        result.rejected_leases = request.leases;
+        return result;
+      }
+
+      const auto record_it  = records_it == ntn_rnti_leases.end()
+                                  ? std::vector<ntn_rnti_lease_record>::const_iterator{}
+                                  : std::find_if(records_it->second.cbegin(),
+                                                 records_it->second.cend(),
+                                                 [rnti](const auto& record) { return record.rnti == rnti; });
+      const bool has_record = records_it != ntn_rnti_leases.end() && record_it != records_it->second.cend();
+      if (has_record) {
+        if (request.generation_id < record_it->generation_id) {
+          result.reason = "stale_generation";
+        } else if (request.generation_id != record_it->generation_id) {
+          result.reason = "generation_mismatch";
+        } else if (record_it->state != ntn_rnti_lease_state::expired) {
+          result.reason = "lease_not_expired";
+        }
+      } else {
+        const auto tombstone_it = ntn_rnti_retired_generations.find(rnti);
+        if (tombstone_it == ntn_rnti_retired_generations.end()) {
+          result.reason = "lease_not_found";
+        } else if (request.generation_id < tombstone_it->second) {
+          result.reason = "stale_generation";
+        } else if (request.generation_id != tombstone_it->second) {
+          result.reason = "generation_mismatch";
+        }
+      }
+      if (!result.reason.empty()) {
+        result.rejected_leases = request.leases;
+        return result;
+      }
+    }
+
+    if (records_it != ntn_rnti_leases.end()) {
+      auto& records = records_it->second;
+      records.erase(std::remove_if(records.begin(),
+                                   records.end(),
+                                   [&request_rntis, &request](const ntn_rnti_lease_record& record) {
+                                     return request_rntis.find(record.rnti) != request_rntis.end() &&
+                                            record.generation_id == request.generation_id;
+                                   }),
+                    records.end());
+      if (records.empty()) {
+        ntn_rnti_leases.erase(records_it);
+      }
+    }
+    for (rnti_t rnti : request.leases) {
+      retain_tombstone_locked(rnti, request.generation_id);
+    }
+    result.accepted        = true;
+    result.reason          = "accepted";
+    result.accepted_leases = request.leases;
+    return result;
+  }
+
   bool is_ntn_rnti_lease_mode_enabled_locked(du_cell_index_t cell_index) const
   {
     if (ntn_rnti_lease_mode_enabled.load(std::memory_order_relaxed)) {
@@ -416,7 +564,9 @@ private:
 
     std::lock_guard<std::mutex> lock(ntn_lease_mutex);
     purge_expired_terrestrial_rnti_reservations_locked(now);
+    const auto tombstone_it = ntn_rnti_retired_generations.find(rnti);
     if (this->has_rnti(rnti) || has_tracked_ntn_rnti_locked(rnti) ||
+        (tombstone_it != ntn_rnti_retired_generations.end() && generation_id <= tombstone_it->second) ||
         terrestrial_rnti_reservations.find(rnti) != terrestrial_rnti_reservations.end()) {
       return false;
     }
@@ -426,6 +576,8 @@ private:
       return false;
     }
     records.push_back({rnti, generation_id, expires_at, ntn_rnti_lease_state::pending});
+    ntn_cell_generation_high_water[cell_index] = std::max(ntn_cell_generation_high_water[cell_index], generation_id);
+    ntn_rnti_generation_high_water             = std::max(ntn_rnti_generation_high_water, generation_id);
     return true;
   }
 
@@ -499,9 +651,12 @@ private:
   std::atomic<std::underlying_type_t<rnti_t>> rnti_counter;
   std::atomic<bool>                           ntn_rnti_lease_mode_enabled{false};
   mutable std::mutex                          ntn_lease_mutex;
-  // Terminal records are intentionally retained until replace/clear so audit repair cannot resurrect a consumed or
-  // expired RNTI. Duplicate rejection bounds each per-cell history by the finite C-RNTI namespace.
+  // Live/expired records remain visible to audit until an explicit atomic retirement. Compact per-RNTI tombstones
+  // then prevent delayed add/retire messages from resurrecting or deleting a newer use of the same C-RNTI.
   mutable std::map<du_cell_index_t, std::vector<ntn_rnti_lease_record>> ntn_rnti_leases;
+  std::map<rnti_t, uint32_t>                                            ntn_rnti_retired_generations;
+  uint32_t                                                              ntn_rnti_generation_high_water = 0;
+  std::map<du_cell_index_t, uint32_t>                                   ntn_cell_generation_high_water;
   std::map<du_cell_index_t, bool>               ntn_cell_lease_mode_enabled;
   std::map<rnti_t, ntn_lease_time_point>                                terrestrial_rnti_reservations;
 };

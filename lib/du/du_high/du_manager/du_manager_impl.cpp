@@ -237,6 +237,9 @@ du_manager_impl::handle_ntn_rnti_lease_pool_update_request(const f1ap_ntn_rnti_l
     case f1ap_ntn_rnti_lease_pool_operation::clear:
       mac_update.operation = mac_ntn_rnti_lease_pool_operation::clear;
       break;
+    case f1ap_ntn_rnti_lease_pool_operation::retire:
+      mac_update.operation = mac_ntn_rnti_lease_pool_operation::retire;
+      break;
   }
   mac_update.leases = request.leases;
 
@@ -279,6 +282,11 @@ du_manager_impl::handle_ntn_resource_audit_request(const f1ap_ntn_resource_audit
   result.accepted      = true;
   result.rnti_snapshot_complete    = snapshot.complete;
   result.ue_slot_snapshot_complete = false;
+  result.retirement_metadata_present = request.request_retirement_metadata;
+  if (request.request_retirement_metadata) {
+    result.retire_supported           = snapshot.retirement_supported;
+    result.rnti_generation_high_water = snapshot.rnti_generation_high_water;
+  }
   result.reject_reason = snapshot.complete ? "ue_slot_snapshot_incomplete" : "rnti_and_ue_slot_snapshots_incomplete";
   if (snapshot.complete) {
     result.rnti_leases.reserve(snapshot.leases.size());

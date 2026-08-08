@@ -25,12 +25,12 @@
 #include "srsran/ran/du_types.h"
 #include "srsran/ran/nr_cell_identity.h"
 #include "srsran/ran/pci.h"
+#include "srsran/ran/rnti.h"
 #include "srsran/ran/slot_point.h"
 #include <array>
 #include <chrono>
 #include <cstdint>
 #include <limits>
-#include "srsran/ran/rnti.h"
 #include <optional>
 #include <string>
 #include <vector>
@@ -41,7 +41,7 @@ class mac_cell_manager;
 class mac_ue_configurator;
 class mac_positioning_measurement_handler;
 
-enum class mac_ntn_rnti_lease_pool_operation { replace, add, clear };
+enum class mac_ntn_rnti_lease_pool_operation { replace, add, clear, retire };
 
 struct mac_ntn_rnti_lease_pool_update {
   du_cell_index_t                      cell_index    = INVALID_DU_CELL_INDEX;
@@ -71,6 +71,8 @@ struct mac_ntn_rnti_lease_pool_snapshot {
   du_cell_index_t                                cell_index         = INVALID_DU_CELL_INDEX;
   bool                                           complete           = false;
   bool                                           lease_mode_enabled = false;
+  bool                                           retirement_supported       = false;
+  uint32_t                                       rnti_generation_high_water = 0;
   std::vector<mac_ntn_rnti_lease_snapshot_entry> leases;
 };
 
