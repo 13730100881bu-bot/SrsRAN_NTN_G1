@@ -1318,6 +1318,17 @@ public:
                resource_snapshot.nof_rnti_leases_released,
                resource_snapshot.nof_rnti_leases_expired,
                resource_snapshot.nof_rnti_leases_conflict);
+    fmt::print("NTN RNTI lifecycle: retire_pending={} retire_sent={} waiting_audit={} orphan_quarantined={} "
+               "retired={} reused={} retire_rejected={} orphan_observed={} reason={}\n",
+               resource_snapshot.nof_rnti_leases_retire_pending,
+               resource_snapshot.nof_rnti_leases_retire_sent,
+               resource_snapshot.nof_rnti_leases_retire_waiting_audit,
+               resource_snapshot.nof_rnti_orphans_quarantined,
+               resource_snapshot.nof_rnti_leases_retired,
+               resource_snapshot.nof_rnti_leases_reused,
+               resource_snapshot.nof_rnti_retirement_rejected,
+               resource_snapshot.nof_rnti_orphans_observed,
+               resource_snapshot.rnti_retirement_last_reason);
     fmt::print("NTN resource audit: generation={} queries={} accepted={} mismatches={} repairs={} failures={} "
                "rnti_incomplete={} ue_slot_incomplete={} reason={}\n",
                status.ntn_resource_audit_generation,
@@ -1329,6 +1340,25 @@ public:
                status.nof_ntn_resource_audit_rnti_incomplete,
                status.nof_ntn_resource_audit_ue_slot_incomplete,
                status.last_ntn_resource_audit_reason);
+    fmt::print("NTN RNTI retirement: capability={} generation_high_water={} unsupported={} "
+               "namespace_exhausted={} generation_exhausted={} reason={}\n",
+               status.ntn_rnti_retirement_capability,
+               status.ntn_rnti_generation_high_water,
+               status.nof_ntn_rnti_retire_unsupported,
+               status.nof_ntn_rnti_namespace_exhausted,
+               status.nof_ntn_rnti_generation_exhausted,
+               status.last_ntn_rnti_retirement_reason);
+    for (const srs_cu_cp::ntn_rnti_retirement_du_status& du_status : resource_snapshot.rnti_retirement_du_statuses) {
+      fmt::print("NTN RNTI retirement DU: du={} connection_generation={} capability={} complete_audit={} "
+                 "generation_high_water={}\n",
+                 du_index_to_uint(du_status.du_index),
+                 du_status.du_connection_generation,
+                 !du_status.capability_known ? "unknown"
+                 : du_status.supported       ? "supported"
+                                             : "unsupported",
+                 du_status.complete_audit_seen,
+                 du_status.generation_high_water);
+    }
     fmt::print("NTN resource repairs: queued={} sent={} applied={} failed={} retry_exhausted={} conflicts={}\n",
                resource_snapshot.nof_resource_repairs_queued,
                resource_snapshot.nof_resource_repairs_sent,

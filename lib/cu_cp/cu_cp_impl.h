@@ -39,9 +39,9 @@
 #include "ntn_mobility/ntn_beam_service_resource_manager.h"
 #include "ntn_mobility/ntn_beam_tac.h"
 #include "ntn_mobility/ntn_initial_ul_position_authorizer.h"
-#include "ntn_mobility/ntn_onboard_runtime_mapping.h"
 #include "ntn_mobility/ntn_onboard_position_plan.h"
 #include "ntn_mobility/ntn_onboard_position_plan_state.h"
+#include "ntn_mobility/ntn_onboard_runtime_mapping.h"
 #include "ntn_mobility/ntn_plan_version_anchor.h"
 #include "ntn_mobility/ntn_satellite_state_updater.h"
 #include "ntn_mobility/ntn_served_beam_scheduler.h"
@@ -353,6 +353,7 @@ private:
                                            const char*                   reason);
   void schedule_ntn_ul_slot_updates_for_online_ues();
   void schedule_ntn_rnti_lease_pool_updates_for_access_beams();
+  void schedule_ntn_rnti_retirement_updates();
   void schedule_ntn_sib19_broadcast_updates();
   void on_ntn_resource_audit_timer_expired();
   struct ntn_resource_audit_target {
@@ -365,7 +366,9 @@ private:
   void schedule_ntn_resource_audits();
   void handle_ntn_resource_audit_decision(const ntn_resource_audit_decision& decision);
   void mark_ntn_service_pair_resource_repair_skipped(const ntn_resource_repair& repair, const char* reason);
-  std::vector<rnti_t> allocate_ntn_rnti_leases(unsigned nof_leases);
+  std::optional<std::vector<rnti_t>> allocate_ntn_rnti_leases(du_index_t du_index, unsigned nof_leases);
+  std::optional<uint32_t>            allocate_ntn_rnti_lease_generation(du_index_t du_index);
+  bool                               is_ntn_rnti_du_reconciled(du_index_t du_index) const;
   void report_ntn_location_to_core_if_required(const ntn_ue_location_report& report);
   bool send_ntn_location_report_to_core(const ngap_location_report& report);
   bool should_throttle_ntn_core_location_report(ue_index_t ue_index);
@@ -882,10 +885,21 @@ private:
   std::set<ue_index_t>                                                  ntn_location_watchdog_release_requested_ues;
   uint64_t                                                             next_ntn_pre_service_relocation_attempt_id = 1;
   uint64_t                                                             next_ntn_service_switch_over_handover_attempt_id = 1;
-  uint32_t                                                             next_ntn_rnti_lease_generation_id = 1;
+  enum class ntn_rnti_retirement_capability { unknown, supported, unsupported };
+  struct ntn_rnti_du_reconciliation_state {
+    uint64_t                                            connection_generation = 0;
+    bool                                                connected             = false;
+    ntn_rnti_retirement_capability                      retirement_capability = ntn_rnti_retirement_capability::unknown;
+    uint32_t                                            generation_high_water = 0;
+    bool                                                generation_exhausted  = false;
+    std::set<std::pair<srsran::du_cell_index_t, pci_t>> expected_targets;
+    std::set<std::pair<srsran::du_cell_index_t, pci_t>> reconciled_targets;
+  };
+  std::map<du_index_t, ntn_rnti_du_reconciliation_state>                     ntn_rnti_du_reconciliation_states;
+  std::map<du_index_t, uint16_t>                                             next_ntn_rnti_lease_value_by_du;
+  std::map<std::tuple<du_index_t, srsran::du_cell_index_t, pci_t>, uint32_t> ntn_rnti_audits_in_flight;
   uint32_t                                                             next_ntn_resource_audit_generation_id = 1;
   uint32_t                                                             next_ntn_sib19_broadcast_generation_id = 1;
-  uint16_t                                                             next_ntn_rnti_lease_value = 0x4601;
   uint32_t                                                             last_ntn_resource_audit_generation = 0;
   unsigned                                                             nof_ntn_resource_audit_queries_sent = 0;
   unsigned                                                             nof_ntn_resource_audit_responses_accepted = 0;
@@ -895,6 +909,10 @@ private:
   unsigned                                                             nof_ntn_resource_audit_rnti_incomplete = 0;
   unsigned                                                             nof_ntn_resource_audit_ue_slot_incomplete = 0;
   std::string                                                          last_ntn_resource_audit_reason = "none";
+  unsigned                                                             nof_ntn_rnti_retire_unsupported   = 0;
+  unsigned                                                             nof_ntn_rnti_namespace_exhausted  = 0;
+  unsigned                                                             nof_ntn_rnti_generation_exhausted = 0;
+  std::string                                                          last_ntn_rnti_retirement_reason   = "none";
   unsigned                                                             nof_ntn_service_pair_resource_audit_targets = 0;
   unsigned                                                             nof_ntn_service_pair_resource_audit_mismatches = 0;
   unsigned                                                             nof_ntn_service_pair_resource_audit_repairs = 0;

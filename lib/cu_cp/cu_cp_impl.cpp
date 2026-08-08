@@ -1859,18 +1859,70 @@ void cu_cp_impl::schedule_ntn_ul_slot_updates_for_online_ues()
   }
 }
 
-std::vector<rnti_t> cu_cp_impl::allocate_ntn_rnti_leases(unsigned nof_leases)
+bool cu_cp_impl::is_ntn_rnti_du_reconciled(du_index_t du_index) const
 {
+  const auto state_it = ntn_rnti_du_reconciliation_states.find(du_index);
+  if (state_it == ntn_rnti_du_reconciliation_states.end() || !state_it->second.connected ||
+      state_it->second.expected_targets.empty()) {
+    return false;
+  }
+  return std::all_of(state_it->second.expected_targets.begin(),
+                     state_it->second.expected_targets.end(),
+                     [&state = state_it->second](const auto& target) {
+                       return state.reconciled_targets.find(target) != state.reconciled_targets.end();
+                     });
+}
+
+std::optional<uint32_t> cu_cp_impl::allocate_ntn_rnti_lease_generation(du_index_t du_index)
+{
+  auto state_it = ntn_rnti_du_reconciliation_states.find(du_index);
+  if (state_it == ntn_rnti_du_reconciliation_states.end() || !is_ntn_rnti_du_reconciled(du_index)) {
+    last_ntn_rnti_retirement_reason = "du_reconciliation_pending";
+    return std::nullopt;
+  }
+  if (state_it->second.generation_high_water == std::numeric_limits<uint32_t>::max()) {
+    state_it->second.generation_exhausted = true;
+    ++nof_ntn_rnti_generation_exhausted;
+    last_ntn_rnti_retirement_reason = "rnti_generation_exhausted";
+    return std::nullopt;
+  }
+  return ++state_it->second.generation_high_water;
+}
+
+std::optional<std::vector<rnti_t>> cu_cp_impl::allocate_ntn_rnti_leases(du_index_t du_index, unsigned nof_leases)
+{
+  if (!is_ntn_rnti_du_reconciled(du_index)) {
+    last_ntn_rnti_retirement_reason = "du_reconciliation_pending";
+    return std::nullopt;
+  }
   std::vector<rnti_t> leases;
   leases.reserve(nof_leases);
-  while (leases.size() != nof_leases) {
-    if (next_ntn_rnti_lease_value > ntn_rnti_lease_max_value) {
-      next_ntn_rnti_lease_value = ntn_rnti_lease_min_value;
+  std::set<rnti_t>             selected;
+  const std::set<rnti_t>       excluded_rntis = ntn_service_resource_mng.get_rnti_allocation_exclusions(du_index);
+  const std::vector<cu_cp_ue*> live_ues       = ue_mng.get_ues();
+  std::set<rnti_t>             active_cu_rntis;
+  for (const cu_cp_ue* ue : live_ues) {
+    if (ue != nullptr && ue->get_du_index() == du_index) {
+      active_cu_rntis.emplace(ue->get_c_rnti());
     }
-    const rnti_t rnti = to_rnti(next_ntn_rnti_lease_value++);
-    if (is_crnti(rnti)) {
+  }
+  uint16_t& next_value = next_ntn_rnti_lease_value_by_du.try_emplace(du_index, ntn_rnti_lease_min_value).first->second;
+  const unsigned nof_candidates = static_cast<unsigned>(ntn_rnti_lease_max_value - ntn_rnti_lease_min_value) + 1U;
+  for (unsigned attempt = 0; attempt != nof_candidates && leases.size() != nof_leases; ++attempt) {
+    if (next_value > ntn_rnti_lease_max_value) {
+      next_value = ntn_rnti_lease_min_value;
+    }
+    const rnti_t rnti = to_rnti(next_value++);
+    if (is_crnti(rnti) && active_cu_rntis.count(rnti) == 0 && selected.emplace(rnti).second &&
+        excluded_rntis.count(rnti) == 0) {
       leases.push_back(rnti);
     }
+  }
+
+  if (leases.size() != nof_leases) {
+    ++nof_ntn_rnti_namespace_exhausted;
+    last_ntn_rnti_retirement_reason = "rnti_namespace_exhausted";
+    return std::nullopt;
   }
   return leases;
 }
@@ -1924,6 +1976,16 @@ void cu_cp_impl::schedule_ntn_rnti_lease_pool_updates_for_access_beams()
 
     for (const access_lease_target& target : targets) {
       const srsran::du_cell_index_t cell_index = to_f1ap_du_cell_index(target.cell->cell_index);
+      if (!is_ntn_rnti_du_reconciled(target.du_index)) {
+        last_ntn_rnti_retirement_reason = "du_reconciliation_pending";
+        continue;
+      }
+      const auto du_state_it = ntn_rnti_du_reconciliation_states.find(target.du_index);
+      if (du_state_it == ntn_rnti_du_reconciliation_states.end() || !du_state_it->second.connected) {
+        last_ntn_rnti_retirement_reason = "du_reconciliation_pending";
+        continue;
+      }
+      const uint64_t connection_generation = du_state_it->second.connection_generation;
       if (ntn_service_resource_mng.has_unresolved_rnti_lease_pool(target.du_index,
                                                                   cell_index,
                                                                   target.cell->pci,
@@ -1941,8 +2003,17 @@ void cu_cp_impl::schedule_ntn_rnti_lease_pool_updates_for_access_beams()
       local_update.cell_index     = cell_index;
       local_update.pci            = target.cell->pci;
       local_update.analog_beam_id = analog_assignment.analog_beam_id;
-      local_update.generation_id  = next_ntn_rnti_lease_generation_id++;
-      local_update.leases         = allocate_ntn_rnti_leases(ntn_rnti_lease_pool_size);
+      const std::optional<std::vector<rnti_t>> leases =
+          allocate_ntn_rnti_leases(target.du_index, ntn_rnti_lease_pool_size);
+      if (!leases.has_value()) {
+        continue;
+      }
+      const std::optional<uint32_t> generation = allocate_ntn_rnti_lease_generation(target.du_index);
+      if (!generation.has_value()) {
+        continue;
+      }
+      local_update.generation_id = *generation;
+      local_update.leases        = *leases;
 
       const ntn_rnti_lease_pool_update_result reserve_result =
           ntn_service_resource_mng.reserve_rnti_leases(local_update);
@@ -1982,25 +2053,141 @@ void cu_cp_impl::schedule_ntn_rnti_lease_pool_updates_for_access_beams()
 
       async_task<f1ap_gnb_du_resource_coordination_response> f1ap_task =
           processor->get_f1ap_handler().handle_gnb_du_resource_coordination_request(request);
-      auto completion_task =
-          [this, local_update, f1ap_task = std::move(f1ap_task)](
-              coro_context<async_task<void>>& ctx) mutable {
-            f1ap_gnb_du_resource_coordination_response response;
-            CORO_BEGIN(ctx);
-            CORO_AWAIT_VALUE(response, f1ap_task);
-            if (response.result.has_value()) {
-              if (!ntn_service_resource_mng.mark_rnti_lease_pool_distribution_result(local_update,
-                                                                                       *response.result)) {
-                ntn_service_resource_mng.mark_rnti_lease_pool_ack_unknown(local_update, "invalid_du_result");
-              }
-            } else {
-              ntn_service_resource_mng.mark_rnti_lease_pool_ack_unknown(local_update, "du_response_missing");
-            }
-            CORO_RETURN();
-          };
+      auto completion_task = [this, local_update, connection_generation, f1ap_task = std::move(f1ap_task)](
+                                 coro_context<async_task<void>>& ctx) mutable {
+        f1ap_gnb_du_resource_coordination_response response;
+        CORO_BEGIN(ctx);
+        CORO_AWAIT_VALUE(response, f1ap_task);
+        {
+          const auto live_state = ntn_rnti_du_reconciliation_states.find(local_update.du_index);
+          if (live_state == ntn_rnti_du_reconciliation_states.end() || !live_state->second.connected ||
+              live_state->second.connection_generation != connection_generation) {
+            last_ntn_rnti_retirement_reason = "stale_rnti_pool_du_connection_generation";
+            CORO_EARLY_RETURN();
+          }
+        }
+        if (response.result.has_value()) {
+          if (!ntn_service_resource_mng.mark_rnti_lease_pool_distribution_result(local_update, *response.result)) {
+            ntn_service_resource_mng.mark_rnti_lease_pool_ack_unknown(local_update, "invalid_du_result");
+          }
+        } else {
+          ntn_service_resource_mng.mark_rnti_lease_pool_ack_unknown(local_update, "du_response_missing");
+        }
+        CORO_RETURN();
+      };
       if (!common_task_sched.schedule_async_task(launch_async(std::move(completion_task)))) {
         ntn_service_resource_mng.mark_rnti_lease_pool_ack_unknown(local_update, "task_scheduler_unavailable");
       }
+    }
+  }
+}
+
+void cu_cp_impl::schedule_ntn_rnti_retirement_updates()
+{
+  const auto& ntn_cfg = cfg.mobility.meas_manager_config.ntn_location_mobility;
+  if (!ntn_cfg.enabled) {
+    return;
+  }
+
+  for (const ntn_rnti_retirement_batch& batch : ntn_service_resource_mng.get_pending_rnti_retirement_batches()) {
+    const auto du_state_it = ntn_rnti_du_reconciliation_states.find(batch.du_index);
+    if (du_state_it == ntn_rnti_du_reconciliation_states.end() || !du_state_it->second.connected ||
+        du_state_it->second.connection_generation != batch.du_connection_generation ||
+        du_state_it->second.retirement_capability != ntn_rnti_retirement_capability::supported ||
+        !is_ntn_rnti_du_reconciled(batch.du_index)) {
+      last_ntn_rnti_retirement_reason = "retirement_waiting_for_live_du_audit";
+      continue;
+    }
+
+    const std::vector<cu_cp_ue*> live_ues = ue_mng.get_ues();
+    const bool rnti_still_owned_by_cu     = std::any_of(live_ues.begin(), live_ues.end(), [&batch](const cu_cp_ue* ue) {
+      return ue != nullptr && ue->get_du_index() == batch.du_index &&
+             std::find(batch.leases.begin(), batch.leases.end(), ue->get_c_rnti()) != batch.leases.end();
+    });
+    if (rnti_still_owned_by_cu) {
+      last_ntn_rnti_retirement_reason = "retirement_blocked_by_live_cu_ue";
+      continue;
+    }
+
+    du_processor* processor = du_db.find_du_processor(batch.du_index);
+    if (processor == nullptr || processor->get_context() == nullptr) {
+      last_ntn_rnti_retirement_reason = "du_unavailable";
+      continue;
+    }
+
+    const auto& served_cells = processor->get_context()->served_cells;
+    const auto  cell_it      = std::find_if(served_cells.begin(), served_cells.end(), [&batch](const auto& cell) {
+      return to_f1ap_du_cell_index(cell.cell_index) == batch.cell_index && cell.pci == batch.pci;
+    });
+    if (cell_it == served_cells.end()) {
+      last_ntn_rnti_retirement_reason = "retirement_cell_identity_mismatch";
+      continue;
+    }
+    if (!ntn_service_resource_mng.mark_rnti_retirement_sent(batch)) {
+      last_ntn_rnti_retirement_reason = "retirement_batch_not_ready";
+      continue;
+    }
+
+    f1ap_gnb_du_resource_coordination_request request;
+    request.ntn_rnti_lease_update.gnb_du_id     = processor->get_context()->id;
+    request.ntn_rnti_lease_update.du_index      = batch.du_index;
+    request.ntn_rnti_lease_update.cell_index    = batch.cell_index;
+    request.ntn_rnti_lease_update.cell_cgi      = cell_it->cgi;
+    request.ntn_rnti_lease_update.pci           = batch.pci;
+    request.ntn_rnti_lease_update.generation_id = batch.generation_id;
+    request.ntn_rnti_lease_update.expiry_ms     = 0;
+    request.ntn_rnti_lease_update.operation     = f1ap_ntn_rnti_lease_pool_operation::retire;
+    request.ntn_rnti_lease_update.leases        = batch.leases;
+
+    async_task<f1ap_gnb_du_resource_coordination_response> f1ap_task =
+        processor->get_f1ap_handler().handle_gnb_du_resource_coordination_request(request);
+    auto completion_task = [this, batch, f1ap_task = std::move(f1ap_task)](
+                               coro_context<async_task<void>>& ctx) mutable {
+      f1ap_gnb_du_resource_coordination_response response;
+      CORO_BEGIN(ctx);
+      CORO_AWAIT_VALUE(response, f1ap_task);
+      const auto live_state_it = ntn_rnti_du_reconciliation_states.find(batch.du_index);
+      if (live_state_it == ntn_rnti_du_reconciliation_states.end() || !live_state_it->second.connected ||
+          live_state_it->second.connection_generation != batch.du_connection_generation) {
+        last_ntn_rnti_retirement_reason = "stale_retirement_du_connection_generation";
+        CORO_EARLY_RETURN();
+      }
+
+      ntn_rnti_retirement_outcome outcome = ntn_rnti_retirement_outcome::outcome_unknown;
+      std::string                 reason  = "du_response_missing";
+      if (response.result.has_value()) {
+        std::vector<rnti_t> expected        = batch.leases;
+        std::vector<rnti_t> accepted_leases = response.result->accepted_leases;
+        std::vector<rnti_t> rejected_leases = response.result->rejected_leases;
+        std::sort(expected.begin(), expected.end());
+        std::sort(accepted_leases.begin(), accepted_leases.end());
+        std::sort(rejected_leases.begin(), rejected_leases.end());
+        const bool matching_generation = response.result->generation_id == batch.generation_id;
+        const bool exact_accept =
+            matching_generation && response.result->accepted && rejected_leases.empty() && accepted_leases == expected;
+        const bool exact_rejection =
+            matching_generation && !response.result->accepted && accepted_leases.empty() && rejected_leases == expected;
+        outcome = exact_accept      ? ntn_rnti_retirement_outcome::accepted
+                  : exact_rejection ? ntn_rnti_retirement_outcome::definitively_rejected
+                                    : ntn_rnti_retirement_outcome::outcome_unknown;
+        reason  = exact_accept                             ? "retirement_confirmed_by_du"
+                  : response.result->reject_reason.empty() ? "invalid_retirement_result"
+                                                           : response.result->reject_reason;
+      }
+      if (!ntn_service_resource_mng.mark_rnti_retirement_result(batch, outcome, reason)) {
+        last_ntn_rnti_retirement_reason = "stale_or_invalid_retirement_result";
+        CORO_EARLY_RETURN();
+      }
+      last_ntn_rnti_retirement_reason = reason;
+      if (outcome == ntn_rnti_retirement_outcome::accepted) {
+        schedule_ntn_rnti_lease_pool_updates_for_access_beams();
+      }
+      CORO_RETURN();
+    };
+    if (!common_task_sched.schedule_async_task(launch_async(std::move(completion_task)))) {
+      ntn_service_resource_mng.mark_rnti_retirement_result(
+          batch, ntn_rnti_retirement_outcome::not_sent, "task_scheduler_unavailable");
+      last_ntn_rnti_retirement_reason = "task_scheduler_unavailable";
     }
   }
 }
@@ -2018,7 +2205,8 @@ static uint32_t compute_ntn_sib19_packed_hash(const byte_buffer& pdu)
 void cu_cp_impl::schedule_ntn_sib19_broadcast_updates()
 {
   const auto& ntn_cfg = cfg.mobility.meas_manager_config.ntn_location_mobility;
-  if (stopped.load(std::memory_order_relaxed) || !ntn_cfg.enabled || current_ntn_beam_placement_plan.assignments.empty()) {
+  if (stopped.load(std::memory_order_relaxed) || !ntn_cfg.enabled ||
+      current_ntn_beam_placement_plan.assignments.empty()) {
     return;
   }
 
@@ -2026,7 +2214,7 @@ void cu_cp_impl::schedule_ntn_sib19_broadcast_updates()
       build_current_ntn_sib19_broadcast_snapshot(std::chrono::steady_clock::now());
   for (const ntn_sib19_broadcast_entry& entry : snapshot.entries) {
     const ntn_beam_du_assignment* assignment = find_assignment_for_beam(current_ntn_beam_placement_plan, entry.beam_id);
-    ntn_sib19_broadcast_record& record       = ntn_sib19_broadcast_records[entry.beam_id];
+    ntn_sib19_broadcast_record&   record     = ntn_sib19_broadcast_records[entry.beam_id];
     record.beam_id                           = entry.beam_id;
     record.nci                               = entry.nci;
     record.packed_sib19_bytes                = entry.packed_sib19.length();
@@ -2036,12 +2224,11 @@ void cu_cp_impl::schedule_ntn_sib19_broadcast_updates()
     bool send_update = entry.state == ntn_sib19_broadcast_state::desired && downlink_update_allowed;
     bool send_clear  = entry.state == ntn_sib19_broadcast_state::clear_desired;
     if (entry.state == ntn_sib19_broadcast_state::desired && !downlink_update_allowed) {
-      const bool du_may_have_dynamic_sib19 =
-          record.state == ntn_sib19_broadcast_state::desired ||
-          record.state == ntn_sib19_broadcast_state::sent_to_du ||
-          record.state == ntn_sib19_broadcast_state::applied_by_du ||
-          record.state == ntn_sib19_broadcast_state::rejected_by_du ||
-          record.state == ntn_sib19_broadcast_state::clear_sent;
+      const bool du_may_have_dynamic_sib19 = record.state == ntn_sib19_broadcast_state::desired ||
+                                             record.state == ntn_sib19_broadcast_state::sent_to_du ||
+                                             record.state == ntn_sib19_broadcast_state::applied_by_du ||
+                                             record.state == ntn_sib19_broadcast_state::rejected_by_du ||
+                                             record.state == ntn_sib19_broadcast_state::clear_sent;
       send_clear = du_may_have_dynamic_sib19;
       if (!send_clear) {
         record.state              = ntn_sib19_broadcast_state::stale_blocked;
@@ -2052,20 +2239,18 @@ void cu_cp_impl::schedule_ntn_sib19_broadcast_updates()
       }
     }
     if (entry.state == ntn_sib19_broadcast_state::stale_blocked) {
-      const bool du_may_have_dynamic_sib19 =
-          record.state == ntn_sib19_broadcast_state::desired ||
-          record.state == ntn_sib19_broadcast_state::sent_to_du ||
-          record.state == ntn_sib19_broadcast_state::applied_by_du ||
-          record.state == ntn_sib19_broadcast_state::rejected_by_du ||
-          record.state == ntn_sib19_broadcast_state::clear_sent;
+      const bool du_may_have_dynamic_sib19 = record.state == ntn_sib19_broadcast_state::desired ||
+                                             record.state == ntn_sib19_broadcast_state::sent_to_du ||
+                                             record.state == ntn_sib19_broadcast_state::applied_by_du ||
+                                             record.state == ntn_sib19_broadcast_state::rejected_by_du ||
+                                             record.state == ntn_sib19_broadcast_state::clear_sent;
       send_clear = du_may_have_dynamic_sib19;
     }
 
     if (send_update &&
         (record.state == ntn_sib19_broadcast_state::sent_to_du ||
          record.state == ntn_sib19_broadcast_state::applied_by_du) &&
-        record.packed_sib19_bytes == entry.packed_sib19.length() &&
-        record.packed_sib19_hash == packed_sib19_hash) {
+        record.packed_sib19_bytes == entry.packed_sib19.length() && record.packed_sib19_hash == packed_sib19_hash) {
       record.reason = record.state == ntn_sib19_broadcast_state::applied_by_du ? "applied" : record.reason;
       continue;
     }
@@ -2104,9 +2289,8 @@ void cu_cp_impl::schedule_ntn_sib19_broadcast_updates()
 
     const uint32_t generation = next_ntn_sib19_broadcast_generation_id++;
     record.generation_id     = generation;
-    record.state             = send_clear ? ntn_sib19_broadcast_state::clear_sent
-                                          : ntn_sib19_broadcast_state::sent_to_du;
-    record.reason            = send_clear ? entry.reason : "gnb_du_resource_coordination_request";
+    record.state  = send_clear ? ntn_sib19_broadcast_state::clear_sent : ntn_sib19_broadcast_state::sent_to_du;
+    record.reason = send_clear ? entry.reason : "gnb_du_resource_coordination_request";
     record.packed_sib19_hash = send_clear ? 0U : packed_sib19_hash;
 
     f1ap_gnb_du_resource_coordination_request request;
@@ -2118,45 +2302,42 @@ void cu_cp_impl::schedule_ntn_sib19_broadcast_updates()
     request.ntn_sib19_broadcast_update.generation_id = generation;
     request.ntn_sib19_broadcast_update.operation =
         send_clear ? f1ap_ntn_sib19_broadcast_operation::clear : f1ap_ntn_sib19_broadcast_operation::update;
-    request.ntn_sib19_broadcast_update.si_msg_idx    = 0;
-    request.ntn_sib19_broadcast_update.sib_idx       = 19;
-    request.ntn_sib19_broadcast_update.packed_sib19  = entry.packed_sib19.copy();
+    request.ntn_sib19_broadcast_update.si_msg_idx   = 0;
+    request.ntn_sib19_broadcast_update.sib_idx      = 19;
+    request.ntn_sib19_broadcast_update.packed_sib19 = entry.packed_sib19.copy();
 
     async_task<f1ap_gnb_du_resource_coordination_response> f1ap_task =
         processor->get_f1ap_handler().handle_gnb_du_resource_coordination_request(request);
-    auto completion_task =
-        [this, beam_id = entry.beam_id, generation, send_clear, f1ap_task = std::move(f1ap_task)](
-            coro_context<async_task<void>>& ctx) mutable {
-          f1ap_gnb_du_resource_coordination_response response;
-          CORO_BEGIN(ctx);
-          CORO_AWAIT_VALUE(response, f1ap_task);
-          auto completion_it = ntn_sib19_broadcast_records.find(beam_id);
-          const ntn_sib19_broadcast_state expected_in_flight_state =
-              send_clear ? ntn_sib19_broadcast_state::clear_sent : ntn_sib19_broadcast_state::sent_to_du;
-          if (completion_it == ntn_sib19_broadcast_records.end() ||
-              completion_it->second.generation_id != generation ||
-              completion_it->second.state != expected_in_flight_state) {
-            CORO_EARLY_RETURN();
-          }
-          ntn_sib19_broadcast_record& completion_record = completion_it->second;
-          const bool expected_status = response.sib19_result.has_value() &&
-                                       ((!send_clear && response.sib19_result->status ==
-                                                            f1ap_ntn_sib19_broadcast_result_status::applied) ||
-                                        (send_clear && response.sib19_result->status ==
-                                                           f1ap_ntn_sib19_broadcast_result_status::clear_applied));
-          if (response.success && expected_status) {
-            completion_record.state = send_clear ? ntn_sib19_broadcast_state::cleared_by_du
-                                                 : ntn_sib19_broadcast_state::applied_by_du;
-            completion_record.reason = send_clear ? "cleared" : "applied";
-          } else {
-            completion_record.state  = ntn_sib19_broadcast_state::rejected_by_du;
-            completion_record.reason =
-                response.sib19_result.has_value() && !response.sib19_result->reject_reason.empty()
-                    ? response.sib19_result->reject_reason
-                    : (response.sib19_result.has_value() ? "unexpected_sib19_result_status" : "du_reject");
-          }
-          CORO_RETURN();
-        };
+    auto completion_task = [this, beam_id = entry.beam_id, generation, send_clear, f1ap_task = std::move(f1ap_task)](
+                               coro_context<async_task<void>>& ctx) mutable {
+      f1ap_gnb_du_resource_coordination_response response;
+      CORO_BEGIN(ctx);
+      CORO_AWAIT_VALUE(response, f1ap_task);
+      auto                            completion_it = ntn_sib19_broadcast_records.find(beam_id);
+      const ntn_sib19_broadcast_state expected_in_flight_state =
+          send_clear ? ntn_sib19_broadcast_state::clear_sent : ntn_sib19_broadcast_state::sent_to_du;
+      if (completion_it == ntn_sib19_broadcast_records.end() || completion_it->second.generation_id != generation ||
+          completion_it->second.state != expected_in_flight_state) {
+        CORO_EARLY_RETURN();
+      }
+      ntn_sib19_broadcast_record& completion_record = completion_it->second;
+      const bool                  expected_status =
+          response.sib19_result.has_value() &&
+          ((!send_clear && response.sib19_result->status == f1ap_ntn_sib19_broadcast_result_status::applied) ||
+           (send_clear && response.sib19_result->status == f1ap_ntn_sib19_broadcast_result_status::clear_applied));
+      if (response.success && expected_status) {
+        completion_record.state =
+            send_clear ? ntn_sib19_broadcast_state::cleared_by_du : ntn_sib19_broadcast_state::applied_by_du;
+        completion_record.reason = send_clear ? "cleared" : "applied";
+      } else {
+        completion_record.state = ntn_sib19_broadcast_state::rejected_by_du;
+        completion_record.reason =
+            response.sib19_result.has_value() && !response.sib19_result->reject_reason.empty()
+                ? response.sib19_result->reject_reason
+                : (response.sib19_result.has_value() ? "unexpected_sib19_result_status" : "du_reject");
+      }
+      CORO_RETURN();
+    };
     if (!common_task_sched.schedule_async_task(launch_async(std::move(completion_task)))) {
       record.state  = ntn_sib19_broadcast_state::rejected_by_du;
       record.reason = "task_scheduler_unavailable";
@@ -2220,6 +2401,13 @@ void cu_cp_impl::handle_ntn_resource_audit_decision(const ntn_resource_audit_dec
         continue;
       }
 
+      const auto du_state_it = ntn_rnti_du_reconciliation_states.find(repair.du_index);
+      if (du_state_it == ntn_rnti_du_reconciliation_states.end() || !du_state_it->second.connected) {
+        ntn_service_resource_mng.mark_resource_repair_result(repair, false, "du_reconciliation_pending");
+        continue;
+      }
+      const uint64_t connection_generation = du_state_it->second.connection_generation;
+
       const du_cell_configuration* cell = nullptr;
       for (const du_cell_configuration& candidate : processor->get_context()->served_cells) {
         if (to_f1ap_du_cell_index(candidate.cell_index) == repair.cell_index && candidate.pci == repair.pci) {
@@ -2257,28 +2445,36 @@ void cu_cp_impl::handle_ntn_resource_audit_decision(const ntn_resource_audit_dec
 
       async_task<f1ap_gnb_du_resource_coordination_response> f1ap_task =
           processor->get_f1ap_handler().handle_gnb_du_resource_coordination_request(request);
-      auto completion_task =
-          [this, repair, local_update, f1ap_task = std::move(f1ap_task)](coro_context<async_task<void>>& ctx) mutable {
-            f1ap_gnb_du_resource_coordination_response response;
-            CORO_BEGIN(ctx);
-            CORO_AWAIT_VALUE(response, f1ap_task);
-            if (!response.result.has_value()) {
-              ntn_service_resource_mng.mark_rnti_lease_pool_ack_unknown(local_update, "du_response_missing");
-              ntn_service_resource_mng.mark_resource_repair_result(repair, false, "du_response_missing");
-              CORO_EARLY_RETURN();
-            }
-            const bool result_applied =
-                ntn_service_resource_mng.mark_rnti_lease_pool_distribution_result(local_update, *response.result);
-            if (!result_applied) {
-              ntn_service_resource_mng.mark_rnti_lease_pool_ack_unknown(local_update, "invalid_du_result");
-            }
-            ntn_service_resource_mng.mark_resource_repair_result(
-                repair,
-                result_applied && response.result->accepted && response.result->rejected_leases.empty(),
-                !result_applied ? "invalid_du_result" :
-                                  (response.result->reject_reason.empty() ? "du_ack" : response.result->reject_reason));
-            CORO_RETURN();
-          };
+      auto completion_task = [this, repair, local_update, connection_generation, f1ap_task = std::move(f1ap_task)](
+                                 coro_context<async_task<void>>& ctx) mutable {
+        f1ap_gnb_du_resource_coordination_response response;
+        CORO_BEGIN(ctx);
+        CORO_AWAIT_VALUE(response, f1ap_task);
+        {
+          const auto live_state = ntn_rnti_du_reconciliation_states.find(local_update.du_index);
+          if (live_state == ntn_rnti_du_reconciliation_states.end() || !live_state->second.connected ||
+              live_state->second.connection_generation != connection_generation) {
+            last_ntn_rnti_retirement_reason = "stale_rnti_pool_repair_du_connection_generation";
+            CORO_EARLY_RETURN();
+          }
+        }
+        if (!response.result.has_value()) {
+          ntn_service_resource_mng.mark_rnti_lease_pool_ack_unknown(local_update, "du_response_missing");
+          ntn_service_resource_mng.mark_resource_repair_result(repair, false, "du_response_missing");
+          CORO_EARLY_RETURN();
+        }
+        const bool result_applied =
+            ntn_service_resource_mng.mark_rnti_lease_pool_distribution_result(local_update, *response.result);
+        if (!result_applied) {
+          ntn_service_resource_mng.mark_rnti_lease_pool_ack_unknown(local_update, "invalid_du_result");
+        }
+        ntn_service_resource_mng.mark_resource_repair_result(
+            repair,
+            result_applied && response.result->accepted && response.result->rejected_leases.empty(),
+            !result_applied ? "invalid_du_result"
+                            : (response.result->reject_reason.empty() ? "du_ack" : response.result->reject_reason));
+        CORO_RETURN();
+      };
       if (!common_task_sched.schedule_async_task(launch_async(std::move(completion_task)))) {
         ntn_service_resource_mng.mark_rnti_lease_pool_ack_unknown(local_update, "task_scheduler_unavailable");
         ntn_service_resource_mng.mark_resource_repair_result(repair, false, "task_scheduler_unavailable");
@@ -2295,16 +2491,14 @@ void cu_cp_impl::handle_ntn_resource_audit_decision(const ntn_resource_audit_dec
         mark_ntn_service_pair_resource_repair_skipped(repair, "missing_slot_request");
         continue;
       }
-
       cu_cp_ue* ue = ue_mng.find_du_ue(repair.ue_index);
       if (ue == nullptr) {
         mark_ntn_service_pair_resource_repair_skipped(repair, "ue_not_found");
         continue;
       }
 
-      if (service_pair_repair &&
-          (ntn_release_allowed_release_requested_ues.count(repair.ue_index) != 0 ||
-           ntn_location_watchdog_release_requested_ues.count(repair.ue_index) != 0)) {
+      if (service_pair_repair && (ntn_release_allowed_release_requested_ues.count(repair.ue_index) != 0 ||
+                                  ntn_location_watchdog_release_requested_ues.count(repair.ue_index) != 0)) {
         mark_ntn_service_pair_resource_repair_skipped(repair, "release_pending");
         continue;
       }
@@ -2421,9 +2615,26 @@ std::vector<cu_cp_impl::ntn_resource_audit_target> cu_cp_impl::collect_ntn_resou
     targets.push_back({du_index, cell_index, pci, service_pair});
   };
 
+  // Configuration-derived targets are required after a CU-CP restart, when the DU may still hold lease records while
+  // the local resource manager is empty. Include disabled/downlink-only NTN entries as discovery targets: disabling
+  // a beam stops new pool publication, but must not hide an older DU ledger that still needs quarantine or cleanup.
+  // Only cells that are actually served by a connected DU are queried.
+  const auto& ntn_cfg = cfg.mobility.meas_manager_config.ntn_location_mobility;
+  if (ntn_cfg.enabled) {
+    for (du_index_t du_index : du_db.get_du_processor_indexes()) {
+      for (const ntn_beam_position& beam : ntn_cfg.beams) {
+        const du_cell_configuration* cell = find_du_cell_by_nci(du_db, du_index, beam.nci);
+        if (cell != nullptr) {
+          add_target(du_index, to_f1ap_du_cell_index(cell->cell_index), cell->pci, false);
+        }
+      }
+    }
+  }
+
   const ntn_beam_service_resource_snapshot snapshot = ntn_service_resource_mng.get_snapshot();
   for (const ntn_rnti_lease& lease : snapshot.rnti_leases) {
-    if (lease.distribution_state != "sent_to_du" && lease.distribution_state != "applied_by_du") {
+    if (lease.du_index == du_index_t::invalid || lease.cell_index == srsran::INVALID_DU_CELL_INDEX ||
+        lease.pci == INVALID_PCI) {
       continue;
     }
     add_target(lease.du_index, lease.cell_index, lease.pci, false);
@@ -2459,7 +2670,26 @@ void cu_cp_impl::schedule_ntn_resource_audits()
     return;
   }
 
-  for (const ntn_resource_audit_target& target : collect_ntn_resource_audit_targets()) {
+  const std::vector<ntn_resource_audit_target> targets = collect_ntn_resource_audit_targets();
+  for (auto& entry : ntn_rnti_du_reconciliation_states) {
+    entry.second.expected_targets.clear();
+  }
+  for (const ntn_resource_audit_target& target : targets) {
+    ntn_rnti_du_reconciliation_state& state = ntn_rnti_du_reconciliation_states[target.du_index];
+    state.expected_targets.emplace(target.cell_index, target.pci);
+  }
+
+  for (const ntn_resource_audit_target& target : targets) {
+    const auto target_key = std::make_tuple(target.du_index, target.cell_index, target.pci);
+    if (ntn_rnti_audits_in_flight.find(target_key) != ntn_rnti_audits_in_flight.end()) {
+      continue;
+    }
+    auto du_state_it = ntn_rnti_du_reconciliation_states.find(target.du_index);
+    if (du_state_it == ntn_rnti_du_reconciliation_states.end() || !du_state_it->second.connected) {
+      last_ntn_resource_audit_reason  = "du_disconnected";
+      last_ntn_rnti_retirement_reason = "du_disconnected_awaiting_complete_audit";
+      continue;
+    }
     du_processor* processor = du_db.find_du_processor(target.du_index);
     if (processor == nullptr || processor->get_context() == nullptr) {
       ++nof_ntn_resource_audit_failures;
@@ -2467,12 +2697,20 @@ void cu_cp_impl::schedule_ntn_resource_audits()
       continue;
     }
 
+    ntn_rnti_du_reconciliation_state& du_state = du_state_it->second;
+    du_state.reconciled_targets.erase({target.cell_index, target.pci});
+    const uint64_t connection_generation = du_state.connection_generation;
+    const bool     request_retirement_metadata =
+        du_state.retirement_capability != ntn_rnti_retirement_capability::unsupported;
+
     f1ap_gnb_du_resource_coordination_request request;
     request.ntn_resource_audit_request.du_index      = target.du_index;
     request.ntn_resource_audit_request.cell_index    = target.cell_index;
     request.ntn_resource_audit_request.pci           = target.pci;
     request.ntn_resource_audit_request.generation_id = next_ntn_resource_audit_generation_id++;
+    request.ntn_resource_audit_request.request_retirement_metadata = request_retirement_metadata;
     last_ntn_resource_audit_generation               = request.ntn_resource_audit_request.generation_id;
+    ntn_rnti_audits_in_flight[target_key]                          = request.ntn_resource_audit_request.generation_id;
     ++nof_ntn_resource_audit_queries_sent;
     if (target.service_pair) {
       ++nof_ntn_service_pair_resource_audit_targets;
@@ -2482,19 +2720,45 @@ void cu_cp_impl::schedule_ntn_resource_audits()
     async_task<f1ap_gnb_du_resource_coordination_response> f1ap_task =
         processor->get_f1ap_handler().handle_gnb_du_resource_coordination_request(request);
     auto completion_task =
-        [this, audit_request = request.ntn_resource_audit_request, f1ap_task = std::move(f1ap_task)](
-            coro_context<async_task<void>>& ctx) mutable {
+        [this,
+         audit_request = request.ntn_resource_audit_request,
+         target_key,
+         connection_generation,
+         f1ap_task = std::move(f1ap_task)](coro_context<async_task<void>>& ctx) mutable {
           f1ap_gnb_du_resource_coordination_response response;
           ntn_resource_audit_report                  report;
           ntn_resource_audit_decision                decision;
           bool                                       rnti_domain_clean = false;
           CORO_BEGIN(ctx);
           CORO_AWAIT_VALUE(response, f1ap_task);
+          {
+            const auto in_flight = ntn_rnti_audits_in_flight.find(target_key);
+            if (in_flight == ntn_rnti_audits_in_flight.end() || in_flight->second != audit_request.generation_id) {
+              CORO_EARLY_RETURN();
+            }
+            ntn_rnti_audits_in_flight.erase(in_flight);
+          }
+          auto live_du_state_it = ntn_rnti_du_reconciliation_states.find(audit_request.du_index);
+          if (live_du_state_it == ntn_rnti_du_reconciliation_states.end() || !live_du_state_it->second.connected ||
+              live_du_state_it->second.connection_generation != connection_generation) {
+            last_ntn_resource_audit_reason = "stale_du_connection_generation";
+            CORO_EARLY_RETURN();
+          }
           // A present result is an explicit DU answer even when it rejects the audit. Route that rejection through
           // the authoritative manager so its reason becomes a conflict instead of being dropped as transport loss.
           if (!response.audit_result.has_value()) {
             ++nof_ntn_resource_audit_failures;
-            last_ntn_resource_audit_reason = "du_response_missing";
+            if (audit_request.request_retirement_metadata && response.result.has_value()) {
+              if (live_du_state_it->second.retirement_capability != ntn_rnti_retirement_capability::unsupported) {
+                ++nof_ntn_rnti_retire_unsupported;
+              }
+              live_du_state_it->second.retirement_capability = ntn_rnti_retirement_capability::unsupported;
+              live_du_state_it->second.reconciled_targets.erase({audit_request.cell_index, audit_request.pci});
+              last_ntn_rnti_retirement_reason = "retire_unsupported";
+              last_ntn_resource_audit_reason  = "retirement_metadata_unsupported_fallback_pending";
+            } else {
+              last_ntn_resource_audit_reason = "du_response_missing";
+            }
             CORO_EARLY_RETURN();
           }
           if (response.audit_result->generation_id != audit_request.generation_id) {
@@ -2507,14 +2771,29 @@ void cu_cp_impl::schedule_ntn_resource_audits()
           report.cell_index                = audit_request.cell_index;
           report.pci                       = audit_request.pci;
           report.generation_id             = response.audit_result->generation_id;
+          report.du_connection_generation  = connection_generation;
           report.accepted                  = response.audit_result->accepted;
           report.rnti_snapshot_complete    = response.audit_result->rnti_snapshot_complete;
           report.ue_slot_snapshot_complete = response.audit_result->ue_slot_snapshot_complete;
+          if (audit_request.request_retirement_metadata && !response.audit_result->retirement_metadata_present) {
+            if (live_du_state_it->second.retirement_capability != ntn_rnti_retirement_capability::unsupported) {
+              ++nof_ntn_rnti_retire_unsupported;
+            }
+            live_du_state_it->second.retirement_capability = ntn_rnti_retirement_capability::unsupported;
+            last_ntn_rnti_retirement_reason           = "retire_unsupported";
+          }
+          report.rnti_retirement_capability_known =
+              response.audit_result->retirement_metadata_present ||
+              live_du_state_it->second.retirement_capability == ntn_rnti_retirement_capability::unsupported;
+          report.rnti_retirement_supported =
+              response.audit_result->retirement_metadata_present && response.audit_result->retire_supported;
+          report.rnti_generation_high_water = response.audit_result->rnti_generation_high_water;
           report.reject_reason             = response.audit_result->reject_reason;
           last_ntn_resource_audit_reason =
               report.reject_reason.empty() ? (report.accepted ? "accepted" : "du_audit_rejected") : report.reject_reason;
           for (const f1ap_ntn_resource_audit_rnti_lease& lease : response.audit_result->rnti_leases) {
             report.rnti_leases.push_back({lease.rnti, lease.state, lease.distribution_state, lease.generation_id});
+            report.rnti_generation_high_water = std::max(report.rnti_generation_high_water, lease.generation_id);
           }
           for (const f1ap_ntn_resource_audit_ue_slot& slot : response.audit_result->ue_slots) {
             report.ue_slots.push_back({slot.ue_index, slot.state, slot.request});
@@ -2522,6 +2801,20 @@ void cu_cp_impl::schedule_ntn_resource_audits()
 
           if (report.accepted) {
             ++nof_ntn_resource_audit_responses_accepted;
+            live_du_state_it->second.generation_high_water =
+                std::max(live_du_state_it->second.generation_high_water, report.rnti_generation_high_water);
+            if (report.rnti_retirement_capability_known) {
+              const bool newly_unsupported =
+                  !report.rnti_retirement_supported &&
+                  live_du_state_it->second.retirement_capability != ntn_rnti_retirement_capability::unsupported;
+              live_du_state_it->second.retirement_capability = report.rnti_retirement_supported
+                                                                   ? ntn_rnti_retirement_capability::supported
+                                                                   : ntn_rnti_retirement_capability::unsupported;
+              if (newly_unsupported) {
+                ++nof_ntn_rnti_retire_unsupported;
+                last_ntn_rnti_retirement_reason = "retire_unsupported";
+              }
+            }
             if (!report.rnti_snapshot_complete) {
               ++nof_ntn_resource_audit_rnti_incomplete;
             }
@@ -2540,11 +2833,14 @@ void cu_cp_impl::schedule_ntn_resource_audits()
                                                     repair.action == ntn_resource_repair_action::mark_resource_conflict;
                                            });
           if (report.accepted && report.rnti_snapshot_complete && rnti_domain_clean) {
+            live_du_state_it->second.reconciled_targets.emplace(audit_request.cell_index, audit_request.pci);
+            schedule_ntn_rnti_retirement_updates();
             schedule_ntn_rnti_lease_pool_updates_for_access_beams();
           }
           CORO_RETURN();
         };
     if (!common_task_sched.schedule_async_task(launch_async(std::move(completion_task)))) {
+      ntn_rnti_audits_in_flight.erase(target_key);
       ++nof_ntn_resource_audit_failures;
       last_ntn_resource_audit_reason = "task_scheduler_unavailable";
     }
@@ -6584,6 +6880,15 @@ bool cu_cp_impl::block_new_ntn_access_if_rnti_pool_unavailable(std::optional<std
   }
 
   const srsran::du_cell_index_t cell_index = to_f1ap_du_cell_index(ue->get_pcell_index());
+  if (!is_ntn_rnti_du_reconciled(ue->get_du_index())) {
+    logger.warning(
+        "ue={}: Blocking new NTN access for analog beam={} du={} pci={}. Cause: rnti_pool_reconciliation_pending",
+        ue_index,
+        beam->analog_beam_id,
+        ue->get_du_index(),
+        ue->get_pci());
+    return true;
+  }
   if (ntn_service_resource_mng.is_access_rnti_pool_ready(
           ue->get_du_index(), cell_index, ue->get_pci(), beam->analog_beam_id)) {
     return false;
@@ -8468,8 +8773,8 @@ bool cu_cp_impl::handle_ntn_satellite_state_update(
   schedule_ntn_sib19_broadcast_updates();
   schedule_ntn_predictive_beam_hopping_service_handovers();
   schedule_ntn_beam_hopping_service_handovers();
-  logger.debug(
-      "NTN satellite state update selected served beam set [{}] satellites={} timeline_steps={} predictive_window={} upcoming={} drain_soon={} owner_changes={}",
+  logger.debug("NTN satellite state update selected served beam set [{}] satellites={} timeline_steps={} "
+               "predictive_window={} upcoming={} drain_soon={} owner_changes={}",
                format_beam_ids(schedule.beam_ids),
                current_satellites.size(),
                future_steps.size(),
@@ -9558,6 +9863,34 @@ cu_cp_ntn_runtime_status cu_cp_impl::get_current_ntn_runtime_status() const
   status.nof_ntn_resource_audit_rnti_incomplete = nof_ntn_resource_audit_rnti_incomplete;
   status.nof_ntn_resource_audit_ue_slot_incomplete = nof_ntn_resource_audit_ue_slot_incomplete;
   status.last_ntn_resource_audit_reason = last_ntn_resource_audit_reason;
+  bool has_rnti_retirement_supported                         = false;
+  bool has_rnti_retirement_unsupported                       = false;
+  bool has_rnti_retirement_unknown                           = ntn_rnti_du_reconciliation_states.empty();
+  for (const auto& entry : ntn_rnti_du_reconciliation_states) {
+    status.ntn_rnti_generation_high_water =
+        std::max(status.ntn_rnti_generation_high_water, entry.second.generation_high_water);
+    has_rnti_retirement_supported |= entry.second.retirement_capability == ntn_rnti_retirement_capability::supported;
+    has_rnti_retirement_unsupported |=
+        entry.second.retirement_capability == ntn_rnti_retirement_capability::unsupported;
+    has_rnti_retirement_unknown |= entry.second.retirement_capability == ntn_rnti_retirement_capability::unknown;
+  }
+  const unsigned nof_capability_states                  = static_cast<unsigned>(has_rnti_retirement_supported) +
+                                                          static_cast<unsigned>(has_rnti_retirement_unsupported) +
+                                                          static_cast<unsigned>(has_rnti_retirement_unknown);
+  status.ntn_rnti_retirement_capability                 = nof_capability_states > 1U        ? "mixed"
+                                                          : has_rnti_retirement_supported   ? "supported"
+                                                          : has_rnti_retirement_unsupported ? "unsupported"
+                                                                                            : "unknown";
+  status.nof_ntn_rnti_retire_pending                    = resource_snapshot.nof_rnti_leases_retire_pending;
+  status.nof_ntn_rnti_retire_sent                       = resource_snapshot.nof_rnti_leases_retire_sent;
+  status.nof_ntn_rnti_quarantined                       = resource_snapshot.nof_rnti_orphans_quarantined;
+  status.nof_ntn_rnti_retired                           = resource_snapshot.nof_rnti_leases_retired;
+  status.nof_ntn_rnti_reused                            = resource_snapshot.nof_rnti_leases_reused;
+  status.nof_ntn_rnti_retire_rejected                   = resource_snapshot.nof_rnti_retirement_rejected;
+  status.nof_ntn_rnti_retire_unsupported                = nof_ntn_rnti_retire_unsupported;
+  status.nof_ntn_rnti_namespace_exhausted               = nof_ntn_rnti_namespace_exhausted;
+  status.nof_ntn_rnti_generation_exhausted              = nof_ntn_rnti_generation_exhausted;
+  status.last_ntn_rnti_retirement_reason                = last_ntn_rnti_retirement_reason;
   status.nof_ntn_service_pair_resource_audit_targets    = nof_ntn_service_pair_resource_audit_targets;
   status.nof_ntn_service_pair_resource_audit_mismatches = nof_ntn_service_pair_resource_audit_mismatches;
   status.nof_ntn_service_pair_resource_audit_repairs    = nof_ntn_service_pair_resource_audit_repairs;
@@ -11872,7 +12205,24 @@ void cu_cp_impl::handle_rrc_ue_creation(ue_index_t ue_index, rrc_ue_interface& r
 
 void cu_cp_impl::handle_du_connection_established(du_index_t du_index)
 {
-  if (stopped.load() || !cfg.mobility.onboard_position_plan.du_execution_enabled) {
+  if (stopped.load()) {
+    return;
+  }
+  if (cfg.mobility.meas_manager_config.ntn_location_mobility.enabled) {
+    ntn_rnti_du_reconciliation_state& state = ntn_rnti_du_reconciliation_states[du_index];
+    // Zero is reserved for "no DU connection observed yet". Starting the first live connection at one ensures that
+    // a disconnect can invalidate every response issued on that connection, including the first one after startup.
+    if (state.connection_generation == 0) {
+      state.connection_generation = 1;
+    }
+    state.connected             = true;
+    state.retirement_capability = ntn_rnti_retirement_capability::unknown;
+    state.expected_targets.clear();
+    state.reconciled_targets.clear();
+    state.generation_exhausted      = false;
+    last_ntn_rnti_retirement_reason = "du_connected_awaiting_complete_audit";
+  }
+  if (!cfg.mobility.onboard_position_plan.du_execution_enabled) {
     return;
   }
   std::lock_guard<std::mutex> lock(ntn_onboard_position_plan_mutex);
@@ -11884,7 +12234,29 @@ void cu_cp_impl::handle_du_connection_established(du_index_t du_index)
 
 void cu_cp_impl::handle_du_disconnection(du_index_t du_index)
 {
-  if (stopped.load() || !cfg.mobility.onboard_position_plan.du_execution_enabled) {
+  if (stopped.load()) {
+    return;
+  }
+
+  if (cfg.mobility.meas_manager_config.ntn_location_mobility.enabled) {
+    ntn_rnti_du_reconciliation_state& state = ntn_rnti_du_reconciliation_states[du_index];
+    ++state.connection_generation;
+    state.connected             = false;
+    state.retirement_capability = ntn_rnti_retirement_capability::unknown;
+    state.expected_targets.clear();
+    state.reconciled_targets.clear();
+    for (auto it = ntn_rnti_audits_in_flight.begin(); it != ntn_rnti_audits_in_flight.end();) {
+      if (std::get<0>(it->first) == du_index) {
+        it = ntn_rnti_audits_in_flight.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    ntn_service_resource_mng.invalidate_rnti_retirement_for_du(du_index);
+    last_ntn_rnti_retirement_reason = "du_disconnected_awaiting_complete_audit";
+  }
+
+  if (!cfg.mobility.onboard_position_plan.du_execution_enabled) {
     return;
   }
 

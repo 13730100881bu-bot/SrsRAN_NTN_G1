@@ -22,8 +22,8 @@
 
 #pragma once
 
-#include "srsran/cu_cp/ntn_beam_service_resources.h"
 #include "srsran/cu_cp/cu_cp_types.h"
+#include "srsran/cu_cp/ntn_beam_service_resources.h"
 #include "srsran/cu_cp/ntn_location.h"
 #include "srsran/cu_cp/ntn_qos_policy.h"
 #include "srsran/cu_cp/ntn_service_switch_over.h"
@@ -594,6 +594,18 @@ struct cu_cp_ntn_runtime_status {
   unsigned nof_ntn_resource_audit_rnti_incomplete   = 0;
   unsigned nof_ntn_resource_audit_ue_slot_incomplete = 0;
   std::string last_ntn_resource_audit_reason        = "none";
+  std::string                              ntn_rnti_retirement_capability                          = "unknown";
+  uint32_t                                 ntn_rnti_generation_high_water                          = 0;
+  unsigned                                 nof_ntn_rnti_retire_pending                             = 0;
+  unsigned                                 nof_ntn_rnti_retire_sent                                = 0;
+  unsigned                                 nof_ntn_rnti_quarantined                                = 0;
+  uint64_t                                 nof_ntn_rnti_retired                                    = 0;
+  uint64_t                                 nof_ntn_rnti_reused                                     = 0;
+  uint64_t                                 nof_ntn_rnti_retire_rejected                            = 0;
+  unsigned                                 nof_ntn_rnti_retire_unsupported                         = 0;
+  unsigned                                 nof_ntn_rnti_namespace_exhausted                        = 0;
+  unsigned                                 nof_ntn_rnti_generation_exhausted                       = 0;
+  std::string                              last_ntn_rnti_retirement_reason                         = "none";
   unsigned nof_ntn_service_pair_resource_audit_targets    = 0;
   unsigned nof_ntn_service_pair_resource_audit_mismatches = 0;
   unsigned nof_ntn_service_pair_resource_audit_repairs    = 0;
