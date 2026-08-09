@@ -99,6 +99,61 @@ static f1ap_ntn_resource_audit_result make_resource_audit_result()
   return result;
 }
 
+static f1ap_ntn_resource_audit_request make_authoritative_resource_audit_request()
+{
+  f1ap_ntn_resource_audit_request request;
+  request.du_index                    = uint_to_du_index(0);
+  request.cell_index                  = to_du_cell_index(1);
+  request.pci                         = pci_t{17};
+  request.generation_id               = 93;
+  request.request_retirement_metadata = true;
+  request.request_ue_slot_identity    = true;
+  request.gnb_du_id                   = int_to_gnb_du_id(0x123);
+  request.cell_cgi = nr_cell_global_id_t{plmn_identity::test_value(), nr_cell_identity::create(0x12345).value()};
+  request.connection_token = 0x1122334455667788ULL;
+  return request;
+}
+
+static f1ap_ntn_resource_audit_result
+make_authoritative_resource_audit_result(const f1ap_ntn_resource_audit_request& request)
+{
+  f1ap_ntn_resource_audit_result result;
+  result.generation_id                     = request.generation_id;
+  result.accepted                          = true;
+  result.rnti_snapshot_complete            = true;
+  result.ue_slot_snapshot_complete         = true;
+  result.retirement_metadata_present       = true;
+  result.retire_supported                  = true;
+  result.rnti_generation_high_water        = 82;
+  result.ue_slot_assignment_generation_high_water = 9;
+  result.ue_slot_identity_metadata_present = true;
+  result.ue_slot_identity_supported        = true;
+  result.gnb_du_id                         = request.gnb_du_id;
+  result.du_index                          = request.du_index;
+  result.cell_index                        = request.cell_index;
+  result.cell_cgi                          = request.cell_cgi;
+  result.pci                               = request.pci;
+  result.connection_token                  = request.connection_token;
+  result.rnti_leases.push_back({to_rnti(0x4701), "expired", "retired_by_du", 23});
+
+  f1ap_ntn_resource_audit_ue_slot slot;
+  slot.identity_present       = true;
+  slot.gnb_cu_ue_f1ap_id      = int_to_gnb_cu_ue_f1ap_id(41);
+  slot.gnb_du_ue_f1ap_id      = int_to_gnb_du_ue_f1ap_id(51);
+  slot.cell_index             = request.cell_index;
+  slot.cell_cgi               = request.cell_cgi;
+  slot.pci                    = request.pci;
+  slot.c_rnti                 = to_rnti(0x4701);
+  slot.assignment_generation = 9;
+  slot.state                  = "applied_by_du";
+  slot.request.sr_slot_offset        = 3;
+  slot.request.sr_slot_period        = 80;
+  slot.request.assignment_generation = slot.assignment_generation;
+  slot.request.operation             = f1ap_ntn_ul_slot_resource_operation::set;
+  result.ue_slots.push_back(std::move(slot));
+  return result;
+}
+
 static byte_buffer make_legacy_v1_resource_audit_result(const f1ap_ntn_resource_audit_result& result)
 {
   // Encode the actual V1 layout: it has neither completeness flags nor per-lease generation IDs.
@@ -435,6 +490,36 @@ TEST_F(f1ap_du_gnbdu_resource_coordination_test, v2_audit_request_returns_v3_ret
   EXPECT_TRUE(decoded->retirement_metadata_present);
   EXPECT_TRUE(decoded->retire_supported);
   EXPECT_EQ(decoded->rnti_generation_high_water, 81U);
+}
+
+TEST_F(f1ap_du_gnbdu_resource_coordination_test, q3_audit_request_forwards_identity_and_returns_r4_snapshot)
+{
+  const auto request = make_authoritative_resource_audit_request();
+  f1ap_du_cfg_handler.next_ntn_resource_audit_result = make_authoritative_resource_audit_result(request);
+
+  f1ap->handle_message(make_resource_coordination_request(20, request));
+
+  ASSERT_TRUE(f1ap_du_cfg_handler.last_ntn_resource_audit_request.has_value());
+  const auto& forwarded = *f1ap_du_cfg_handler.last_ntn_resource_audit_request;
+  EXPECT_TRUE(forwarded.request_ue_slot_identity);
+  EXPECT_TRUE(forwarded.request_retirement_metadata);
+  EXPECT_EQ(forwarded.gnb_du_id, request.gnb_du_id);
+  EXPECT_EQ(forwarded.cell_cgi, request.cell_cgi);
+  EXPECT_EQ(forwarded.connection_token, request.connection_token);
+
+  ASSERT_TRUE(f1c_gw.tx_pdus_sent());
+  const auto& asn1_resp = f1c_gw.last_tx_pdu().pdu.successful_outcome().value.gnb_du_res_coordination_resp();
+  ASSERT_EQ(asn1_resp->eutra_nr_cell_res_coordination_req_ack_container[7], '4');
+  const auto decoded =
+      decode_f1ap_ntn_resource_audit_result(asn1_resp->eutra_nr_cell_res_coordination_req_ack_container);
+  ASSERT_TRUE(decoded.has_value());
+  EXPECT_TRUE(decoded->rnti_snapshot_complete);
+  EXPECT_TRUE(decoded->ue_slot_snapshot_complete);
+  EXPECT_EQ(decoded->connection_token, request.connection_token);
+  EXPECT_EQ(decoded->ue_slot_assignment_generation_high_water, 9U);
+  ASSERT_EQ(decoded->ue_slots.size(), 1U);
+  EXPECT_EQ(decoded->ue_slots.front().gnb_cu_ue_f1ap_id, int_to_gnb_cu_ue_f1ap_id(41));
+  EXPECT_EQ(decoded->ue_slots.front().gnb_du_ue_f1ap_id, int_to_gnb_du_ue_f1ap_id(51));
 }
 
 TEST_F(f1ap_du_gnbdu_resource_coordination_test, valid_sib19_update_is_forwarded_to_du_configurator_and_acked)

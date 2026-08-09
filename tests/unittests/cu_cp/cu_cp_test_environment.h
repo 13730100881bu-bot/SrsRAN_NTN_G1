@@ -96,8 +96,12 @@ struct cu_cp_test_env_params {
   bool                                            ntn_resource_audit_rnti_snapshot_complete     = false;
   bool                                            ntn_resource_audit_retirement_supported       = true;
   bool                                            ntn_resource_audit_legacy_only                = false;
+  bool                                            ntn_resource_audit_ue_slot_identity_supported = true;
+  bool                                            ntn_resource_audit_ue_slot_snapshot_complete  = false;
   uint32_t                                        ntn_resource_audit_rnti_generation_high_water = 0;
+  uint32_t                                        ntn_resource_audit_ue_slot_generation_high_water = 0;
   std::vector<f1ap_ntn_resource_audit_rnti_lease> ntn_resource_audit_rnti_leases;
+  std::vector<f1ap_ntn_resource_audit_ue_slot>    ntn_resource_audit_ue_slots;
   bool                                            ntn_rnti_retirement_rejects = false;
   std::chrono::milliseconds                       f1ap_proc_timeout{10000};
 };
@@ -238,6 +242,23 @@ public:
 
   const ue_context* find_ue_context(unsigned du_idx, gnb_du_ue_f1ap_id_t du_ue_id) const;
 
+  void set_ntn_ue_slot_audit_snapshot(std::vector<f1ap_ntn_resource_audit_ue_slot> slots,
+                                      bool                                        complete,
+                                      uint32_t                                    generation_high_water)
+  {
+    ntn_resource_audit_ue_slots                       = std::move(slots);
+    ntn_resource_audit_ue_slot_generation_high_water = generation_high_water;
+    params.ntn_resource_audit_ue_slot_snapshot_complete = complete;
+  }
+
+  void append_ntn_rnti_audit_lease(f1ap_ntn_resource_audit_rnti_lease lease, uint32_t generation_high_water)
+  {
+    ntn_resource_audit_rnti_leases.push_back(std::move(lease));
+    ntn_resource_audit_rnti_generation_high_water =
+        std::max(ntn_resource_audit_rnti_generation_high_water, generation_high_water);
+    params.ntn_resource_audit_rnti_snapshot_complete = true;
+  }
+
   /// Get CU-CP configuration used to instantiate CU-CP.
   const cu_cp_configuration& get_cu_cp_cfg() const { return cu_cp_cfg; }
 
@@ -327,7 +348,9 @@ private:
   std::array<f1ap_ntn_access_calendar_preflight_report, 2>                 last_ntn_calendar_preflight_reports{};
   unsigned                                                                 ntn_calendar_clear_requests = 0;
   uint32_t                                        ntn_resource_audit_rnti_generation_high_water        = 0;
+  uint32_t                                        ntn_resource_audit_ue_slot_generation_high_water     = 0;
   std::vector<f1ap_ntn_resource_audit_rnti_lease> ntn_resource_audit_rnti_leases;
+  std::vector<f1ap_ntn_resource_audit_ue_slot>    ntn_resource_audit_ue_slots;
 
   /// CU-CP instance.
   std::unique_ptr<cu_cp> cu_cp_inst;

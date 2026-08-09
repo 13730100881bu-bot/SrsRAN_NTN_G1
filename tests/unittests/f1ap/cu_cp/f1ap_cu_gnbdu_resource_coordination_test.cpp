@@ -541,6 +541,324 @@ TEST(f1ap_ntn_resource_audit_container_test, retirement_capability_request_and_v
   EXPECT_EQ(decoded_result->rnti_generation_high_water, 77U);
 }
 
+static f1ap_ntn_resource_audit_request make_authoritative_audit_request()
+{
+  f1ap_ntn_resource_audit_request request;
+  request.du_index                    = uint_to_du_index(2);
+  request.cell_index                  = to_du_cell_index(1);
+  request.pci                         = pci_t{17};
+  request.generation_id               = 101;
+  request.request_retirement_metadata = true;
+  request.request_ue_slot_identity    = true;
+  request.gnb_du_id                   = int_to_gnb_du_id(0x123);
+  request.cell_cgi = nr_cell_global_id_t{plmn_identity::test_value(), nr_cell_identity::create(0x12345).value()};
+  request.connection_token = 0x1020304050607080ULL;
+  return request;
+}
+
+static f1ap_ntn_resource_audit_ue_slot make_authoritative_ue_slot(unsigned index)
+{
+  f1ap_ntn_resource_audit_ue_slot slot;
+  slot.identity_present       = true;
+  slot.gnb_cu_ue_f1ap_id      = int_to_gnb_cu_ue_f1ap_id(1000 + index);
+  slot.gnb_du_ue_f1ap_id      = int_to_gnb_du_ue_f1ap_id(2000 + index);
+  slot.cell_index             = to_du_cell_index(1);
+  slot.cell_cgi = nr_cell_global_id_t{plmn_identity::test_value(), nr_cell_identity::create(0x12345).value()};
+  slot.pci                   = pci_t{17};
+  slot.c_rnti                = to_rnti(static_cast<uint16_t>(0x4701 + index));
+  slot.assignment_generation = 7;
+  slot.state                 = "applied_by_du";
+  slot.request.sr_slot_offset       = index;
+  slot.request.sr_slot_period       = 80;
+  slot.request.assignment_generation = slot.assignment_generation;
+  slot.request.operation             = f1ap_ntn_ul_slot_resource_operation::set;
+  return slot;
+}
+
+static f1ap_ntn_resource_audit_result make_authoritative_audit_result(unsigned nof_slots = 1)
+{
+  const auto request = make_authoritative_audit_request();
+  f1ap_ntn_resource_audit_result result;
+  result.generation_id                    = request.generation_id;
+  result.accepted                         = true;
+  result.rnti_snapshot_complete           = true;
+  result.ue_slot_snapshot_complete        = true;
+  result.retirement_metadata_present      = true;
+  result.retire_supported                 = true;
+  result.rnti_generation_high_water       = 91;
+  result.ue_slot_assignment_generation_high_water = 7;
+  result.ue_slot_identity_metadata_present = true;
+  result.ue_slot_identity_supported       = true;
+  result.gnb_du_id                        = request.gnb_du_id;
+  result.du_index                         = request.du_index;
+  result.cell_index                       = request.cell_index;
+  result.cell_cgi                         = request.cell_cgi;
+  result.pci                              = request.pci;
+  result.connection_token                 = request.connection_token;
+  result.rnti_leases.push_back({to_rnti(0x4601), "expired", "retired_by_du", 19});
+  for (unsigned i = 0; i != nof_slots; ++i) {
+    result.ue_slots.push_back(make_authoritative_ue_slot(i));
+  }
+  return result;
+}
+
+static size_t authoritative_slot_entries_offset(const f1ap_ntn_resource_audit_result& result)
+{
+  // R4 fixed header, reject reason, RNTI list and the two-byte UE-slot count.
+  size_t offset = 56U + 2U + result.reject_reason.size() + 2U;
+  for (const auto& lease : result.rnti_leases) {
+    offset += 2U + 4U + 2U + lease.state.size() + 2U + lease.distribution_state.size();
+  }
+  return offset + 2U;
+}
+
+static size_t authoritative_slot_wire_size(const f1ap_ntn_resource_audit_ue_slot& slot)
+{
+  size_t size = 4U + 4U + 2U + 2U + 3U + 8U + 2U + 4U + 2U + slot.state.size() + 1U + 4U + 1U;
+  size += slot.request.sr_slot_offset.has_value() ? 4U : 0U;
+  size += slot.request.sr_slot_period.has_value() ? 4U : 0U;
+  size += slot.request.srs_slot_offset.has_value() ? 4U : 0U;
+  size += slot.request.srs_slot_period.has_value() ? 4U : 0U;
+  size += slot.request.requested_c_rnti.has_value() ? 4U : 0U;
+  return size;
+}
+
+TEST(f1ap_ntn_ul_slot_resource_container_test, v5_set_clear_and_v6_results_round_trip)
+{
+  auto set_request                  = make_authoritative_ue_slot(0).request;
+  set_request.requested_c_rnti      = to_rnti(0x4701);
+  const byte_buffer encoded_set     = encode_f1ap_ntn_ul_slot_resource_request(set_request);
+  const auto        decoded_set     = decode_f1ap_ntn_ul_slot_resource_request(encoded_set);
+  ASSERT_TRUE(decoded_set.has_value());
+  EXPECT_EQ(encoded_set[7], '5');
+  EXPECT_TRUE(are_f1ap_ntn_ul_slot_resource_requests_equal(*decoded_set, set_request));
+
+  f1ap_ntn_ul_slot_resource_request clear_request;
+  clear_request.assignment_generation = 8;
+  clear_request.operation             = f1ap_ntn_ul_slot_resource_operation::clear;
+  const auto decoded_clear =
+      decode_f1ap_ntn_ul_slot_resource_request(encode_f1ap_ntn_ul_slot_resource_request(clear_request));
+  ASSERT_TRUE(decoded_clear.has_value());
+  EXPECT_EQ(decoded_clear->operation, f1ap_ntn_ul_slot_resource_operation::clear);
+
+  f1ap_ntn_ul_slot_resource_result set_result;
+  set_result.accepted              = true;
+  set_result.reason                = f1ap_ntn_ul_slot_resource_result_reason::applied;
+  set_result.assignment_generation = set_request.assignment_generation;
+  set_result.operation             = f1ap_ntn_ul_slot_resource_operation::set;
+  set_result.applied_request       = set_request;
+  const auto decoded_set_result =
+      decode_f1ap_ntn_ul_slot_resource_result(encode_f1ap_ntn_ul_slot_resource_result(set_result));
+  ASSERT_TRUE(decoded_set_result.has_value());
+  ASSERT_TRUE(decoded_set_result->applied_request.has_value());
+  EXPECT_EQ(decoded_set_result->assignment_generation, set_request.assignment_generation);
+
+  f1ap_ntn_ul_slot_resource_result clear_result;
+  clear_result.accepted              = true;
+  clear_result.reason                = f1ap_ntn_ul_slot_resource_result_reason::clear_applied;
+  clear_result.assignment_generation = clear_request.assignment_generation;
+  clear_result.operation             = f1ap_ntn_ul_slot_resource_operation::clear;
+  clear_result.applied_request       = clear_request;
+  const auto decoded_clear_result =
+      decode_f1ap_ntn_ul_slot_resource_result(encode_f1ap_ntn_ul_slot_resource_result(clear_result));
+  ASSERT_TRUE(decoded_clear_result.has_value());
+  EXPECT_FALSE(decoded_clear_result->applied_request.has_value());
+}
+
+TEST(f1ap_ntn_ul_slot_resource_container_test, v5_v6_reject_invalid_period_rnti_and_legacy_reason)
+{
+  byte_buffer missing_offset = encode_f1ap_ntn_ul_slot_resource_request(make_authoritative_ue_slot(0).request);
+  missing_offset[8]          = 0x04U;
+  EXPECT_FALSE(decode_f1ap_ntn_ul_slot_resource_request(missing_offset).has_value());
+
+  auto        with_rnti = make_authoritative_ue_slot(0).request;
+  with_rnti.requested_c_rnti = to_rnti(0x4701);
+  byte_buffer oversized_rnti = encode_f1ap_ntn_ul_slot_resource_request(with_rnti);
+  oversized_rnti[30] = 0x00U;
+  oversized_rnti[31] = 0x01U;
+  oversized_rnti[32] = 0x00U;
+  oversized_rnti[33] = 0x00U;
+  EXPECT_FALSE(decode_f1ap_ntn_ul_slot_resource_request(oversized_rnti).has_value());
+
+  f1ap_ntn_ul_slot_resource_result legacy_result;
+  legacy_result.reason = f1ap_ntn_ul_slot_resource_result_reason::assignment_generation_conflict;
+  EXPECT_FALSE(
+      decode_f1ap_ntn_ul_slot_resource_result(encode_f1ap_ntn_ul_slot_resource_result(legacy_result)).has_value());
+
+  f1ap_ntn_ul_slot_resource_result missing_applied;
+  missing_applied.accepted              = true;
+  missing_applied.reason                = f1ap_ntn_ul_slot_resource_result_reason::applied;
+  missing_applied.assignment_generation = 9;
+  missing_applied.operation             = f1ap_ntn_ul_slot_resource_operation::set;
+  EXPECT_FALSE(
+      decode_f1ap_ntn_ul_slot_resource_result(encode_f1ap_ntn_ul_slot_resource_result(missing_applied)).has_value());
+
+  f1ap_ntn_ul_slot_resource_result invalid_v6_period;
+  invalid_v6_period.accepted              = true;
+  invalid_v6_period.reason                = f1ap_ntn_ul_slot_resource_result_reason::applied;
+  invalid_v6_period.assignment_generation = with_rnti.assignment_generation;
+  invalid_v6_period.operation             = f1ap_ntn_ul_slot_resource_operation::set;
+  invalid_v6_period.applied_request       = with_rnti;
+  byte_buffer encoded_invalid_v6 = encode_f1ap_ntn_ul_slot_resource_result(invalid_v6_period);
+  encoded_invalid_v6[8] &= static_cast<uint8_t>(~0x04U);
+  EXPECT_FALSE(decode_f1ap_ntn_ul_slot_resource_result(encoded_invalid_v6).has_value());
+}
+
+TEST(f1ap_ntn_resource_audit_container_test, q3_and_r4_authoritative_identity_round_trip)
+{
+  const auto request = make_authoritative_audit_request();
+  const byte_buffer request_buffer = encode_f1ap_ntn_resource_audit_request(request);
+  ASSERT_EQ(request_buffer.length(), 46U);
+  EXPECT_EQ(request_buffer[7], '3');
+  const auto decoded_request = decode_f1ap_ntn_resource_audit_request(request_buffer);
+  ASSERT_TRUE(decoded_request.has_value());
+  EXPECT_TRUE(decoded_request->request_ue_slot_identity);
+  EXPECT_TRUE(decoded_request->request_retirement_metadata);
+  EXPECT_EQ(decoded_request->gnb_du_id, request.gnb_du_id);
+  EXPECT_EQ(decoded_request->cell_cgi, request.cell_cgi);
+  EXPECT_EQ(decoded_request->connection_token, request.connection_token);
+
+  const auto result = make_authoritative_audit_result();
+  const byte_buffer result_buffer = encode_f1ap_ntn_resource_audit_result(result);
+  EXPECT_EQ(result_buffer[7], '4');
+  const auto decoded_result = decode_f1ap_ntn_resource_audit_result(result_buffer);
+  ASSERT_TRUE(decoded_result.has_value());
+  EXPECT_TRUE(decoded_result->rnti_snapshot_complete);
+  EXPECT_TRUE(decoded_result->ue_slot_snapshot_complete);
+  EXPECT_TRUE(decoded_result->ue_slot_identity_supported);
+  EXPECT_EQ(decoded_result->connection_token, result.connection_token);
+  EXPECT_EQ(decoded_result->ue_slot_assignment_generation_high_water, 7U);
+  ASSERT_EQ(decoded_result->ue_slots.size(), 1U);
+  EXPECT_EQ(decoded_result->ue_slots.front().gnb_cu_ue_f1ap_id, result.ue_slots.front().gnb_cu_ue_f1ap_id);
+  EXPECT_EQ(decoded_result->ue_slots.front().gnb_du_ue_f1ap_id, result.ue_slots.front().gnb_du_ue_f1ap_id);
+}
+
+TEST(f1ap_ntn_resource_audit_container_test, q3_rejects_zero_generation_and_out_of_range_du_identity)
+{
+  byte_buffer zero_generation = encode_f1ap_ntn_resource_audit_request(make_authoritative_audit_request());
+  for (unsigned i = 14; i != 18; ++i) {
+    zero_generation[i] = 0;
+  }
+  EXPECT_FALSE(decode_f1ap_ntn_resource_audit_request(zero_generation).has_value());
+
+  byte_buffer invalid_du_id = encode_f1ap_ntn_resource_audit_request(make_authoritative_audit_request());
+  // gNB-DU-ID is 36 bits. Encode 2^36, one above the valid range, at Q3 bytes 19..26.
+  for (unsigned i = 19; i != 27; ++i) {
+    invalid_du_id[i] = 0;
+  }
+  invalid_du_id[22] = 0x10U;
+  EXPECT_FALSE(decode_f1ap_ntn_resource_audit_request(invalid_du_id).has_value());
+}
+
+TEST(f1ap_ntn_resource_audit_container_test, r4_duplicate_single_f1_ids_only_invalidate_ue_slot_domain)
+{
+  const auto result = make_authoritative_audit_result(2);
+  const size_t first_slot  = authoritative_slot_entries_offset(result);
+  const size_t second_slot = first_slot + authoritative_slot_wire_size(result.ue_slots.front());
+
+  byte_buffer duplicate_cu = encode_f1ap_ntn_resource_audit_result(result);
+  for (unsigned i = 0; i != 4; ++i) {
+    duplicate_cu[second_slot + i] = duplicate_cu[first_slot + i];
+  }
+  const auto decoded_duplicate_cu = decode_f1ap_ntn_resource_audit_result(duplicate_cu);
+  ASSERT_TRUE(decoded_duplicate_cu.has_value());
+  EXPECT_TRUE(decoded_duplicate_cu->rnti_snapshot_complete);
+  ASSERT_EQ(decoded_duplicate_cu->rnti_leases.size(), 1U);
+  EXPECT_FALSE(decoded_duplicate_cu->ue_slot_snapshot_complete);
+  EXPECT_TRUE(decoded_duplicate_cu->ue_slots.empty());
+
+  byte_buffer duplicate_du = encode_f1ap_ntn_resource_audit_result(result);
+  for (unsigned i = 0; i != 4; ++i) {
+    duplicate_du[second_slot + 4U + i] = duplicate_du[first_slot + 4U + i];
+  }
+  const auto decoded_duplicate_du = decode_f1ap_ntn_resource_audit_result(duplicate_du);
+  ASSERT_TRUE(decoded_duplicate_du.has_value());
+  EXPECT_FALSE(decoded_duplicate_du->ue_slot_snapshot_complete);
+  ASSERT_EQ(decoded_duplicate_du->rnti_leases.size(), 1U);
+  EXPECT_EQ(decoded_duplicate_du->rnti_leases.front().rnti, decoded_duplicate_cu->rnti_leases.front().rnti);
+}
+
+TEST(f1ap_ntn_resource_audit_container_test, r4_enforces_1024_slots_before_parsing_entries)
+{
+  auto at_limit = make_authoritative_audit_result(MAX_NOF_DU_UES);
+  auto decoded_at_limit = decode_f1ap_ntn_resource_audit_result(encode_f1ap_ntn_resource_audit_result(at_limit));
+  ASSERT_TRUE(decoded_at_limit.has_value());
+  EXPECT_TRUE(decoded_at_limit->ue_slot_snapshot_complete);
+  EXPECT_EQ(decoded_at_limit->ue_slots.size(), MAX_NOF_DU_UES);
+
+  auto over_limit = at_limit;
+  over_limit.ue_slots.push_back(make_authoritative_ue_slot(MAX_NOF_DU_UES));
+  auto decoded_normalized =
+      decode_f1ap_ntn_resource_audit_result(encode_f1ap_ntn_resource_audit_result(over_limit));
+  ASSERT_TRUE(decoded_normalized.has_value());
+  EXPECT_TRUE(decoded_normalized->rnti_snapshot_complete);
+  ASSERT_EQ(decoded_normalized->rnti_leases.size(), 1U);
+  EXPECT_FALSE(decoded_normalized->ue_slot_snapshot_complete);
+  EXPECT_TRUE(decoded_normalized->ue_slots.empty());
+
+  // Also exercise a structurally complete peer payload that declares 1,025 entries.
+  auto raw_result = make_authoritative_audit_result(MAX_NOF_DU_UES);
+  raw_result.rnti_leases.clear();
+  byte_buffer raw_over_limit = encode_f1ap_ntn_resource_audit_result(raw_result);
+  const size_t entries_offset = authoritative_slot_entries_offset(raw_result);
+  const size_t slot_size      = authoritative_slot_wire_size(raw_result.ue_slots.front());
+  raw_over_limit[entries_offset - 2U] = 0x04U;
+  raw_over_limit[entries_offset - 1U] = 0x01U;
+  std::vector<uint8_t> extra_slot;
+  extra_slot.reserve(slot_size);
+  for (size_t i = 0; i != slot_size; ++i) {
+    extra_slot.push_back(raw_over_limit[entries_offset + i]);
+  }
+  ASSERT_TRUE(raw_over_limit.append(span<const uint8_t>(extra_slot.data(), extra_slot.size())));
+  const auto decoded_raw_over_limit = decode_f1ap_ntn_resource_audit_result(raw_over_limit);
+  EXPECT_FALSE(decoded_raw_over_limit.has_value());
+}
+
+TEST(f1ap_ntn_resource_audit_container_test, r4_semantic_failure_preserves_rnti_but_trailing_data_rejects_all)
+{
+  const auto result = make_authoritative_audit_result();
+  const size_t slot_start = authoritative_slot_entries_offset(result);
+  const size_t request_flags = slot_start + 4U + 4U + 2U + 2U + 3U + 8U + 2U + 4U + 2U +
+                               result.ue_slots.front().state.size() + 1U + 4U;
+
+  byte_buffer zero_period = encode_f1ap_ntn_resource_audit_result(result);
+  for (unsigned i = 0; i != 4; ++i) {
+    zero_period[request_flags + 1U + 4U + i] = 0;
+  }
+  const auto decoded_zero_period = decode_f1ap_ntn_resource_audit_result(zero_period);
+  ASSERT_TRUE(decoded_zero_period.has_value());
+  EXPECT_TRUE(decoded_zero_period->rnti_snapshot_complete);
+  ASSERT_EQ(decoded_zero_period->rnti_leases.size(), 1U);
+  EXPECT_FALSE(decoded_zero_period->ue_slot_snapshot_complete);
+  EXPECT_TRUE(decoded_zero_period->ue_slots.empty());
+
+  byte_buffer inconsistent_high_water = encode_f1ap_ntn_resource_audit_result(result);
+  // R4 keeps the RNTI high-water at bytes 15..18 and the independent UE-slot high-water at bytes 19..22.
+  for (unsigned i = 19; i != 23; ++i) {
+    inconsistent_high_water[i] = 0;
+  }
+  const auto decoded_inconsistent_high_water = decode_f1ap_ntn_resource_audit_result(inconsistent_high_water);
+  ASSERT_TRUE(decoded_inconsistent_high_water.has_value());
+  EXPECT_TRUE(decoded_inconsistent_high_water->rnti_snapshot_complete);
+  EXPECT_EQ(decoded_inconsistent_high_water->rnti_generation_high_water, result.rnti_generation_high_water);
+  EXPECT_FALSE(decoded_inconsistent_high_water->ue_slot_snapshot_complete);
+  EXPECT_TRUE(decoded_inconsistent_high_water->ue_slots.empty());
+
+  byte_buffer trailing = encode_f1ap_ntn_resource_audit_result(result);
+  ASSERT_TRUE(trailing.append(static_cast<uint8_t>(0xffU)));
+  EXPECT_FALSE(decode_f1ap_ntn_resource_audit_result(trailing).has_value());
+
+  const byte_buffer complete = encode_f1ap_ntn_resource_audit_result(result);
+  std::vector<uint8_t> truncated_bytes;
+  truncated_bytes.reserve(complete.length() - 1U);
+  for (size_t i = 0; i + 1U < complete.length(); ++i) {
+    truncated_bytes.push_back(complete[i]);
+  }
+  const byte_buffer truncated =
+      byte_buffer::create(span<const uint8_t>(truncated_bytes.data(), truncated_bytes.size())).value();
+  EXPECT_FALSE(decode_f1ap_ntn_resource_audit_result(truncated).has_value());
+}
+
 TEST(f1ap_ntn_sib19_broadcast_container_test, valid_update_and_result_round_trip)
 {
   f1ap_ntn_sib19_broadcast_update update;
@@ -757,6 +1075,35 @@ TEST_F(f1ap_cu_gnbdu_resource_coordination_test, audit_request_is_sent_and_audit
   ASSERT_TRUE(task.get().audit_result.has_value());
   EXPECT_TRUE(task.get().audit_result->accepted);
   EXPECT_EQ(task.get().audit_result->generation_id, result.generation_id);
+}
+
+TEST_F(f1ap_cu_gnbdu_resource_coordination_test, q3_request_and_r4_result_preserve_connection_identity)
+{
+  f1ap_gnb_du_resource_coordination_request request;
+  request.ntn_resource_audit_request = make_authoritative_audit_request();
+  start_procedure(request);
+
+  const auto& asn1_req = f1ap_pdu_notifier.last_f1ap_msg.pdu.init_msg().value.gnb_du_res_coordination_request();
+  ASSERT_EQ(asn1_req->eutra_nr_cell_res_coordination_req_container[7], '3');
+  const auto decoded_request =
+      decode_f1ap_ntn_resource_audit_request(asn1_req->eutra_nr_cell_res_coordination_req_container);
+  ASSERT_TRUE(decoded_request.has_value());
+  EXPECT_EQ(decoded_request->connection_token, request.ntn_resource_audit_request.connection_token);
+
+  const auto result = make_authoritative_audit_result();
+  f1ap_message response;
+  response.pdu.set_successful_outcome().load_info_obj(ASN1_F1AP_ID_GNB_DU_RES_COORDINATION);
+  auto& asn1_resp = response.pdu.successful_outcome().value.gnb_du_res_coordination_resp();
+  asn1_resp->transaction_id = asn1_req->transaction_id;
+  asn1_resp->eutra_nr_cell_res_coordination_req_ack_container = encode_f1ap_ntn_resource_audit_result(result);
+
+  f1ap->handle_message(response);
+
+  ASSERT_TRUE(task.ready());
+  ASSERT_TRUE(task.get().audit_result.has_value());
+  EXPECT_TRUE(task.get().audit_result->ue_slot_snapshot_complete);
+  EXPECT_EQ(task.get().audit_result->connection_token, request.ntn_resource_audit_request.connection_token);
+  ASSERT_EQ(task.get().audit_result->ue_slots.size(), 1U);
 }
 
 TEST_F(f1ap_cu_gnbdu_resource_coordination_test, audit_result_with_wrong_generation_is_rejected)

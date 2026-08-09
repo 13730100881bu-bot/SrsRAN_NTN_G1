@@ -26,6 +26,7 @@
 #include "srsran/support/test_utils.h"
 #include "fmt/ostream.h"
 #include <gtest/gtest.h>
+#include <limits>
 
 using namespace srsran;
 using namespace srs_du;
@@ -929,8 +930,8 @@ TEST(du_srs_resource_manager_ntn_slot_request, allocates_requested_srs_slot_offs
 {
   static constexpr unsigned requested_srs_offset = 7U;
 
-  cell_config_builder_params params = {.dl_f_ref_arfcn = 365000U, .csi_rs_enabled = false};
-  du_cell_config             du_cfg = config_helpers::make_default_du_cell_config(params);
+  cell_config_builder_params params  = {.dl_f_ref_arfcn = 365000U, .csi_rs_enabled = false};
+  du_cell_config             du_cfg  = config_helpers::make_default_du_cell_config(params);
   auto&                      srs_cfg = du_cfg.srs_cfg;
   srs_cfg.tx_comb                    = tx_comb_size::n2;
   srs_cfg.max_nof_symbols            = 1U;
@@ -1001,7 +1002,7 @@ TEST(du_ran_resource_manager_ntn_slot_request, reconfigures_existing_pcell_with_
   const du_ue_resource_update_response update_resp = ue_res->update(to_du_cell_index(0), update_req);
   ASSERT_FALSE(update_resp.failed());
 
-  const auto& pcell = ue_res->value().cell_group.cells[0].serv_cell_cfg;
+  const auto& pcell       = ue_res->value().cell_group.cells[0].serv_cell_cfg;
   const auto& sr_res_list = pcell.ul_config->init_ul_bwp.pucch_cfg->sr_res_list;
   ASSERT_FALSE(sr_res_list.empty());
   EXPECT_EQ(sr_res_list.front().offset, requested_sr_offset);
@@ -1010,4 +1011,303 @@ TEST(du_ran_resource_manager_ntn_slot_request, reconfigures_existing_pcell_with_
   ASSERT_FALSE(srs_res_list.empty());
   ASSERT_TRUE(srs_res_list.front().periodicity_and_offset.has_value());
   EXPECT_EQ(srs_res_list.front().periodicity_and_offset->offset, requested_srs_offset);
+}
+
+static du_cell_config make_versioned_ntn_slot_test_cell_config()
+{
+  cell_config_builder_params params = {.dl_f_ref_arfcn = 365000U, .csi_rs_enabled = false};
+  du_cell_config             du_cfg = config_helpers::make_default_du_cell_config(params);
+  du_cfg.ue_ded_serv_cell_cfg.ul_config->init_ul_bwp.pucch_cfg->sr_res_list.front().period = sr_periodicity::sl_10;
+  du_cfg.srs_cfg.tx_comb                                                                   = tx_comb_size::n2;
+  du_cfg.srs_cfg.max_nof_symbols                                                           = 1U;
+  du_cfg.srs_cfg.nof_symbols                                                               = srs_nof_symbols::n1;
+  du_cfg.srs_cfg.cyclic_shift_reuse_factor = nof_cyclic_shifts::no_cyclic_shift;
+  du_cfg.srs_cfg.sequence_id_reuse_factor  = 1U;
+  du_cfg.srs_cfg.srs_period.emplace(srs_periodicity::sl10);
+  return du_cfg;
+}
+
+class du_ran_resource_manager_ntn_slot_registry_test : public ::testing::Test
+{
+protected:
+  expected<ue_ran_resource_configurator, std::string> create_ue()
+  {
+    return res_mng.create_ue_resource_configurator(ue_index, cell_index, true);
+  }
+
+  static du_ue_resource_update_response update_and_complete(ue_ran_resource_configurator&      ue,
+                                                             const f1ap_ue_context_update_request& request,
+                                                             bool                                  applied = true)
+  {
+    du_ue_resource_update_response response = ue.update(cell_index, request);
+    ue.handle_update_completed(applied);
+    return response;
+  }
+
+  static f1ap_ue_context_update_request make_set_request(uint32_t generation,
+                                                         unsigned sr_offset  = 3U,
+                                                         unsigned srs_offset = 7U,
+                                                         unsigned sr_period  = 10U,
+                                                         unsigned srs_period = 10U)
+  {
+    f1ap_ue_context_update_request request;
+    request.ue_index = ue_index;
+    request.ntn_ul_slot_request.emplace();
+    request.ntn_ul_slot_request->operation             = f1ap_ntn_ul_slot_resource_operation::set;
+    request.ntn_ul_slot_request->assignment_generation = generation;
+    request.ntn_ul_slot_request->sr_slot_offset        = sr_offset;
+    request.ntn_ul_slot_request->srs_slot_offset       = srs_offset;
+    request.ntn_ul_slot_request->sr_slot_period        = sr_period;
+    request.ntn_ul_slot_request->srs_slot_period       = srs_period;
+    return request;
+  }
+
+  static f1ap_ue_context_update_request make_clear_request(uint32_t generation)
+  {
+    f1ap_ue_context_update_request request;
+    request.ue_index = ue_index;
+    request.ntn_ul_slot_request.emplace();
+    request.ntn_ul_slot_request->operation             = f1ap_ntn_ul_slot_resource_operation::clear;
+    request.ntn_ul_slot_request->assignment_generation = generation;
+    return request;
+  }
+
+  static constexpr du_ue_index_t   ue_index   = to_du_ue_index(0);
+  static constexpr du_cell_index_t cell_index = to_du_cell_index(0);
+
+  du_cell_config                     du_cfg = make_versioned_ntn_slot_test_cell_config();
+  std::vector<du_cell_config>        cell_cfg_list{du_cfg};
+  std::map<srb_id_t, du_srb_config>  srb_cfg_list;
+  std::map<five_qi_t, du_qos_config> qos_cfg_list =
+      config_helpers::make_default_du_qos_config_list(/* warn_on_drop */ true, 1000);
+  du_test_mode_config          dummy_test_mode_cfg{};
+  du_ran_resource_manager_impl res_mng{cell_cfg_list,
+                                       scheduler_expert_config{.ue = {.max_pucchs_per_slot = 31}},
+                                       srb_cfg_list,
+                                       qos_cfg_list,
+                                       dummy_test_mode_cfg};
+};
+
+TEST_F(du_ran_resource_manager_ntn_slot_registry_test, versioned_set_records_actual_sr_and_srs_resources)
+{
+  auto ue = create_ue();
+  ASSERT_TRUE(ue.has_value());
+  ASSERT_FALSE(ue->resource_alloc_failed());
+
+  const du_ue_resource_update_response response = update_and_complete(*ue, make_set_request(1));
+  ASSERT_TRUE(response.ntn_ul_slot_result.has_value());
+  EXPECT_TRUE(response.ntn_ul_slot_result->accepted);
+  EXPECT_EQ(response.ntn_ul_slot_result->assignment_generation, 1U);
+  EXPECT_EQ(response.ntn_ul_slot_result->operation, f1ap_ntn_ul_slot_resource_operation::set);
+
+  const du_ntn_ue_slot_resource_snapshot snapshot = res_mng.get_ntn_ue_slot_resource_snapshot(cell_index);
+  ASSERT_TRUE(snapshot.complete) << snapshot.failure_reason;
+  EXPECT_EQ(snapshot.assignment_generation_high_water, 1U);
+  ASSERT_EQ(snapshot.entries.size(), 1U);
+  const auto& entry = snapshot.entries.front();
+  EXPECT_EQ(entry.ue_index, ue_index);
+  EXPECT_EQ(entry.cell_index, cell_index);
+  EXPECT_EQ(entry.assignment_generation, 1U);
+  EXPECT_EQ(entry.request.operation, f1ap_ntn_ul_slot_resource_operation::set);
+  EXPECT_EQ(entry.request.assignment_generation, 1U);
+  EXPECT_EQ(entry.request.sr_slot_offset, 3U);
+  EXPECT_EQ(entry.request.sr_slot_period, 10U);
+  EXPECT_EQ(entry.request.srs_slot_offset, 7U);
+  EXPECT_EQ(entry.request.srs_slot_period, 10U);
+}
+
+TEST_F(du_ran_resource_manager_ntn_slot_registry_test,
+       staged_set_is_not_visible_until_the_scheduler_transaction_succeeds)
+{
+  auto ue = create_ue();
+  ASSERT_TRUE(ue.has_value());
+
+  const du_ue_resource_update_response staged = ue->update(cell_index, make_set_request(1));
+  ASSERT_TRUE(staged.ntn_ul_slot_result.has_value());
+  ASSERT_TRUE(staged.ntn_ul_slot_result->accepted);
+
+  const du_ntn_ue_slot_resource_snapshot before_scheduler =
+      res_mng.get_ntn_ue_slot_resource_snapshot(cell_index);
+  EXPECT_FALSE(before_scheduler.complete);
+  EXPECT_TRUE(before_scheduler.entries.empty());
+  EXPECT_EQ(before_scheduler.assignment_generation_high_water, 0U);
+
+  ue->handle_update_completed(true);
+  const du_ntn_ue_slot_resource_snapshot after_scheduler =
+      res_mng.get_ntn_ue_slot_resource_snapshot(cell_index);
+  ASSERT_TRUE(after_scheduler.complete) << after_scheduler.failure_reason;
+  ASSERT_EQ(after_scheduler.entries.size(), 1U);
+  EXPECT_EQ(after_scheduler.entries.front().assignment_generation, 1U);
+  EXPECT_EQ(after_scheduler.assignment_generation_high_water, 1U);
+}
+
+TEST_F(du_ran_resource_manager_ntn_slot_registry_test,
+       scheduler_failure_never_promotes_a_staged_assignment_to_the_authoritative_snapshot)
+{
+  auto ue = create_ue();
+  ASSERT_TRUE(ue.has_value());
+  ASSERT_TRUE(update_and_complete(*ue, make_set_request(1)).ntn_ul_slot_result->accepted);
+
+  const du_ue_resource_update_response staged = ue->update(cell_index, make_set_request(2, 4U, 8U));
+  ASSERT_TRUE(staged.ntn_ul_slot_result.has_value());
+  ASSERT_TRUE(staged.ntn_ul_slot_result->accepted);
+  EXPECT_FALSE(res_mng.get_ntn_ue_slot_resource_snapshot(cell_index).complete);
+
+  ue->handle_update_completed(false);
+  const du_ntn_ue_slot_resource_snapshot failed_snapshot =
+      res_mng.get_ntn_ue_slot_resource_snapshot(cell_index);
+  EXPECT_FALSE(failed_snapshot.complete);
+  EXPECT_TRUE(failed_snapshot.entries.empty());
+  EXPECT_EQ(failed_snapshot.failure_reason, "slot_registry_inconsistent");
+  EXPECT_EQ(failed_snapshot.assignment_generation_high_water, 1U);
+
+  ASSERT_TRUE(update_and_complete(*ue, make_set_request(2, 4U, 8U)).ntn_ul_slot_result->accepted);
+  const du_ntn_ue_slot_resource_snapshot recovered_snapshot =
+      res_mng.get_ntn_ue_slot_resource_snapshot(cell_index);
+  ASSERT_TRUE(recovered_snapshot.complete) << recovered_snapshot.failure_reason;
+  EXPECT_EQ(recovered_snapshot.assignment_generation_high_water, 2U);
+  ASSERT_EQ(recovered_snapshot.entries.size(), 1U);
+  EXPECT_EQ(recovered_snapshot.entries.front().request.sr_slot_offset, 4U);
+  EXPECT_EQ(recovered_snapshot.entries.front().request.srs_slot_offset, 8U);
+}
+
+TEST_F(du_ran_resource_manager_ntn_slot_registry_test,
+       same_generation_same_request_is_idempotent_but_different_request_is_rejected)
+{
+  auto ue = create_ue();
+  ASSERT_TRUE(ue.has_value());
+  ASSERT_TRUE(update_and_complete(*ue, make_set_request(1)).ntn_ul_slot_result->accepted);
+
+  const du_ue_resource_update_response retry = update_and_complete(*ue, make_set_request(1));
+  ASSERT_TRUE(retry.ntn_ul_slot_result.has_value());
+  EXPECT_TRUE(retry.ntn_ul_slot_result->accepted);
+  EXPECT_EQ(retry.ntn_ul_slot_result->reason, f1ap_ntn_ul_slot_resource_result_reason::applied);
+
+  const du_ue_resource_update_response conflict = update_and_complete(*ue, make_set_request(1, 4U, 7U));
+  ASSERT_TRUE(conflict.ntn_ul_slot_result.has_value());
+  EXPECT_FALSE(conflict.ntn_ul_slot_result->accepted);
+  EXPECT_EQ(conflict.ntn_ul_slot_result->reason,
+            f1ap_ntn_ul_slot_resource_result_reason::assignment_generation_conflict);
+
+  const du_ntn_ue_slot_resource_snapshot snapshot = res_mng.get_ntn_ue_slot_resource_snapshot(cell_index);
+  ASSERT_TRUE(snapshot.complete);
+  ASSERT_EQ(snapshot.entries.size(), 1U);
+  EXPECT_EQ(snapshot.entries.front().request.sr_slot_offset, 3U);
+  EXPECT_EQ(snapshot.assignment_generation_high_water, 1U);
+}
+
+TEST_F(du_ran_resource_manager_ntn_slot_registry_test, lower_generation_is_rejected_before_resources_are_changed)
+{
+  auto ue = create_ue();
+  ASSERT_TRUE(ue.has_value());
+  ASSERT_TRUE(update_and_complete(*ue, make_set_request(2)).ntn_ul_slot_result->accepted);
+
+  const du_ue_resource_update_response stale = update_and_complete(*ue, make_set_request(1, 4U, 8U));
+  ASSERT_TRUE(stale.ntn_ul_slot_result.has_value());
+  EXPECT_FALSE(stale.ntn_ul_slot_result->accepted);
+  EXPECT_EQ(stale.ntn_ul_slot_result->reason, f1ap_ntn_ul_slot_resource_result_reason::stale_assignment_generation);
+
+  const auto& pcell = ue->value().cell_group.cells[SERVING_CELL_PCELL_IDX].serv_cell_cfg;
+  EXPECT_EQ(pcell.ul_config->init_ul_bwp.pucch_cfg->sr_res_list.front().offset, 3U);
+  EXPECT_EQ(pcell.ul_config->init_ul_bwp.srs_cfg->srs_res_list.front().periodicity_and_offset->offset, 7U);
+}
+
+TEST_F(du_ran_resource_manager_ntn_slot_registry_test, failed_higher_generation_preserves_previous_record)
+{
+  auto ue = create_ue();
+  ASSERT_TRUE(ue.has_value());
+  ASSERT_TRUE(update_and_complete(*ue, make_set_request(1)).ntn_ul_slot_result->accepted);
+
+  const du_ue_resource_update_response failed = update_and_complete(*ue, make_set_request(2, 4U, 8U, 20U, 10U));
+  ASSERT_TRUE(failed.ntn_ul_slot_result.has_value());
+  EXPECT_FALSE(failed.ntn_ul_slot_result->accepted);
+  EXPECT_EQ(failed.ntn_ul_slot_result->reason, f1ap_ntn_ul_slot_resource_result_reason::sr_offset_unavailable);
+
+  const du_ntn_ue_slot_resource_snapshot snapshot = res_mng.get_ntn_ue_slot_resource_snapshot(cell_index);
+  ASSERT_TRUE(snapshot.complete) << snapshot.failure_reason;
+  EXPECT_EQ(snapshot.assignment_generation_high_water, 1U);
+  ASSERT_EQ(snapshot.entries.size(), 1U);
+  EXPECT_EQ(snapshot.entries.front().assignment_generation, 1U);
+  EXPECT_EQ(snapshot.entries.front().request.sr_slot_offset, 3U);
+  EXPECT_EQ(snapshot.entries.front().request.srs_slot_offset, 7U);
+}
+
+TEST_F(du_ran_resource_manager_ntn_slot_registry_test, clear_removes_active_entry_but_keeps_generation_high_water)
+{
+  auto ue = create_ue();
+  ASSERT_TRUE(ue.has_value());
+  ASSERT_TRUE(update_and_complete(*ue, make_set_request(1)).ntn_ul_slot_result->accepted);
+
+  const du_ue_resource_update_response clear = update_and_complete(*ue, make_clear_request(2));
+  ASSERT_TRUE(clear.ntn_ul_slot_result.has_value());
+  EXPECT_TRUE(clear.ntn_ul_slot_result->accepted);
+  EXPECT_EQ(clear.ntn_ul_slot_result->reason, f1ap_ntn_ul_slot_resource_result_reason::clear_applied);
+
+  const du_ntn_ue_slot_resource_snapshot snapshot = res_mng.get_ntn_ue_slot_resource_snapshot(cell_index);
+  EXPECT_TRUE(snapshot.complete) << snapshot.failure_reason;
+  EXPECT_TRUE(snapshot.entries.empty());
+  EXPECT_EQ(snapshot.assignment_generation_high_water, 2U);
+
+  const du_ue_resource_update_response retry = update_and_complete(*ue, make_clear_request(2));
+  ASSERT_TRUE(retry.ntn_ul_slot_result.has_value());
+  EXPECT_TRUE(retry.ntn_ul_slot_result->accepted);
+  EXPECT_EQ(retry.ntn_ul_slot_result->reason, f1ap_ntn_ul_slot_resource_result_reason::clear_applied);
+}
+
+TEST_F(du_ran_resource_manager_ntn_slot_registry_test, generation_record_is_removed_with_ue_configurator)
+{
+  {
+    auto ue = create_ue();
+    ASSERT_TRUE(ue.has_value());
+    ASSERT_TRUE(update_and_complete(*ue, make_set_request(1)).ntn_ul_slot_result->accepted);
+    EXPECT_EQ(res_mng.get_ntn_ue_slot_resource_snapshot(cell_index).entries.size(), 1U);
+  }
+
+  const du_ntn_ue_slot_resource_snapshot snapshot = res_mng.get_ntn_ue_slot_resource_snapshot(cell_index);
+  EXPECT_TRUE(snapshot.complete);
+  EXPECT_TRUE(snapshot.entries.empty());
+  EXPECT_EQ(snapshot.assignment_generation_high_water, 0U);
+}
+
+TEST_F(du_ran_resource_manager_ntn_slot_registry_test, generation_exhaustion_allows_only_exact_retry)
+{
+  auto ue = create_ue();
+  ASSERT_TRUE(ue.has_value());
+  const uint32_t max_generation = std::numeric_limits<uint32_t>::max();
+  ASSERT_TRUE(update_and_complete(*ue, make_set_request(max_generation)).ntn_ul_slot_result->accepted);
+  EXPECT_TRUE(update_and_complete(*ue, make_set_request(max_generation)).ntn_ul_slot_result->accepted);
+
+  const du_ue_resource_update_response exhausted =
+      update_and_complete(*ue, make_set_request(max_generation, 4U, 8U));
+  ASSERT_TRUE(exhausted.ntn_ul_slot_result.has_value());
+  EXPECT_FALSE(exhausted.ntn_ul_slot_result->accepted);
+  EXPECT_EQ(exhausted.ntn_ul_slot_result->reason,
+            f1ap_ntn_ul_slot_resource_result_reason::slot_assignment_generation_exhausted);
+}
+
+TEST_F(du_ran_resource_manager_ntn_slot_registry_test,
+       legacy_requests_work_before_but_cannot_bypass_a_versioned_assignment)
+{
+  auto ue = create_ue();
+  ASSERT_TRUE(ue.has_value());
+
+  f1ap_ue_context_update_request legacy_set             = make_set_request(1);
+  legacy_set.ntn_ul_slot_request->assignment_generation = 0;
+  legacy_set.ntn_ul_slot_request->operation             = f1ap_ntn_ul_slot_resource_operation::legacy;
+  ASSERT_TRUE(update_and_complete(*ue, legacy_set).ntn_ul_slot_result->accepted);
+  ASSERT_TRUE(update_and_complete(*ue, make_set_request(1)).ntn_ul_slot_result->accepted);
+
+  f1ap_ue_context_update_request legacy_clear;
+  legacy_clear.ue_index = ue_index;
+  legacy_clear.ntn_ul_slot_request.emplace();
+  const du_ue_resource_update_response rejected = update_and_complete(*ue, legacy_clear);
+  ASSERT_TRUE(rejected.ntn_ul_slot_result.has_value());
+  EXPECT_FALSE(rejected.ntn_ul_slot_result->accepted);
+  EXPECT_EQ(rejected.ntn_ul_slot_result->reason,
+            f1ap_ntn_ul_slot_resource_result_reason::assignment_generation_conflict);
+
+  const du_ntn_ue_slot_resource_snapshot snapshot = res_mng.get_ntn_ue_slot_resource_snapshot(cell_index);
+  ASSERT_TRUE(snapshot.complete);
+  EXPECT_EQ(snapshot.assignment_generation_high_water, 1U);
+  ASSERT_EQ(snapshot.entries.size(), 1U);
 }

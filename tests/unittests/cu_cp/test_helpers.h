@@ -494,7 +494,9 @@ make_successful_ntn_ul_slot_result(const std::optional<f1ap_ntn_ul_slot_resource
   result.reason   = has_ntn_ul_slot_resource_values(*request)
                         ? f1ap_ntn_ul_slot_resource_result_reason::applied
                         : f1ap_ntn_ul_slot_resource_result_reason::clear_applied;
-  if (has_ntn_ul_slot_resource_values(*request)) {
+  result.assignment_generation = request->assignment_generation;
+  result.operation             = request->operation;
+  if (has_ntn_ul_slot_resource_values(*request) || is_versioned(*request)) {
     result.applied_request = request;
   }
   return result;

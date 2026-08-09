@@ -22,6 +22,7 @@
 #include "lib/cu_cp/ntn_mobility/ntn_beam_service_resource_manager.h"
 #include "srsran/ran/gnb_id.h"
 #include <algorithm>
+#include <limits>
 #include <gtest/gtest.h>
 
 using namespace srsran;
@@ -74,6 +75,28 @@ void apply_lease_pool(ntn_beam_service_resource_manager& manager, const ntn_rnti
   result.accepted        = true;
   result.accepted_leases = lease_pool.leases;
   manager.mark_rnti_lease_pool_distribution_result(lease_pool, result);
+}
+
+f1ap_ntn_ul_slot_resource_request
+make_versioned_slot_request(uint32_t generation, unsigned sr_offset = 3U, unsigned srs_offset = 7U)
+{
+  f1ap_ntn_ul_slot_resource_request request;
+  request.sr_slot_offset        = sr_offset;
+  request.sr_slot_period        = 40U;
+  request.srs_slot_offset       = srs_offset;
+  request.srs_slot_period       = 80U;
+  request.assignment_generation = generation;
+  request.operation             = f1ap_ntn_ul_slot_resource_operation::set;
+  return request;
+}
+
+ntn_resource_audit_ue_slot make_observed_slot(ue_index_t ue_index, const f1ap_ntn_ul_slot_resource_request& request)
+{
+  ntn_resource_audit_ue_slot slot;
+  slot.ue_index = ue_index;
+  slot.state    = "applied_by_du";
+  slot.request  = request;
+  return slot;
 }
 
 } // namespace
@@ -1777,6 +1800,8 @@ TEST(ntn_beam_service_resource_manager, audit_unknown_du_slot_assignment_request
   du_slot.request.sr_slot_period  = 40U;
   du_slot.request.srs_slot_offset = 9U;
   du_slot.request.srs_slot_period = 80U;
+  du_slot.request.assignment_generation = 1U;
+  du_slot.request.operation             = f1ap_ntn_ul_slot_resource_operation::set;
   report.ue_slots.push_back(du_slot);
 
   const ntn_resource_audit_decision decision = manager.handle_resource_audit_report(report);
@@ -1929,6 +1954,8 @@ TEST(ntn_beam_service_resource_manager, service_pair_audit_unknown_ul_slot_reque
   du_slot.request.sr_slot_period  = 40U;
   du_slot.request.srs_slot_offset = 9U;
   du_slot.request.srs_slot_period = 80U;
+  du_slot.request.assignment_generation = 1U;
+  du_slot.request.operation             = f1ap_ntn_ul_slot_resource_operation::set;
   report.ue_slots.push_back(du_slot);
 
   const ntn_resource_audit_decision decision = manager.handle_resource_audit_report(report);
@@ -1939,6 +1966,541 @@ TEST(ntn_beam_service_resource_manager, service_pair_audit_unknown_ul_slot_reque
   EXPECT_EQ(repair.ue_index, du_slot.ue_index);
   EXPECT_EQ(repair.reason, "du_unknown_sr_srs_assignment");
   EXPECT_EQ(repair.uplink_resource_du_index, report.du_index);
+}
+
+TEST(ntn_beam_service_resource_manager, complete_empty_snapshot_upgrades_legacy_slot_once)
+{
+  ntn_beam_service_resource_manager manager;
+  const ue_index_t                  ue_index = uint_to_ue_index(21);
+
+  f1ap_ntn_ul_slot_resource_request legacy_request;
+  legacy_request.sr_slot_offset  = 3U;
+  legacy_request.sr_slot_period  = 40U;
+  legacy_request.srs_slot_offset = 7U;
+  legacy_request.srs_slot_period = 80U;
+  ASSERT_EQ(manager.set_digital_slot_intent_from_request(ue_index, legacy_request).action,
+            ntn_slot_resource_update_action::set);
+
+  ntn_resource_audit_report report;
+  report.du_index                  = uint_to_du_index(0);
+  report.cell_index                = to_du_cell_index(1);
+  report.pci                       = pci_t{1};
+  report.generation_id             = 80U;
+  report.ue_slot_snapshot_complete = true;
+
+  const ntn_resource_audit_decision first = manager.handle_resource_audit_report(report);
+  ASSERT_EQ(first.repairs.size(), 1U);
+  ASSERT_TRUE(first.repairs.front().slot_request.has_value());
+  EXPECT_EQ(first.repairs.front().action, ntn_resource_repair_action::apply_sr_srs_assignment);
+  EXPECT_EQ(first.repairs.front().slot_request->assignment_generation, 1U);
+  EXPECT_EQ(first.repairs.front().slot_request->operation, f1ap_ntn_ul_slot_resource_operation::set);
+  EXPECT_EQ(manager.queue_resource_repair(first.repairs.front(), report.generation_id).state, "queued");
+  manager.mark_resource_repair_sent(first.repairs.front());
+  manager.mark_resource_repair_result(first.repairs.front(), false, "du_reject");
+
+  ++report.generation_id;
+  const ntn_resource_audit_decision repeated = manager.handle_resource_audit_report(report);
+  ASSERT_EQ(repeated.repairs.size(), 1U);
+  ASSERT_TRUE(repeated.repairs.front().slot_request.has_value());
+  EXPECT_EQ(repeated.repairs.front().slot_request->assignment_generation, 1U);
+  EXPECT_EQ(manager.queue_resource_repair(repeated.repairs.front(), report.generation_id).state, "retry_exhausted");
+
+  const ntn_beam_service_resource_snapshot snapshot = manager.get_snapshot();
+  EXPECT_EQ(snapshot.slot_assignment_generation_high_water, 1U);
+  EXPECT_EQ(snapshot.nof_resource_repairs_queued, 0U);
+  EXPECT_EQ(snapshot.nof_resource_repairs_retry_exhausted, 1U);
+}
+
+TEST(ntn_beam_service_resource_manager, supported_du_upgrades_first_legacy_assignment_to_generation_one)
+{
+  ntn_beam_service_resource_manager manager;
+  const ue_index_t                  ue_index = uint_to_ue_index(30);
+  f1ap_ntn_ul_slot_resource_request legacy_request;
+  legacy_request.sr_slot_offset  = 3U;
+  legacy_request.sr_slot_period  = 40U;
+  legacy_request.srs_slot_offset = 7U;
+  legacy_request.srs_slot_period = 80U;
+  ASSERT_EQ(manager.set_digital_slot_intent_from_request(ue_index, legacy_request).action,
+            ntn_slot_resource_update_action::set);
+
+  const ntn_slot_resource_update_decision upgraded = manager.make_digital_slot_intent_versioned(ue_index);
+  ASSERT_EQ(upgraded.action, ntn_slot_resource_update_action::set);
+  ASSERT_TRUE(upgraded.request.has_value());
+  EXPECT_EQ(upgraded.request->operation, f1ap_ntn_ul_slot_resource_operation::set);
+  EXPECT_EQ(upgraded.request->assignment_generation, 1U);
+  EXPECT_EQ(upgraded.request->sr_slot_offset, legacy_request.sr_slot_offset);
+  EXPECT_EQ(upgraded.request->srs_slot_offset, legacy_request.srs_slot_offset);
+  EXPECT_EQ(manager.make_digital_slot_intent_versioned(ue_index).action, ntn_slot_resource_update_action::none);
+
+  manager.mark_slot_update_applied(ue_index, *upgraded.request);
+  ntn_slot_resource_update_decision clear = manager.clear_digital_service_slot_intent(ue_index, "service_ended");
+  ASSERT_EQ(clear.action, ntn_slot_resource_update_action::clear);
+  ASSERT_TRUE(clear.request.has_value());
+  // The existing versioned assignment already advances the clear generation directly.
+  EXPECT_EQ(clear.request->assignment_generation, 2U);
+
+  ntn_beam_service_resource_manager legacy_clear_manager;
+  ASSERT_EQ(legacy_clear_manager.set_digital_slot_intent_from_request(ue_index, legacy_request).action,
+            ntn_slot_resource_update_action::set);
+  legacy_clear_manager.mark_slot_update_applied(ue_index, legacy_request);
+  const auto legacy_clear = legacy_clear_manager.clear_digital_service_slot_intent(ue_index, "service_ended");
+  ASSERT_EQ(legacy_clear.action, ntn_slot_resource_update_action::clear);
+  ASSERT_TRUE(legacy_clear.request.has_value());
+  EXPECT_FALSE(is_versioned(*legacy_clear.request));
+  const auto upgraded_clear = legacy_clear_manager.make_digital_slot_intent_versioned(ue_index);
+  ASSERT_EQ(upgraded_clear.action, ntn_slot_resource_update_action::clear);
+  ASSERT_TRUE(upgraded_clear.request.has_value());
+  EXPECT_EQ(upgraded_clear.request->operation, f1ap_ntn_ul_slot_resource_operation::clear);
+  EXPECT_EQ(upgraded_clear.request->assignment_generation, 1U);
+}
+
+TEST(ntn_beam_service_resource_manager, exact_generation_snapshot_recovers_missing_applied_feedback)
+{
+  ntn_beam_service_resource_manager       manager;
+  const ue_index_t                        ue_index = uint_to_ue_index(22);
+  const f1ap_ntn_ul_slot_resource_request request  = make_versioned_slot_request(7U);
+
+  ASSERT_EQ(manager.set_digital_slot_intent_from_request(ue_index, request).action,
+            ntn_slot_resource_update_action::set);
+  manager.mark_slot_update_sent_to_du(ue_index, request);
+  manager.mark_slot_update_outcome_unknown(ue_index, request, "applied_feedback_missing");
+  EXPECT_EQ(manager.get_snapshot().nof_digital_slot_applied_by_du, 0U);
+
+  ntn_resource_audit_report report;
+  report.du_index                  = uint_to_du_index(0);
+  report.cell_index                = to_du_cell_index(1);
+  report.pci                       = pci_t{1};
+  report.generation_id             = 81U;
+  report.ue_slot_snapshot_complete = true;
+  report.ue_slots.push_back(make_observed_slot(ue_index, request));
+
+  const ntn_resource_audit_decision decision = manager.handle_resource_audit_report(report);
+  EXPECT_TRUE(decision.repairs.empty());
+  EXPECT_TRUE(decision.ue_slot_domain_clean);
+  EXPECT_EQ(decision.nof_ue_slot_matched, 1U);
+
+  const ntn_beam_service_resource_snapshot snapshot = manager.get_snapshot();
+  ASSERT_EQ(snapshot.digital_slot_intents.size(), 1U);
+  EXPECT_EQ(snapshot.digital_slot_intents.front().state, "applied_by_du");
+  ASSERT_TRUE(snapshot.digital_slot_intents.front().applied_request.has_value());
+  EXPECT_EQ(snapshot.digital_slot_intents.front().applied_request->assignment_generation, 7U);
+  EXPECT_EQ(snapshot.nof_digital_slot_applied_by_du, 1U);
+}
+
+TEST(ntn_beam_service_resource_manager, complete_empty_snapshot_confirms_a_versioned_clear_with_lost_feedback)
+{
+  ntn_beam_service_resource_manager       manager;
+  const ue_index_t                        ue_index = uint_to_ue_index(29);
+  const f1ap_ntn_ul_slot_resource_request request  = make_versioned_slot_request(5U);
+
+  ASSERT_EQ(manager.set_digital_slot_intent_from_request(ue_index, request).action,
+            ntn_slot_resource_update_action::set);
+  manager.mark_slot_update_applied(ue_index, request);
+  const ntn_slot_resource_update_decision clear =
+      manager.clear_digital_service_slot_intent(ue_index, "service_ended");
+  ASSERT_EQ(clear.action, ntn_slot_resource_update_action::clear);
+  ASSERT_TRUE(clear.request.has_value());
+  ASSERT_EQ(clear.request->assignment_generation, 6U);
+  manager.mark_slot_update_sent_to_du(ue_index, *clear.request);
+  manager.mark_slot_update_outcome_unknown(ue_index, *clear.request, "clear_feedback_missing");
+
+  ntn_resource_audit_report report;
+  report.du_index                  = uint_to_du_index(0);
+  report.cell_index                = to_du_cell_index(1);
+  report.pci                       = pci_t{1};
+  report.generation_id             = 85U;
+  report.ue_slot_snapshot_complete = true;
+
+  const ntn_resource_audit_decision decision = manager.handle_resource_audit_report(report);
+  EXPECT_TRUE(decision.repairs.empty());
+  EXPECT_TRUE(decision.ue_slot_domain_clean);
+  EXPECT_EQ(decision.nof_ue_slot_matched, 1U);
+  EXPECT_FALSE(manager.get_cached_slot_request(ue_index).has_value());
+  EXPECT_EQ(manager.get_snapshot().nof_digital_slot_cleared_by_du, 1U);
+}
+
+TEST(ntn_beam_service_resource_manager, stale_du_snapshot_does_not_replace_a_newer_pending_assignment)
+{
+  ntn_beam_service_resource_manager manager;
+  const ue_index_t                  ue_index = uint_to_ue_index(31);
+  const auto                        first    = make_versioned_slot_request(3U);
+  auto                              second   = make_versioned_slot_request(4U);
+  second.sr_slot_offset = 9U;
+  ASSERT_EQ(manager.set_digital_slot_intent_from_request(ue_index, first).action,
+            ntn_slot_resource_update_action::set);
+  manager.mark_slot_update_applied(ue_index, first);
+  ASSERT_EQ(manager.set_digital_slot_intent_from_request(ue_index, second).action,
+            ntn_slot_resource_update_action::set);
+  manager.mark_slot_update_sent_to_du(ue_index, second);
+
+  ntn_resource_audit_report report;
+  report.du_index                  = uint_to_du_index(0);
+  report.cell_index                = to_du_cell_index(1);
+  report.pci                       = pci_t{1};
+  report.generation_id             = 86U;
+  report.ue_slot_snapshot_complete = true;
+  report.ue_slots.push_back(make_observed_slot(ue_index, first));
+
+  const ntn_resource_audit_decision decision = manager.handle_resource_audit_report(report);
+  ASSERT_EQ(decision.repairs.size(), 1U);
+  EXPECT_EQ(decision.repairs.front().action, ntn_resource_repair_action::apply_sr_srs_assignment);
+  ASSERT_TRUE(decision.repairs.front().slot_request.has_value());
+  EXPECT_EQ(decision.repairs.front().slot_request->assignment_generation, 4U);
+  ASSERT_TRUE(manager.get_cached_slot_request(ue_index).has_value());
+  EXPECT_EQ(manager.get_cached_slot_request(ue_index)->assignment_generation, 4U);
+}
+
+TEST(ntn_beam_service_resource_manager, complete_snapshot_recovers_du_adjusted_assignment_without_replanning)
+{
+  ntn_beam_service_resource_manager       manager;
+  const ue_index_t                        ue_index = uint_to_ue_index(28);
+  const f1ap_ntn_ul_slot_resource_request desired  = make_versioned_slot_request(8U, 3U, 7U);
+
+  ASSERT_EQ(manager.set_digital_slot_intent_from_request(ue_index, desired).action,
+            ntn_slot_resource_update_action::set);
+  manager.mark_slot_update_sent_to_du(ue_index, desired);
+  manager.mark_slot_update_outcome_unknown(ue_index, desired, "applied_feedback_missing");
+
+  f1ap_ntn_ul_slot_resource_request adjusted = desired;
+  adjusted.sr_slot_offset                    = 5U;
+  adjusted.srs_slot_offset                   = 9U;
+  ntn_resource_audit_report report;
+  report.du_index                  = uint_to_du_index(0);
+  report.cell_index                = to_du_cell_index(1);
+  report.pci                       = pci_t{1};
+  report.generation_id             = 82U;
+  report.ue_slot_snapshot_complete = true;
+  report.ue_slots.push_back(make_observed_slot(ue_index, adjusted));
+
+  const ntn_resource_audit_decision decision = manager.handle_resource_audit_report(report);
+  EXPECT_TRUE(decision.repairs.empty());
+  EXPECT_TRUE(decision.ue_slot_domain_clean);
+  EXPECT_EQ(decision.nof_ue_slot_matched, 1U);
+
+  const std::optional<f1ap_ntn_ul_slot_resource_request> cached = manager.get_cached_slot_request(ue_index);
+  ASSERT_TRUE(cached.has_value());
+  EXPECT_EQ(cached->sr_slot_offset, desired.sr_slot_offset);
+  EXPECT_EQ(cached->srs_slot_offset, desired.srs_slot_offset);
+  const ntn_beam_service_resource_snapshot snapshot = manager.get_snapshot();
+  ASSERT_EQ(snapshot.digital_slot_intents.size(), 1U);
+  ASSERT_TRUE(snapshot.digital_slot_intents.front().applied_request.has_value());
+  EXPECT_EQ(snapshot.digital_slot_intents.front().applied_request->sr_slot_offset, adjusted.sr_slot_offset);
+  EXPECT_EQ(snapshot.digital_slot_intents.front().applied_request->srs_slot_offset, adjusted.srs_slot_offset);
+}
+
+TEST(ntn_beam_service_resource_manager, du_adjusted_applied_feedback_keeps_the_planner_request_stable)
+{
+  ntn_beam_service_resource_manager       manager;
+  const ue_index_t                        ue_index = uint_to_ue_index(31);
+  const f1ap_ntn_ul_slot_resource_request desired  = make_versioned_slot_request(5U, 3U, 7U);
+  ASSERT_EQ(manager.set_digital_slot_intent_from_request(ue_index, desired).action,
+            ntn_slot_resource_update_action::set);
+
+  f1ap_ntn_ul_slot_resource_request adjusted = desired;
+  adjusted.sr_slot_offset                    = 4U;
+  adjusted.srs_slot_offset                   = 8U;
+  f1ap_ntn_ul_slot_resource_result result;
+  result.accepted              = true;
+  result.reason                = f1ap_ntn_ul_slot_resource_result_reason::applied;
+  result.assignment_generation = desired.assignment_generation;
+  result.operation             = desired.operation;
+  result.applied_request       = adjusted;
+  manager.mark_slot_update_result(ue_index, desired, std::nullopt, result);
+
+  const std::optional<f1ap_ntn_ul_slot_resource_request> cached = manager.get_cached_slot_request(ue_index);
+  ASSERT_TRUE(cached.has_value());
+  EXPECT_TRUE(are_f1ap_ntn_ul_slot_resource_requests_equal(*cached, desired));
+  EXPECT_EQ(manager.set_digital_slot_intent_from_request(ue_index, desired).action,
+            ntn_slot_resource_update_action::none);
+  const ntn_beam_service_resource_snapshot snapshot = manager.get_snapshot();
+  ASSERT_EQ(snapshot.digital_slot_intents.size(), 1U);
+  ASSERT_TRUE(snapshot.digital_slot_intents.front().applied_request.has_value());
+  EXPECT_TRUE(
+      are_f1ap_ntn_ul_slot_resource_requests_equal(*snapshot.digital_slot_intents.front().applied_request, adjusted));
+}
+
+TEST(ntn_beam_service_resource_manager, repeated_service_refresh_keeps_the_du_applied_slot_proof)
+{
+  ntn_beam_service_resource_manager manager;
+  ntn_beam_placement_plan           plan;
+  plan.assignments.push_back(make_loaded_assignment("CN-BEAM-0001", 1, uint_to_du_index(0)));
+
+  const ue_index_t ue_index = uint_to_ue_index(32);
+  ntn_digital_service_slot_intent_update update;
+  update.ue_index           = ue_index;
+  update.digital_beam_id    = "CN-BEAM-0001";
+  update.service_du_index   = uint_to_du_index(0);
+  update.service_cell_index = to_du_cell_index(1);
+  update.service_pci        = pci_t{1};
+  update.service_nci        = make_nci(1);
+  update.has_service_nci    = true;
+  update.service_state      = "service_bound";
+
+  const ntn_slot_resource_update_decision first = manager.update_digital_service_slot_intent(update, plan);
+  ASSERT_EQ(first.action, ntn_slot_resource_update_action::set);
+  ASSERT_TRUE(first.request.has_value());
+
+  f1ap_ntn_ul_slot_resource_request adjusted = *first.request;
+  adjusted.sr_slot_offset                    = 4U;
+  adjusted.srs_slot_offset                   = 8U;
+  f1ap_ntn_ul_slot_resource_result result;
+  result.accepted        = true;
+  result.reason          = f1ap_ntn_ul_slot_resource_result_reason::applied;
+  result.applied_request = adjusted;
+  manager.mark_slot_update_result(ue_index, *first.request, std::nullopt, result);
+
+  EXPECT_EQ(manager.update_digital_service_slot_intent(update, plan).action, ntn_slot_resource_update_action::none);
+  const ntn_beam_service_resource_snapshot snapshot = manager.get_snapshot();
+  ASSERT_EQ(snapshot.digital_slot_intents.size(), 1U);
+  EXPECT_EQ(snapshot.digital_slot_intents.front().state, "applied_by_du");
+  ASSERT_TRUE(snapshot.digital_slot_intents.front().applied_request.has_value());
+  EXPECT_TRUE(
+      are_f1ap_ntn_ul_slot_resource_requests_equal(*snapshot.digital_slot_intents.front().applied_request, adjusted));
+}
+
+TEST(ntn_beam_service_resource_manager, conflicting_or_ahead_du_slot_generation_is_not_overwritten)
+{
+  for (const bool du_generation_is_ahead : {false, true}) {
+    SCOPED_TRACE(du_generation_is_ahead ? "du_generation_ahead" : "same_generation_different_content");
+    ntn_beam_service_resource_manager       manager;
+    const ue_index_t                        ue_index = uint_to_ue_index(23);
+    const f1ap_ntn_ul_slot_resource_request desired  = make_versioned_slot_request(9U);
+    ASSERT_EQ(manager.set_digital_slot_intent_from_request(ue_index, desired).action,
+              ntn_slot_resource_update_action::set);
+
+    f1ap_ntn_ul_slot_resource_request observed = desired;
+    if (du_generation_is_ahead) {
+      observed.assignment_generation = 10U;
+    } else {
+      observed.sr_slot_offset = 4U;
+    }
+
+    ntn_resource_audit_report report;
+    report.du_index                  = uint_to_du_index(0);
+    report.cell_index                = to_du_cell_index(1);
+    report.pci                       = pci_t{1};
+    report.generation_id             = du_generation_is_ahead ? 83U : 82U;
+    report.ue_slot_snapshot_complete = true;
+    report.ue_slots.push_back(make_observed_slot(ue_index, observed));
+
+    const ntn_resource_audit_decision decision = manager.handle_resource_audit_report(report);
+    ASSERT_EQ(decision.repairs.size(), 1U);
+    EXPECT_EQ(decision.repairs.front().action, ntn_resource_repair_action::mark_resource_conflict);
+    EXPECT_EQ(decision.repairs.front().reason,
+              du_generation_is_ahead ? "du_slot_assignment_generation_ahead" : "slot_assignment_generation_conflict");
+    EXPECT_EQ(decision.nof_ue_slot_conflict, 1U);
+    EXPECT_FALSE(decision.ue_slot_domain_clean);
+  }
+}
+
+TEST(ntn_beam_service_resource_manager, du_only_current_ue_slot_is_cleared_with_next_generation)
+{
+  ntn_beam_service_resource_manager manager;
+  const ue_index_t                  ue_index = uint_to_ue_index(24);
+
+  ntn_resource_audit_report report;
+  report.du_index                  = uint_to_du_index(0);
+  report.cell_index                = to_du_cell_index(1);
+  report.pci                       = pci_t{1};
+  report.generation_id             = 84U;
+  report.ue_slot_snapshot_complete = true;
+  report.ue_slots.push_back(make_observed_slot(ue_index, make_versioned_slot_request(41U)));
+
+  const ntn_resource_audit_decision decision = manager.handle_resource_audit_report(report);
+  ASSERT_EQ(decision.repairs.size(), 1U);
+  const ntn_resource_repair& repair = decision.repairs.front();
+  EXPECT_EQ(repair.action, ntn_resource_repair_action::clear_unknown_sr_srs_assignment);
+  EXPECT_EQ(repair.ue_index, ue_index);
+  ASSERT_TRUE(repair.slot_request.has_value());
+  EXPECT_TRUE(is_empty(*repair.slot_request));
+  EXPECT_EQ(repair.slot_request->operation, f1ap_ntn_ul_slot_resource_operation::clear);
+  EXPECT_EQ(repair.slot_request->assignment_generation, 42U);
+}
+
+TEST(ntn_beam_service_resource_manager, maximum_slot_generation_blocks_clear_and_changed_set)
+{
+  const ue_index_t                        ue_index = uint_to_ue_index(25);
+  const f1ap_ntn_ul_slot_resource_request maximum_request =
+      make_versioned_slot_request(std::numeric_limits<uint32_t>::max());
+
+  ntn_beam_service_resource_manager clear_manager;
+  ASSERT_EQ(clear_manager.set_digital_slot_intent_from_request(ue_index, maximum_request).action,
+            ntn_slot_resource_update_action::set);
+  const ntn_slot_resource_update_decision clear_decision = clear_manager.clear_digital_service_slot_intent(ue_index);
+  EXPECT_EQ(clear_decision.action, ntn_slot_resource_update_action::none);
+  EXPECT_EQ(clear_decision.reason, "slot_assignment_generation_exhausted");
+  ASSERT_TRUE(clear_manager.get_cached_slot_request(ue_index).has_value());
+  EXPECT_EQ(clear_manager.get_cached_slot_request(ue_index)->assignment_generation,
+            std::numeric_limits<uint32_t>::max());
+
+  ntn_beam_service_resource_manager set_manager;
+  ASSERT_EQ(set_manager.set_digital_slot_intent_from_request(ue_index, maximum_request).action,
+            ntn_slot_resource_update_action::set);
+  ntn_beam_placement_plan plan;
+  plan.assignments.push_back(make_loaded_assignment("CN-BEAM-0001", 1, uint_to_du_index(0)));
+  plan.assignments.front().sr_slot_offset = 4U;
+  ntn_digital_service_slot_intent_update update;
+  update.ue_index         = ue_index;
+  update.digital_beam_id  = "CN-BEAM-0001";
+  update.service_du_index = uint_to_du_index(0);
+  update.service_nci      = make_nci(1);
+  update.has_service_nci  = true;
+  update.service_state    = "service_bound";
+
+  const ntn_slot_resource_update_decision set_decision = set_manager.update_digital_service_slot_intent(update, plan);
+  EXPECT_EQ(set_decision.action, ntn_slot_resource_update_action::none);
+  EXPECT_EQ(set_decision.reason, "slot_assignment_generation_exhausted");
+  ASSERT_TRUE(set_manager.get_cached_slot_request(ue_index).has_value());
+  EXPECT_EQ(set_manager.get_cached_slot_request(ue_index)->assignment_generation, std::numeric_limits<uint32_t>::max());
+}
+
+TEST(ntn_beam_service_resource_manager, incomplete_slot_snapshot_does_not_repair_or_dirty_clean_rnti_domain)
+{
+  ntn_beam_service_resource_manager manager;
+  const ntn_rnti_lease_pool_update  lease_pool = make_target_handover_lease_pool();
+  apply_lease_pool(manager, lease_pool);
+
+  const ue_index_t ue_index = uint_to_ue_index(26);
+  ASSERT_EQ(manager.set_digital_slot_intent_from_request(ue_index, make_versioned_slot_request(3U)).action,
+            ntn_slot_resource_update_action::set);
+
+  ntn_resource_audit_report report;
+  report.du_index                  = lease_pool.du_index;
+  report.cell_index                = lease_pool.cell_index;
+  report.pci                       = lease_pool.pci;
+  report.generation_id             = 85U;
+  report.rnti_snapshot_complete    = true;
+  report.ue_slot_snapshot_complete = false;
+  for (rnti_t rnti : lease_pool.leases) {
+    report.rnti_leases.push_back({rnti, "pending", "applied_by_du", lease_pool.generation_id});
+  }
+
+  const ntn_resource_audit_decision decision = manager.handle_resource_audit_report(report);
+  EXPECT_TRUE(decision.repairs.empty());
+  EXPECT_TRUE(decision.rnti_domain_clean);
+  EXPECT_FALSE(decision.ue_slot_domain_clean);
+  EXPECT_EQ(decision.nof_ue_slot_missing, 0U);
+  EXPECT_EQ(decision.nof_ue_slot_conflict, 0U);
+  EXPECT_EQ(manager.get_snapshot().nof_digital_slot_active, 1U);
+}
+
+TEST(ntn_beam_service_resource_manager, du_disconnect_preserves_desired_slot_but_removes_applied_proof)
+{
+  ntn_beam_service_resource_manager manager;
+  ntn_beam_placement_plan           plan;
+  plan.assignments.push_back(make_loaded_assignment("CN-BEAM-0001", 1, uint_to_du_index(0)));
+
+  const ue_index_t                       ue_index = uint_to_ue_index(27);
+  ntn_digital_service_slot_intent_update update;
+  update.ue_index           = ue_index;
+  update.digital_beam_id    = "CN-BEAM-0001";
+  update.service_du_index   = uint_to_du_index(0);
+  update.service_cell_index = to_du_cell_index(1);
+  update.service_pci        = pci_t{1};
+  update.service_nci        = make_nci(1);
+  update.has_service_nci    = true;
+  update.service_state      = "service_bound";
+
+  const ntn_slot_resource_update_decision set_decision = manager.update_digital_service_slot_intent(update, plan);
+  ASSERT_EQ(set_decision.action, ntn_slot_resource_update_action::set);
+  ASSERT_TRUE(set_decision.request.has_value());
+  manager.mark_slot_update_applied(ue_index, *set_decision.request);
+  EXPECT_EQ(manager.get_snapshot().nof_digital_slot_applied_by_du, 1U);
+
+  manager.invalidate_ue_slot_audit_for_du(update.service_du_index);
+
+  const std::optional<f1ap_ntn_ul_slot_resource_request> desired = manager.get_cached_slot_request(ue_index);
+  ASSERT_TRUE(desired.has_value());
+  EXPECT_TRUE(are_f1ap_ntn_ul_slot_resource_requests_equal(*desired, *set_decision.request));
+  const ntn_beam_service_resource_snapshot snapshot = manager.get_snapshot();
+  ASSERT_EQ(snapshot.digital_slot_intents.size(), 1U);
+  EXPECT_EQ(snapshot.digital_slot_intents.front().state, "awaiting_reconciliation");
+  EXPECT_EQ(snapshot.digital_slot_intents.front().reason, "du_disconnected");
+  EXPECT_FALSE(snapshot.digital_slot_intents.front().applied_request.has_value());
+  EXPECT_EQ(snapshot.nof_digital_slot_applied_by_du, 0U);
+  EXPECT_EQ(snapshot.nof_digital_slot_active, 1U);
+}
+
+TEST(ntn_beam_service_resource_manager, ue_slot_recovery_sim_runs_reconnect_repair_recheck_and_clear_sequence)
+{
+  ntn_beam_service_resource_manager manager;
+  const ue_index_t                  ue_index = uint_to_ue_index(29);
+  ntn_beam_placement_plan           plan;
+  plan.assignments.push_back(make_loaded_assignment("CN-BEAM-0001", 1, uint_to_du_index(0)));
+  ntn_digital_service_slot_intent_update update;
+  update.ue_index           = ue_index;
+  update.digital_beam_id    = "CN-BEAM-0001";
+  update.service_du_index   = uint_to_du_index(0);
+  update.service_cell_index = to_du_cell_index(1);
+  update.service_pci        = pci_t{1};
+  update.service_nci        = make_nci(1);
+  update.has_service_nci    = true;
+  update.service_state      = "service_bound";
+  ASSERT_EQ(manager.update_digital_service_slot_intent(update, plan).action, ntn_slot_resource_update_action::set);
+
+  ntn_resource_audit_report report;
+  report.du_index                  = uint_to_du_index(0);
+  report.cell_index                = to_du_cell_index(1);
+  report.pci                       = pci_t{1};
+  report.generation_id             = 89U;
+  report.ue_slot_snapshot_complete = true;
+  const ntn_resource_audit_decision first_assignment = manager.handle_resource_audit_report(report);
+  ASSERT_EQ(first_assignment.repairs.size(), 1U);
+  ASSERT_TRUE(first_assignment.repairs.front().slot_request.has_value());
+  const f1ap_ntn_ul_slot_resource_request request = *first_assignment.repairs.front().slot_request;
+  ASSERT_EQ(request.assignment_generation, 1U);
+  manager.mark_slot_update_applied(ue_index, request);
+
+  manager.invalidate_ue_slot_audit_for_du(uint_to_du_index(0));
+  ++report.generation_id;
+  const ntn_resource_audit_decision missing = manager.handle_resource_audit_report(report);
+  ASSERT_EQ(missing.repairs.size(), 1U);
+  ASSERT_TRUE(missing.repairs.front().slot_request.has_value());
+  EXPECT_EQ(missing.repairs.front().action, ntn_resource_repair_action::apply_sr_srs_assignment);
+  EXPECT_EQ(missing.repairs.front().slot_request->assignment_generation, 1U);
+
+  const f1ap_ntn_ul_slot_resource_request repaired_request = *missing.repairs.front().slot_request;
+  manager.mark_slot_update_sent_to_du(ue_index, repaired_request);
+  f1ap_ntn_ul_slot_resource_result applied;
+  applied.accepted              = true;
+  applied.reason                = f1ap_ntn_ul_slot_resource_result_reason::applied;
+  applied.assignment_generation = repaired_request.assignment_generation;
+  applied.operation             = repaired_request.operation;
+  applied.applied_request       = repaired_request;
+  manager.mark_slot_update_result(ue_index, repaired_request, std::nullopt, applied);
+
+  ++report.generation_id;
+  report.ue_slots = {make_observed_slot(ue_index, repaired_request)};
+  const ntn_resource_audit_decision reconciled = manager.handle_resource_audit_report(report);
+  EXPECT_TRUE(reconciled.ue_slot_domain_clean);
+  EXPECT_EQ(reconciled.nof_ue_slot_matched, 1U);
+  EXPECT_TRUE(reconciled.repairs.empty());
+
+  const ue_index_t extra_ue = uint_to_ue_index(30);
+  ++report.generation_id;
+  report.ue_slots.push_back(make_observed_slot(extra_ue, make_versioned_slot_request(4U)));
+  const ntn_resource_audit_decision extra = manager.handle_resource_audit_report(report);
+  ASSERT_EQ(extra.repairs.size(), 1U);
+  EXPECT_EQ(extra.repairs.front().action, ntn_resource_repair_action::clear_unknown_sr_srs_assignment);
+  ASSERT_TRUE(extra.repairs.front().slot_request.has_value());
+  EXPECT_EQ(extra.repairs.front().slot_request->assignment_generation, 5U);
+
+  ++report.generation_id;
+  report.ue_slots.resize(1);
+  EXPECT_TRUE(manager.handle_resource_audit_report(report).ue_slot_domain_clean);
+
+  const ntn_slot_resource_update_decision clear = manager.clear_digital_service_slot_intent(ue_index, "service_end");
+  ASSERT_EQ(clear.action, ntn_slot_resource_update_action::clear);
+  ASSERT_TRUE(clear.request.has_value());
+  f1ap_ntn_ul_slot_resource_result cleared;
+  cleared.accepted              = true;
+  cleared.reason                = f1ap_ntn_ul_slot_resource_result_reason::clear_applied;
+  cleared.assignment_generation = clear.request->assignment_generation;
+  cleared.operation             = clear.request->operation;
+  cleared.applied_request       = *clear.request;
+  manager.mark_slot_update_result(ue_index, *clear.request, clear.previous_request, cleared);
+  EXPECT_EQ(manager.get_snapshot().nof_digital_slot_active, 0U);
+  EXPECT_EQ(manager.get_snapshot().nof_digital_slot_cleared_by_du, 1U);
 }
 
 TEST(ntn_beam_service_resource_manager, repair_lifecycle_tracks_queued_sent_and_applied_states)
@@ -1972,32 +2534,136 @@ TEST(ntn_beam_service_resource_manager, repair_lifecycle_tracks_queued_sent_and_
   EXPECT_EQ(snapshot.nof_resource_repairs_applied, 1U);
 }
 
-TEST(ntn_beam_service_resource_manager, repair_lifecycle_allows_only_one_retry_before_exhaustion)
+TEST(ntn_beam_service_resource_manager, slot_repair_lifecycle_allows_only_one_automatic_attempt)
 {
   ntn_beam_service_resource_manager manager;
 
   ntn_resource_repair repair;
-  repair.action       = ntn_resource_repair_action::clear_unknown_sr_srs_assignment;
-  repair.ue_index     = uint_to_ue_index(7);
-  repair.du_index     = uint_to_du_index(0);
-  repair.cell_index   = to_du_cell_index(1);
-  repair.pci          = pci_t{1};
-  repair.reason       = "du_unknown_sr_srs_assignment";
-  repair.slot_request = f1ap_ntn_ul_slot_resource_request{};
+  repair.action     = ntn_resource_repair_action::clear_unknown_sr_srs_assignment;
+  repair.ue_index   = uint_to_ue_index(7);
+  repair.du_index   = uint_to_du_index(0);
+  repair.cell_index = to_du_cell_index(1);
+  repair.pci        = pci_t{1};
+  repair.reason     = "du_unknown_sr_srs_assignment";
+  f1ap_ntn_ul_slot_resource_request clear_request;
+  clear_request.assignment_generation = 2U;
+  clear_request.operation             = f1ap_ntn_ul_slot_resource_operation::clear;
+  repair.slot_request                 = clear_request;
 
   EXPECT_EQ(manager.queue_resource_repair(repair, 32).state, "queued");
   manager.mark_resource_repair_sent(repair);
   manager.mark_resource_repair_result(repair, false, "du_reject");
-  EXPECT_EQ(manager.queue_resource_repair(repair, 33).retry_count, 1U);
-  manager.mark_resource_repair_sent(repair);
-  manager.mark_resource_repair_result(repair, false, "du_reject_again");
+  EXPECT_EQ(manager.queue_resource_repair(repair, 33).state, "retry_exhausted");
 
   const ntn_beam_service_resource_snapshot snapshot = manager.get_snapshot();
   ASSERT_EQ(snapshot.resource_repairs.size(), 1U);
   EXPECT_EQ(snapshot.resource_repairs.front().state, "retry_exhausted");
-  EXPECT_EQ(snapshot.resource_repairs.front().retry_count, 1U);
-  EXPECT_EQ(snapshot.resource_repairs.front().reason, "du_reject_again");
+  EXPECT_EQ(snapshot.resource_repairs.front().retry_count, 0U);
+  EXPECT_EQ(snapshot.resource_repairs.front().reason, "du_reject");
   EXPECT_EQ(snapshot.nof_resource_repairs_retry_exhausted, 1U);
+
+  ntn_beam_service_resource_manager acknowledged_manager;
+  EXPECT_EQ(acknowledged_manager.queue_resource_repair(repair, 34).state, "queued");
+  acknowledged_manager.mark_resource_repair_sent(repair);
+  acknowledged_manager.mark_resource_repair_result(repair, true, "du_ack");
+  const ntn_resource_repair_record non_converged = acknowledged_manager.queue_resource_repair(repair, 35);
+  EXPECT_EQ(non_converged.state, "retry_exhausted");
+  EXPECT_EQ(non_converged.reason, "slot_repair_did_not_converge");
+}
+
+TEST(ntn_beam_service_resource_manager, du_disconnect_invalidates_inflight_slot_repair_and_ignores_its_late_result)
+{
+  ntn_beam_service_resource_manager manager;
+
+  ntn_resource_repair old_repair;
+  old_repair.action              = ntn_resource_repair_action::apply_sr_srs_assignment;
+  old_repair.ue_index            = uint_to_ue_index(7);
+  old_repair.du_index            = uint_to_du_index(0);
+  old_repair.cell_index          = to_du_cell_index(1);
+  old_repair.pci                 = pci_t{1};
+  old_repair.reason              = "du_missing_sr_srs_assignment";
+  old_repair.audit_generation_id = 32;
+  f1ap_ntn_ul_slot_resource_request set_request;
+  set_request.sr_slot_offset      = 1U;
+  set_request.sr_slot_period      = 10U;
+  set_request.assignment_generation = 2U;
+  set_request.operation             = f1ap_ntn_ul_slot_resource_operation::set;
+  old_repair.slot_request            = set_request;
+
+  EXPECT_EQ(manager.queue_resource_repair(old_repair, old_repair.audit_generation_id).state, "queued");
+  manager.mark_resource_repair_sent(old_repair);
+  manager.invalidate_ue_slot_audit_for_du(old_repair.du_index);
+  ASSERT_EQ(manager.get_snapshot().resource_repairs.size(), 1U);
+  EXPECT_EQ(manager.get_snapshot().resource_repairs.front().state, "invalidated");
+
+  ntn_resource_repair current_repair = old_repair;
+  current_repair.audit_generation_id = 33;
+  EXPECT_EQ(manager.queue_resource_repair(current_repair, current_repair.audit_generation_id).state, "queued");
+
+  manager.mark_resource_repair_result(old_repair, false, "late_old_connection_failure");
+  EXPECT_EQ(manager.get_snapshot().resource_repairs.front().state, "queued");
+
+  manager.mark_resource_repair_sent(current_repair);
+  manager.mark_resource_repair_result(current_repair, true, "du_ack");
+  EXPECT_EQ(manager.get_snapshot().resource_repairs.front().state, "applied");
+}
+
+TEST(ntn_beam_service_resource_manager, new_audit_does_not_rebind_an_inflight_slot_repair_completion)
+{
+  ntn_beam_service_resource_manager manager;
+
+  ntn_resource_repair repair;
+  repair.action              = ntn_resource_repair_action::apply_sr_srs_assignment;
+  repair.ue_index            = uint_to_ue_index(7);
+  repair.du_index            = uint_to_du_index(0);
+  repair.cell_index          = to_du_cell_index(1);
+  repair.pci                 = pci_t{1};
+  repair.reason              = "du_missing_sr_srs_assignment";
+  repair.audit_generation_id = 50;
+  f1ap_ntn_ul_slot_resource_request set_request;
+  set_request.sr_slot_offset         = 1U;
+  set_request.sr_slot_period         = 10U;
+  set_request.assignment_generation = 2U;
+  set_request.operation              = f1ap_ntn_ul_slot_resource_operation::set;
+  repair.slot_request                = set_request;
+
+  EXPECT_EQ(manager.queue_resource_repair(repair, repair.audit_generation_id).state, "queued");
+  manager.mark_resource_repair_sent(repair);
+  EXPECT_EQ(manager.queue_resource_repair(repair, 51).state, "sent");
+  ASSERT_EQ(manager.get_snapshot().resource_repairs.size(), 1U);
+  EXPECT_EQ(manager.get_snapshot().resource_repairs.front().generation_id, repair.audit_generation_id);
+
+  manager.mark_resource_repair_result(repair, true, "du_ack");
+  EXPECT_EQ(manager.get_snapshot().resource_repairs.front().state, "applied");
+}
+
+TEST(ntn_beam_service_resource_manager, ue_removal_drops_slot_repair_history_before_index_reuse)
+{
+  ntn_beam_service_resource_manager manager;
+
+  ntn_resource_repair repair;
+  repair.action              = ntn_resource_repair_action::clear_unknown_sr_srs_assignment;
+  repair.ue_index            = uint_to_ue_index(7);
+  repair.du_index            = uint_to_du_index(0);
+  repair.cell_index          = to_du_cell_index(1);
+  repair.pci                 = pci_t{1};
+  repair.reason              = "du_unknown_sr_srs_assignment";
+  repair.audit_generation_id = 40;
+  f1ap_ntn_ul_slot_resource_request clear_request;
+  clear_request.assignment_generation = 2U;
+  clear_request.operation             = f1ap_ntn_ul_slot_resource_operation::clear;
+  repair.slot_request                 = clear_request;
+
+  EXPECT_EQ(manager.queue_resource_repair(repair, repair.audit_generation_id).state, "queued");
+  manager.mark_resource_repair_sent(repair);
+  manager.mark_resource_repair_result(repair, true, "du_ack");
+  ASSERT_EQ(manager.get_snapshot().resource_repairs.size(), 1U);
+
+  manager.remove_ue(repair.ue_index);
+  EXPECT_TRUE(manager.get_snapshot().resource_repairs.empty());
+
+  repair.audit_generation_id = 41;
+  EXPECT_EQ(manager.queue_resource_repair(repair, repair.audit_generation_id).state, "queued");
 }
 
 TEST(ntn_beam_service_resource_manager, exhausted_or_conflict_repair_blocks_new_ntn_demand)
@@ -2006,26 +2672,24 @@ TEST(ntn_beam_service_resource_manager, exhausted_or_conflict_repair_blocks_new_
   EXPECT_FALSE(manager.has_blocking_resource_repair());
 
   ntn_resource_repair repair;
-  repair.action       = ntn_resource_repair_action::clear_unknown_sr_srs_assignment;
-  repair.ue_index     = uint_to_ue_index(7);
-  repair.du_index     = uint_to_du_index(0);
-  repair.cell_index   = to_du_cell_index(1);
-  repair.pci          = pci_t{1};
-  repair.reason       = "du_unknown_sr_srs_assignment";
-  repair.slot_request = f1ap_ntn_ul_slot_resource_request{};
+  repair.action     = ntn_resource_repair_action::clear_unknown_sr_srs_assignment;
+  repair.ue_index   = uint_to_ue_index(7);
+  repair.du_index   = uint_to_du_index(0);
+  repair.cell_index = to_du_cell_index(1);
+  repair.pci        = pci_t{1};
+  repair.reason     = "du_unknown_sr_srs_assignment";
+  f1ap_ntn_ul_slot_resource_request clear_request;
+  clear_request.assignment_generation = 2U;
+  clear_request.operation             = f1ap_ntn_ul_slot_resource_operation::clear;
+  repair.slot_request                 = clear_request;
 
   manager.queue_resource_repair(repair, 40);
   manager.mark_resource_repair_sent(repair);
   manager.mark_resource_repair_result(repair, false, "du_reject");
-  EXPECT_FALSE(manager.has_blocking_resource_repair());
-
-  manager.queue_resource_repair(repair, 41);
-  manager.mark_resource_repair_sent(repair);
-  manager.mark_resource_repair_result(repair, false, "du_reject_again");
   EXPECT_TRUE(manager.has_blocking_resource_repair());
 
   ntn_beam_service_resource_manager conflict_manager;
-  ntn_resource_repair conflict;
+  ntn_resource_repair               conflict;
   conflict.action = ntn_resource_repair_action::mark_resource_conflict;
   conflict.reason = "committed_rnti_mismatch";
   conflict_manager.queue_resource_repair(conflict, 42);

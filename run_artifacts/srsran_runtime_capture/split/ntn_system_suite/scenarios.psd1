@@ -51,6 +51,18 @@
     Required    = $true
   }
 
+  ntn_ue_slot_recovery_sim = @{
+    Type        = "ctest_filter"
+    Purpose     = "Simulated SR/SRS assignment, DU-applied snapshot, disconnect, current-connection reconciliation, bounded repair, and final clear"
+    BuildTarget = @("ntn_mobility_test", "cu_cp_test", "du_manager_procedure_test")
+    RegexGroups = @(
+      "ntn_beam_service_resource_manager.*(ue_slot_recovery_sim|complete_empty_snapshot|exact_generation_snapshot|complete_snapshot_recovers_du_adjusted|du_only_current_ue_slot|du_disconnect_preserves_desired_slot)",
+      "cu_cp_ntn_mobility_test\.ue_slot_(audit|repair)_.*",
+      "du_manager_ntn_rnti_lease_test\.(authoritative_audit|incomplete_rnti_domain)_.*"
+    )
+    Required    = $true
+  }
+
   ntn_nrppa_sim = @{
     Type        = "ctest_filter"
     Purpose     = "Simulated NRPPa transport, TRP information, positioning information, measurement, activation, and assistance-control coverage"

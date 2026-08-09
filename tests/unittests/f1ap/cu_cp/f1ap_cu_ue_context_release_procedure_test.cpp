@@ -58,3 +58,28 @@ TEST_F(f1ap_cu_test, when_ue_release_command_received_then_procedure_succeeds)
   ASSERT_TRUE(t.ready());
   ASSERT_EQ(t.get(), ue_index_t::min);
 }
+
+TEST_F(f1ap_cu_test, f1_ue_identity_lookup_rejects_context_marked_for_release)
+{
+  const gnb_du_ue_f1ap_id_t du_ue_id = int_to_gnb_du_ue_f1ap_id(41255);
+  const test_ue&             ue       = create_ue(du_ue_id);
+
+  const std::optional<f1ap_ue_identity> identity = f1ap->get_ue_identity(ue.ue_index);
+  ASSERT_TRUE(identity.has_value());
+
+  f1ap_ue_context_release_command release_command;
+  release_command.ue_index = ue.ue_index;
+  release_command.cause    = f1ap_cause_radio_network_t::unspecified;
+
+  async_task<ue_index_t>         release_task = f1ap->handle_ue_context_release_command(release_command);
+  lazy_task_launcher<ue_index_t> release_launcher(release_task);
+  ASSERT_FALSE(release_task.ready());
+
+  EXPECT_FALSE(f1ap->get_ue_identity(ue.ue_index).has_value());
+  EXPECT_FALSE(f1ap->resolve_ue_identity(identity->cu_ue_f1ap_id, identity->du_ue_f1ap_id).has_value());
+
+  f1ap->handle_message(
+      test_helpers::generate_ue_context_release_complete(identity->cu_ue_f1ap_id, identity->du_ue_f1ap_id));
+  ASSERT_TRUE(release_task.ready());
+  EXPECT_EQ(release_task.get(), ue.ue_index);
+}

@@ -1398,6 +1398,16 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_service_area_paging_counters)
   command_handler.ntn.runtime.nof_ntn_resource_audit_rnti_incomplete    = 200;
   command_handler.ntn.runtime.nof_ntn_resource_audit_ue_slot_incomplete = 201;
   command_handler.ntn.runtime.last_ntn_resource_audit_reason             = "ue_slot_snapshot_incomplete";
+  command_handler.ntn.runtime.ue_slot_audit_stage                         = "awaiting_complete_snapshot";
+  command_handler.ntn.runtime.nof_ue_slot_audit_matched                   = 11;
+  command_handler.ntn.runtime.nof_ue_slot_audit_missing                   = 12;
+  command_handler.ntn.runtime.nof_ue_slot_audit_conflict                  = 13;
+  command_handler.ntn.runtime.nof_ue_slot_audit_quarantined               = 14;
+  command_handler.ntn.runtime.nof_ue_slot_audit_repaired                  = 15;
+  command_handler.ntn.runtime.ue_slot_assignment_generation_high_water    = 16;
+  command_handler.ntn.runtime.last_ue_slot_audit_reason                   = "differences_pending_repair";
+  command_handler.ntn.runtime.ue_slot_audit_du_statuses.push_back(
+      {srsran::srs_cu_cp::uint_to_du_index(2), "supported", "reconciled", true, 7, 0, 0, 0, 2, 16, "reconciled"});
   command_handler.ntn.runtime.ntn_rnti_retirement_capability                 = "supported";
   command_handler.ntn.runtime.ntn_rnti_generation_high_water                 = 202;
   command_handler.ntn.runtime.nof_ntn_rnti_retire_pending                    = 5;
@@ -1611,6 +1621,13 @@ TEST(cu_cp_unit_config, ntn_state_command_prints_service_area_paging_counters)
             std::string::npos);
   ASSERT_NE(output.find("NTN resource audit: generation=194 queries=195 accepted=196 mismatches=197 repairs=198 "
                         "failures=199 rnti_incomplete=200 ue_slot_incomplete=201 reason=ue_slot_snapshot_incomplete"),
+            std::string::npos);
+  ASSERT_NE(output.find("NTN UE slot audit: stage=awaiting_complete_snapshot matched=11 missing=12 conflicts=13 "
+                        "quarantined=14 repaired=15 assignment_generation_high_water=16 "
+                        "reason=differences_pending_repair"),
+            std::string::npos);
+  ASSERT_NE(output.find("NTN UE slot audit DU: du=2 capability=supported stage=reconciled complete=true matched=7 "
+                        "missing=0 conflicts=0 quarantined=0 repaired=2 generation_high_water=16 reason=reconciled"),
             std::string::npos);
   ASSERT_NE(output.find("NTN RNTI retirement: capability=supported generation_high_water=202 unsupported=8 "
                         "namespace_exhausted=9 generation_exhausted=10 reason=retirement_confirmed_by_du"),

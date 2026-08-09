@@ -6,6 +6,7 @@ param(
     "ntn_paging_sim",
     "ntn_resource_repair_sim",
     "ntn_rnti_retirement_sim",
+    "ntn_ue_slot_recovery_sim",
     "ntn_cli_observability_sim"
   ),
   [ValidateSet("live", "sim", "all")]

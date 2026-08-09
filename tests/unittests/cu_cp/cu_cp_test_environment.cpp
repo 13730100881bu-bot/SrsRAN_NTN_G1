@@ -33,6 +33,7 @@
 #include "srsran/asn1/f1ap/common.h"
 #include "srsran/asn1/f1ap/f1ap_pdu_contents.h"
 #include "srsran/asn1/f1ap/f1ap_pdu_contents_ue.h"
+#include <algorithm>
 #include "srsran/asn1/ngap/ngap_pdu_contents.h"
 #include "srsran/asn1/rrc_nr/dl_ccch_msg.h"
 #include "srsran/asn1/rrc_nr/ul_dcch_msg_ies.h"
@@ -142,9 +143,13 @@ static f1ap_message make_gnb_du_resource_coordination_response(
     bool                                                      ntn_resource_audit_rnti_snapshot_complete,
     bool                                                      ntn_resource_audit_retirement_supported,
     bool                                                      ntn_resource_audit_legacy_only,
+    bool                                                      ntn_resource_audit_ue_slot_identity_supported,
+    bool                                                      ntn_resource_audit_ue_slot_snapshot_complete,
     bool                                                      ntn_rnti_retirement_rejects,
     uint32_t&                                                 ntn_resource_audit_rnti_generation_high_water,
+    uint32_t&                                                 ntn_resource_audit_ue_slot_generation_high_water,
     std::vector<f1ap_ntn_resource_audit_rnti_lease>&          ntn_resource_audit_rnti_leases,
+    std::vector<f1ap_ntn_resource_audit_ue_slot>&             ntn_resource_audit_ue_slots,
     std::array<uint16_t, 2>&                                  last_ntn_calendar_intents_per_cell,
     std::array<f1ap_ntn_access_calendar_preflight_report, 2>& last_ntn_calendar_preflight_reports,
     unsigned&                                                 ntn_calendar_clear_requests)
@@ -259,7 +264,8 @@ static f1ap_message make_gnb_du_resource_coordination_response(
     result.reject_reason = sib19_update->operation == f1ap_ntn_sib19_broadcast_operation::clear ? "cleared" : "applied";
     response_container   = encode_f1ap_ntn_sib19_broadcast_result(result);
   } else if (audit_request.has_value()) {
-    if (audit_request->request_retirement_metadata && ntn_resource_audit_legacy_only) {
+    if ((audit_request->request_ue_slot_identity || audit_request->request_retirement_metadata) &&
+        ntn_resource_audit_legacy_only) {
       f1ap_ntn_rnti_lease_pool_result result;
       result.accepted      = false;
       result.reject_reason = "malformed_ntn_rnti_lease_pool_update";
@@ -269,11 +275,34 @@ static f1ap_message make_gnb_du_resource_coordination_response(
       result.generation_id               = audit_request->generation_id;
       result.accepted                    = !ntn_resource_audit_rejects;
       result.rnti_snapshot_complete      = ntn_resource_audit_rnti_snapshot_complete;
-      result.ue_slot_snapshot_complete   = false;
+      result.ue_slot_snapshot_complete   = audit_request->request_ue_slot_identity &&
+                                           ntn_resource_audit_ue_slot_identity_supported &&
+                                           ntn_resource_audit_ue_slot_snapshot_complete;
       result.retirement_metadata_present = audit_request->request_retirement_metadata;
       result.retire_supported = audit_request->request_retirement_metadata && ntn_resource_audit_retirement_supported;
       result.rnti_generation_high_water = ntn_resource_audit_rnti_generation_high_water;
       result.rnti_leases                = ntn_resource_audit_rnti_leases;
+      if (audit_request->request_ue_slot_identity) {
+        result.ue_slot_identity_metadata_present = true;
+        result.ue_slot_identity_supported        = ntn_resource_audit_ue_slot_identity_supported;
+        result.gnb_du_id                         = audit_request->gnb_du_id;
+        result.du_index                          = audit_request->du_index;
+        result.cell_index                        = audit_request->cell_index;
+        result.cell_cgi                          = audit_request->cell_cgi;
+        result.pci                               = audit_request->pci;
+        result.connection_token                  = audit_request->connection_token;
+        result.ue_slot_assignment_generation_high_water =
+            ntn_resource_audit_ue_slot_generation_high_water;
+        result.ue_slots = ntn_resource_audit_ue_slots;
+        for (f1ap_ntn_resource_audit_ue_slot& slot : result.ue_slots) {
+          // The mock ledger stores UE identity and the applied resources. Cell identity is bound to the
+          // connection-scoped audit target, just as the real DU manager does when it joins its resource registry
+          // with the current F1 UE context.
+          slot.cell_index = audit_request->cell_index;
+          slot.cell_cgi   = audit_request->cell_cgi;
+          slot.pci        = audit_request->pci;
+        }
+      }
       result.reject_reason = ntn_resource_audit_rejects                  ? "rejected_by_mock_du"
                              : ntn_resource_audit_rnti_snapshot_complete ? "accepted_by_mock_du"
                                                                          : "snapshot_unavailable_in_mock_du";
@@ -307,7 +336,9 @@ cu_cp_test_environment::cu_cp_test_environment(cu_cp_test_env_params params_) :
     last_ntn_calendar_preflight_reports = *params.ntn_recovered_calendar_preflight_reports;
   }
   ntn_resource_audit_rnti_generation_high_water = params.ntn_resource_audit_rnti_generation_high_water;
+  ntn_resource_audit_ue_slot_generation_high_water = params.ntn_resource_audit_ue_slot_generation_high_water;
   ntn_resource_audit_rnti_leases                = params.ntn_resource_audit_rnti_leases;
+  ntn_resource_audit_ue_slots                   = params.ntn_resource_audit_ue_slots;
   // Initialize logging
   test_logger.set_level(srslog::basic_levels::debug);
   cu_cp_logger.set_level(srslog::basic_levels::debug);
@@ -580,9 +611,13 @@ bool cu_cp_test_environment::wait_for_f1ap_tx_pdu(unsigned du_idx, f1ap_message&
                                                        params.ntn_resource_audit_rnti_snapshot_complete,
                                                        params.ntn_resource_audit_retirement_supported,
                                                        params.ntn_resource_audit_legacy_only,
+                                                       params.ntn_resource_audit_ue_slot_identity_supported,
+                                                       params.ntn_resource_audit_ue_slot_snapshot_complete,
                                                        params.ntn_rnti_retirement_rejects,
                                                        ntn_resource_audit_rnti_generation_high_water,
+                                                       ntn_resource_audit_ue_slot_generation_high_water,
                                                        ntn_resource_audit_rnti_leases,
+                                                       ntn_resource_audit_ue_slots,
                                                        last_ntn_calendar_intents_per_cell,
                                                        last_ntn_calendar_preflight_reports,
                                                        ntn_calendar_clear_requests));
@@ -628,9 +663,13 @@ void cu_cp_test_environment::respond_to_f1ap_resource_coordination_request(unsig
                                                                       params.ntn_resource_audit_rnti_snapshot_complete,
                                                                       params.ntn_resource_audit_retirement_supported,
                                                                       params.ntn_resource_audit_legacy_only,
+                                                                      params.ntn_resource_audit_ue_slot_identity_supported,
+                                                                      params.ntn_resource_audit_ue_slot_snapshot_complete,
                                                                       params.ntn_rnti_retirement_rejects,
                                                                       ntn_resource_audit_rnti_generation_high_water,
+                                                                      ntn_resource_audit_ue_slot_generation_high_water,
                                                                       ntn_resource_audit_rnti_leases,
+                                                                      ntn_resource_audit_ue_slots,
                                                                       last_ntn_calendar_intents_per_cell,
                                                                       last_ntn_calendar_preflight_reports,
                                                                       ntn_calendar_clear_requests));
@@ -654,9 +693,13 @@ void cu_cp_test_environment::apply_f1ap_resource_coordination_request_without_re
                                                    params.ntn_resource_audit_rnti_snapshot_complete,
                                                    params.ntn_resource_audit_retirement_supported,
                                                    params.ntn_resource_audit_legacy_only,
+                                                   params.ntn_resource_audit_ue_slot_identity_supported,
+                                                   params.ntn_resource_audit_ue_slot_snapshot_complete,
                                                    params.ntn_rnti_retirement_rejects,
                                                    ntn_resource_audit_rnti_generation_high_water,
+                                                   ntn_resource_audit_ue_slot_generation_high_water,
                                                    ntn_resource_audit_rnti_leases,
+                                                   ntn_resource_audit_ue_slots,
                                                    last_ntn_calendar_intents_per_cell,
                                                    last_ntn_calendar_preflight_reports,
                                                    ntn_calendar_clear_requests);
@@ -689,9 +732,13 @@ void cu_cp_test_environment::drain_f1ap_resource_coordination_requests(unsigned 
                                                        params.ntn_resource_audit_rnti_snapshot_complete,
                                                        params.ntn_resource_audit_retirement_supported,
                                                        params.ntn_resource_audit_legacy_only,
+                                                       params.ntn_resource_audit_ue_slot_identity_supported,
+                                                       params.ntn_resource_audit_ue_slot_snapshot_complete,
                                                        params.ntn_rnti_retirement_rejects,
                                                        ntn_resource_audit_rnti_generation_high_water,
+                                                       ntn_resource_audit_ue_slot_generation_high_water,
                                                        ntn_resource_audit_rnti_leases,
+                                                       ntn_resource_audit_ue_slots,
                                                        last_ntn_calendar_intents_per_cell,
                                                        last_ntn_calendar_preflight_reports,
                                                        ntn_calendar_clear_requests));
@@ -718,8 +765,45 @@ void cu_cp_test_environment::record_last_ntn_ul_slot_request(unsigned du_idx, co
     return;
   }
 
-  last_ntn_ul_slot_request_by_du.emplace(
-      du_idx, decode_f1ap_ntn_ul_slot_resource_request(mod_req->res_coordination_transfer_container));
+  std::optional<f1ap_ntn_ul_slot_resource_request> request =
+      decode_f1ap_ntn_ul_slot_resource_request(mod_req->res_coordination_transfer_container);
+  last_ntn_ul_slot_request_by_du.emplace(du_idx, request);
+
+  if (!request.has_value() || !is_versioned(*request)) {
+    return;
+  }
+
+  const gnb_cu_ue_f1ap_id_t cu_ue_id = int_to_gnb_cu_ue_f1ap_id(mod_req->gnb_cu_ue_f1ap_id);
+  const gnb_du_ue_f1ap_id_t du_ue_id = int_to_gnb_du_ue_f1ap_id(mod_req->gnb_du_ue_f1ap_id);
+  const ue_context*         ue        = find_ue_context(du_idx, du_ue_id);
+  if (ue == nullptr || !ue->cu_ue_id.has_value() || *ue->cu_ue_id != cu_ue_id) {
+    return;
+  }
+
+  ntn_resource_audit_ue_slot_generation_high_water =
+      std::max(ntn_resource_audit_ue_slot_generation_high_water, request->assignment_generation);
+  ntn_resource_audit_ue_slots.erase(
+      std::remove_if(ntn_resource_audit_ue_slots.begin(),
+                     ntn_resource_audit_ue_slots.end(),
+                     [cu_ue_id, du_ue_id](const f1ap_ntn_resource_audit_ue_slot& slot) {
+                       return slot.gnb_cu_ue_f1ap_id == cu_ue_id || slot.gnb_du_ue_f1ap_id == du_ue_id;
+                     }),
+      ntn_resource_audit_ue_slots.end());
+
+  if (request->operation != f1ap_ntn_ul_slot_resource_operation::set) {
+    return;
+  }
+
+  f1ap_ntn_resource_audit_ue_slot applied;
+  applied.identity_present      = true;
+  applied.gnb_cu_ue_f1ap_id     = cu_ue_id;
+  applied.gnb_du_ue_f1ap_id     = du_ue_id;
+  applied.c_rnti                = ue->crnti;
+  applied.assignment_generation = request->assignment_generation;
+  applied.state                 = "applied_by_du";
+  applied.request               = *request;
+  applied.request.requested_c_rnti.reset();
+  ntn_resource_audit_ue_slots.push_back(std::move(applied));
 }
 
 std::optional<f1ap_ntn_ul_slot_resource_result>

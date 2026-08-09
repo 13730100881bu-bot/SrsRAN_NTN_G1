@@ -245,6 +245,34 @@ TEST_F(ue_config_tester, when_du_manager_completes_ue_configuration_procedure_th
   ASSERT_NO_FATAL_FAILURE(check_du_to_cu_rrc_container(req, resp.cell_group_cfg, nullptr, true));
 }
 
+TEST_F(ue_config_tester,
+       when_mac_rejects_versioned_ntn_slot_update_then_the_authoritative_snapshot_is_not_completed)
+{
+  f1ap_ue_context_update_request req = create_f1ap_ue_context_update_request(test_ue->ue_index, {}, {});
+  req.ntn_ul_slot_request.emplace();
+  req.ntn_ul_slot_request->operation             = f1ap_ntn_ul_slot_resource_operation::set;
+  req.ntn_ul_slot_request->assignment_generation = 1;
+  req.ntn_ul_slot_request->sr_slot_offset        = 3U;
+  req.ntn_ul_slot_request->sr_slot_period        = 10U;
+  req.ntn_ul_slot_request->srs_slot_offset       = 7U;
+  req.ntn_ul_slot_request->srs_slot_period       = 10U;
+
+  start_procedure(req);
+  ASSERT_FALSE(proc.ready());
+  EXPECT_TRUE(cell_res_alloc.versioned_slot_update_pending);
+  EXPECT_FALSE(cell_res_alloc.versioned_slot_snapshot_complete);
+  EXPECT_FALSE(cell_res_alloc.last_update_completed.has_value());
+
+  mac_finishes_ue_config(test_ue->ue_index, false);
+
+  ASSERT_TRUE(proc.ready());
+  EXPECT_FALSE(proc.get().result);
+  ASSERT_TRUE(cell_res_alloc.last_update_completed.has_value());
+  EXPECT_FALSE(*cell_res_alloc.last_update_completed);
+  EXPECT_FALSE(cell_res_alloc.versioned_slot_update_pending);
+  EXPECT_FALSE(cell_res_alloc.versioned_slot_snapshot_complete);
+}
+
 TEST_F(ue_config_tester, when_du_manager_finishes_processing_ue_config_request_then_mac_rlc_f1c_bearers_are_connected)
 {
   static const std::array<uint8_t, 2> dummy_rlc_header = {0x80, 0x0};

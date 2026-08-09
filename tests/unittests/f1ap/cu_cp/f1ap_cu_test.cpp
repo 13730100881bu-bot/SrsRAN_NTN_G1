@@ -185,6 +185,39 @@ TEST_F(f1ap_cu_test, when_init_ul_rrc_correct_then_ue_added)
   EXPECT_EQ(f1ap->get_nof_ues(), 1);
 }
 
+TEST_F(f1ap_cu_test, exact_f1_ue_identity_can_be_looked_up_in_both_directions)
+{
+  const gnb_du_ue_f1ap_id_t du_ue_id = int_to_gnb_du_ue_f1ap_id(41255);
+  const test_ue&             ue       = create_ue(du_ue_id);
+
+  const std::optional<f1ap_ue_identity> identity = f1ap->get_ue_identity(ue.ue_index);
+  ASSERT_TRUE(identity.has_value());
+  EXPECT_EQ(identity->ue_index, ue.ue_index);
+  EXPECT_EQ(identity->du_ue_f1ap_id, du_ue_id);
+
+  const std::optional<ue_index_t> resolved_ue =
+      f1ap->resolve_ue_identity(identity->cu_ue_f1ap_id, identity->du_ue_f1ap_id);
+  ASSERT_TRUE(resolved_ue.has_value());
+  EXPECT_EQ(*resolved_ue, ue.ue_index);
+}
+
+TEST_F(f1ap_cu_test, f1_ue_identity_lookup_rejects_invalid_and_unpaired_ids)
+{
+  const ue_index_t first_ue_index = create_ue(int_to_gnb_du_ue_f1ap_id(41255)).ue_index;
+  const ue_index_t second_ue_index = create_ue(int_to_gnb_du_ue_f1ap_id(41256)).ue_index;
+
+  const std::optional<f1ap_ue_identity> first_identity  = f1ap->get_ue_identity(first_ue_index);
+  const std::optional<f1ap_ue_identity> second_identity = f1ap->get_ue_identity(second_ue_index);
+  ASSERT_TRUE(first_identity.has_value());
+  ASSERT_TRUE(second_identity.has_value());
+
+  EXPECT_FALSE(f1ap->resolve_ue_identity(gnb_cu_ue_f1ap_id_t::invalid, first_identity->du_ue_f1ap_id).has_value());
+  EXPECT_FALSE(f1ap->resolve_ue_identity(first_identity->cu_ue_f1ap_id, gnb_du_ue_f1ap_id_t::invalid).has_value());
+  EXPECT_FALSE(
+      f1ap->resolve_ue_identity(first_identity->cu_ue_f1ap_id, second_identity->du_ue_f1ap_id).has_value());
+  EXPECT_FALSE(f1ap->get_ue_identity(ue_index_t::invalid).has_value());
+}
+
 TEST_F(f1ap_cu_test, when_cgi_invalid_then_ue_not_added)
 {
   // Generate F1 Initial UL RRC Message

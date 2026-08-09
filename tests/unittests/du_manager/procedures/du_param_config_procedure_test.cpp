@@ -134,6 +134,18 @@ static f1ap_ntn_resource_audit_request make_ntn_resource_audit_request(const du_
   return request;
 }
 
+static f1ap_ntn_resource_audit_request make_authoritative_ntn_resource_audit_request(const du_cell_config& cell)
+{
+  f1ap_ntn_resource_audit_request request = make_ntn_resource_audit_request(cell);
+  request.du_index                        = srs_cu_cp::uint_to_du_index(0);
+  request.gnb_du_id                       = int_to_gnb_du_id(1);
+  request.cell_cgi                        = cell.nr_cgi;
+  request.connection_token                = 0x1234U;
+  request.request_retirement_metadata     = true;
+  request.request_ue_slot_identity        = true;
+  return request;
+}
+
 class du_manager_ntn_rnti_lease_test : public du_manager_procedure_tester, public ::testing::Test
 {};
 
@@ -236,7 +248,72 @@ TEST_F(du_manager_ntn_rnti_lease_test, when_mac_snapshot_is_incomplete_then_audi
   EXPECT_TRUE(result.ue_slots.empty());
 }
 
-TEST_F(du_manager_ntn_rnti_lease_test, when_complete_mac_snapshot_targets_another_cell_then_audit_is_rejected)
+TEST_F(du_manager_ntn_rnti_lease_test, authoritative_audit_returns_complete_empty_ue_slot_snapshot)
+{
+  mac_ntn_rnti_lease_pool_snapshot& rnti_snapshot = dependencies.mac.next_ntn_rnti_lease_pool_snapshot;
+  rnti_snapshot.cell_index                         = to_du_cell_index(0);
+  rnti_snapshot.complete                           = true;
+  rnti_snapshot.retirement_supported               = true;
+  const f1ap_ntn_resource_audit_request request = make_authoritative_ntn_resource_audit_request(cell_cfgs[0]);
+
+  async_task<f1ap_ntn_resource_audit_result> audit_task = du_mng->handle_ntn_resource_audit_request(request);
+  lazy_task_launcher<f1ap_ntn_resource_audit_result> task(audit_task);
+
+  ASSERT_TRUE(task.ready());
+  const f1ap_ntn_resource_audit_result result = task.get();
+  EXPECT_TRUE(result.accepted);
+  EXPECT_TRUE(result.rnti_snapshot_complete);
+  EXPECT_TRUE(result.ue_slot_identity_metadata_present);
+  EXPECT_TRUE(result.ue_slot_identity_supported);
+  EXPECT_TRUE(result.ue_slot_snapshot_complete);
+  EXPECT_TRUE(result.ue_slots.empty());
+  EXPECT_EQ(result.gnb_du_id, request.gnb_du_id);
+  EXPECT_EQ(result.du_index, request.du_index);
+  EXPECT_EQ(result.cell_index, request.cell_index);
+  EXPECT_EQ(result.cell_cgi, request.cell_cgi);
+  EXPECT_EQ(result.pci, request.pci);
+  EXPECT_EQ(result.connection_token, request.connection_token);
+  EXPECT_EQ(result.reject_reason, "none");
+}
+
+TEST_F(du_manager_ntn_rnti_lease_test, incomplete_rnti_domain_does_not_hide_complete_ue_slot_snapshot)
+{
+  mac_ntn_rnti_lease_pool_snapshot& rnti_snapshot = dependencies.mac.next_ntn_rnti_lease_pool_snapshot;
+  rnti_snapshot.cell_index                         = to_du_cell_index(0);
+  rnti_snapshot.complete                           = false;
+  const f1ap_ntn_resource_audit_request request = make_authoritative_ntn_resource_audit_request(cell_cfgs[0]);
+
+  async_task<f1ap_ntn_resource_audit_result> audit_task = du_mng->handle_ntn_resource_audit_request(request);
+  lazy_task_launcher<f1ap_ntn_resource_audit_result> task(audit_task);
+
+  ASSERT_TRUE(task.ready());
+  const f1ap_ntn_resource_audit_result result = task.get();
+  EXPECT_TRUE(result.accepted);
+  EXPECT_FALSE(result.rnti_snapshot_complete);
+  EXPECT_TRUE(result.ue_slot_snapshot_complete);
+  EXPECT_TRUE(result.ue_slots.empty());
+  EXPECT_EQ(result.reject_reason, "rnti_snapshot_incomplete");
+}
+
+TEST_F(du_manager_ntn_rnti_lease_test, authoritative_audit_rejects_invalid_connection_identity_before_snapshot)
+{
+  f1ap_ntn_resource_audit_request request = make_authoritative_ntn_resource_audit_request(cell_cfgs[0]);
+  request.connection_token                = 0;
+
+  async_task<f1ap_ntn_resource_audit_result> audit_task = du_mng->handle_ntn_resource_audit_request(request);
+  lazy_task_launcher<f1ap_ntn_resource_audit_result> task(audit_task);
+
+  ASSERT_TRUE(task.ready());
+  const f1ap_ntn_resource_audit_result result = task.get();
+  EXPECT_FALSE(result.accepted);
+  EXPECT_FALSE(result.rnti_snapshot_complete);
+  EXPECT_FALSE(result.ue_slot_snapshot_complete);
+  EXPECT_EQ(result.reject_reason, "invalid_connection_token");
+  EXPECT_FALSE(dependencies.mac.last_ntn_rnti_lease_pool_snapshot_cell.has_value());
+}
+
+TEST_F(du_manager_ntn_rnti_lease_test,
+       when_complete_mac_snapshot_targets_another_cell_only_the_rnti_domain_is_rejected)
 {
   mac_ntn_rnti_lease_pool_snapshot& snapshot    = dependencies.mac.next_ntn_rnti_lease_pool_snapshot;
   snapshot.cell_index                           = to_du_cell_index(1);
@@ -248,7 +325,7 @@ TEST_F(du_manager_ntn_rnti_lease_test, when_complete_mac_snapshot_targets_anothe
 
   ASSERT_TRUE(task.ready());
   const f1ap_ntn_resource_audit_result result = task.get();
-  EXPECT_FALSE(result.accepted);
+  EXPECT_TRUE(result.accepted);
   EXPECT_FALSE(result.rnti_snapshot_complete);
   EXPECT_EQ(result.reject_reason, "snapshot_cell_mismatch");
   EXPECT_TRUE(result.rnti_leases.empty());
