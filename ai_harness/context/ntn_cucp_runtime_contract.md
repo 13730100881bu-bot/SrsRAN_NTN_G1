@@ -256,6 +256,18 @@ snapshot is eligible for resend. Leases already consumed by DU, seen on Initial
 UL, committed or expired are terminal for resend purposes; conflict-free
 low-water refill creates a new lease instead of resurrecting an old C-RNTI.
 
+CUCP-049 completes this lifecycle with safe retirement. A released or expired
+C-RNTI enters `retire_pending`, then `retire_sent`, and becomes `retired` only
+after a complete snapshot from the current DU connection reports the same
+generation as expired and MAC atomically confirms that every number in the
+batch is unused. MAC keeps compact generation history after retirement: a
+duplicate retire is idempotent, an older add or retire is rejected, and reuse
+requires a strictly larger generation. Restart and reconnect quarantine unknown
+DU records and require a fresh complete snapshot. An old DU without retirement
+capability may continue the earlier pool flow, but uncertain retired values
+remain unavailable. Allocation scans `0x4601..0xffef` per DU and publishes no
+partial pool when eight safe values cannot be found.
+
 The MAC terrestrial allocator and NTN ledger use the same lock and
 `allocate_for_cell` chooses the mode inside that lock. Every tracked NTN RNTI is
 excluded from terrestrial allocation. A returned terrestrial TC-RNTI is
@@ -266,23 +278,78 @@ RNTI sequence and functional behavior remain unchanged; once NTN is active it
 becomes the allocation guard. This does add synchronization overhead to the
 allocator and is not a performance-equivalence claim.
 
-The UE-slot domain currently reports incomplete. The present DU state does not
-provide a reliable mapping from every local slot assignment to CU-global
-`ue_index_t`, so an empty UE-slot list cannot authorize apply/clear repair.
-When an SR/SRS repair succeeds, CU-CP caches the DU result's
-`applied_request` (falling back to the request only when absent), so a DU-adjusted
-offset or period does not create a repeated false mismatch.
+CUCP-050 makes the UE-slot domain authoritative on a supported current
+connection. A versioned SR/SRS request carries a nonzero
+`assignment_generation` and an explicit `set` or `clear` operation. An exact
+retry keeps its generation. A resource-content change, a clear, or a new
+assignment after clear advances the generation. DU returns
+`assignment_generation_conflict` for the same generation with different
+content, `stale_assignment_generation` for an older generation and
+`slot_assignment_generation_exhausted` when a next generation cannot be
+represented.
 
-This snapshot is MAC/DU software-state evidence. It is not proof of RAR
-transmission, raw PRACH detection, trusted Initial UL position metadata, or
-PHY/RU/RF execution. Complete snapshot lookup is indexed rather than quadratic,
-but no endurance test has been run. The read-only `ntn_state` output exposes
-consumed leases, audit generation/counters, per-domain incomplete counts and the
-latest audit reason. The audit request
-still lacks stable NCI and DU connection-epoch binding, and the flow is not yet
-protected by sender authentication, freshness or anti-replay. Terminal-history
-garbage collection and a durable C-RNTI reuse policy also remain follow-up work;
-without them, long-duration namespace exhaustion is not closed.
+DU stages the request and publishes an active entry only after resource
+allocation and the MAC/scheduler configuration transaction both succeed. Its
+registry records the actual SR/SRS parameters rather than the requested
+parameters. A successful clear or UE removal removes the active entry, while
+the generation high-water remains until the related context is destroyed. The
+per-cell snapshot is
+bounded to `MAX_NOF_DU_UES` (1,024). A duplicate identity, cross-cell entry,
+failed rollback, truncation or inconsistent internal state returns
+`ue_slot_snapshot_complete=false`; zero active entries is a valid complete
+snapshot.
+
+The DU registry keeps its internal UE and cell identity, assignment generation
+and actual SR/SRS request. When the audit response is built, DU joins that record
+with the current C-RNTI and both current F1 UE IDs. The authoritative F1 entry
+therefore contains both current F1 UE IDs, NCGI, PCI, C-RNTI, assignment
+generation and the actual request. The audit target contains gNB-DU ID, NCGI,
+DU cell, PCI, audit generation and a nonzero local
+`connection_token`; the response must echo them exactly. CU-CP resolves the pair
+of F1 UE IDs only through the current F1 context and then checks the current
+DU, cell, PCI and C-RNTI. It does not recover identity from an old `ue_index_t`,
+an ordinal or C-RNTI alone.
+
+The comparison results are:
+
+- `matched`: identity, generation and actual parameters match;
+- `missing`: CU-CP has an expectation and DU has no entry; resend the original
+  generation once;
+- `conflict`: the same generation has different parameters, DU is ahead, or
+  identity/cell content contradicts the current UE; do not overwrite;
+- `quarantined`: the DU entry cannot be resolved to the current F1 UE; do not
+  clear it;
+- a resolved DU-only entry may receive one `generation + 1` clear.
+
+After any repair, CU-CP requests another complete snapshot and declares the DU
+`reconciled` only when every entry matches. The exact combination of UE,
+operation, assignment generation and resource content is automatically repaired
+at most once and never directly releases a UE. DU disconnect discards
+capability, token, in-flight responses and the reconciled/applied view while
+preserving the current process's expected assignments. Reconnect must obtain a
+fresh snapshot. CU-CP restart does not rebuild local UE identity from a DU
+snapshot, and no new state file is used.
+
+The RNTI and UE-slot completeness decisions are independent. An incomplete
+UE-slot result cannot interrupt RNTI retirement that already meets its own
+conditions. If a DU does not support the authoritative identity snapshot, CU-CP
+uses the earlier audit format and keeps ordinary SR/SRS applied feedback and
+RNTI handling, but disables automatic UE-slot repair. A new DU continues to
+answer the earlier request format when connected to an old CU.
+
+The read-only `ntn_state` output includes UE-slot audit state, capability,
+complete-snapshot state, `matched`, `missing`, `conflict`, `quarantined` and
+`repaired` counts, assignment generation high-water and the latest reason. The
+first four counts aggregate each target's latest complete snapshot. `repaired`
+counts successful repair acknowledgements on the current DU connection and
+target set. Reconnect or a target-set change resets those values; the overall
+assignment generation high-water is the maximum current value among DUs.
+These values cover CU-CP and DU software resource state. RAR transmission, raw
+PRACH detection, authenticated Initial UL position metadata and PHY/RU/RF state
+belong to their respective runtime interfaces. The local connection token blocks
+results from an older connection; sender authentication and end-to-end anti-replay
+remain separate work. Build and test results are recorded in
+`docs/ntn_ue_slot_audit_recovery.md`.
 
 ## onboard_plan_deployment_stage
 

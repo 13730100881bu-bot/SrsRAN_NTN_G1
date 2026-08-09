@@ -270,14 +270,15 @@ allocation and protects an outstanding terrestrial TC-RNTI for a 10-second
 RACH reservation guard. A C-RNTI value is unique across cells of one DU because
 the DU table is flat; different DUs may reuse it. DU validates stable gNB-DU,
 NCGI and PCI identity before applying a pool and verifies the returned snapshot
-cell. SR/SRS repair records the DU's actual `applied_request`. The current
-UE-slot domain remains incomplete until DU has a reliable mapping to CU-global
-UE identity. Codec v2 requires same-version CU/DU rollout; only new CU decoding
-of legacy v1 is supported. Terminal-history garbage collection and durable
-C-RNTI reuse remain bounded-stage follow-up work. Snapshot lookup is indexed to
-avoid quadratic comparison growth, but this is not endurance evidence. This is
-software-state evidence, not RAR transmission, raw PRACH, trusted Initial UL
-position or RF execution.
+cell. SR/SRS repair records the DU's actual `applied_request`. CUCP-038 originally
+left the UE-slot domain incomplete because its DU snapshot could not reliably
+name a UE on the current F1 connection. CUCP-050 closes that gap with the pair
+of current F1 UE IDs and an exact live-connection target. Codec v2 requires
+same-version CU/DU rollout; only new CU decoding of legacy v1 is supported.
+CUCP-049 completes safe C-RNTI retirement and reuse. Snapshot lookup is indexed
+to avoid quadratic comparison growth. This scope covers software resource
+state. RAR transmission, raw PRACH, trusted Initial UL position and RF execution
+use their respective runtime interfaces.
 
 The same hardening pass rejects wrong-generation SIB19 results at F1 and keeps
 an older CU completion from overwriting a newer record; update and clear also
@@ -296,6 +297,44 @@ port and live DU generation before existing ownership and capacity checks.
 Temporary accepted contexts are non-persistent and end at ICS, UE removal,
 setup failure, plan activation, DU disconnect or restart. This stage is the
 CU-CP consumer only; a production lower-layer producer is a separate task.
+
+## CUCP-049 Safe C-RNTI retirement and reuse
+
+Completed. Retire an NTN access C-RNTI only after CU-CP has no live UE owner,
+the current DU connection returns a complete snapshot with the same generation
+in `expired`, and MAC atomically rechecks the whole retirement batch. Preserve
+compact generation history so delayed messages cannot remove a newer reuse.
+After reconnect or CU-CP restart, isolate unknown DU records and finish a fresh
+audit before retirement or allocation resumes. Legacy DUs continue the original
+pool flow without making uncertain retired numbers reusable. The allocator scans
+the bounded per-DU namespace and publishes a new eight-number pool only when all
+eight numbers are safe.
+
+## CUCP-050 Complete UE SR/SRS audit and reconnect recovery
+
+CUCP-050 assigns a nonzero assignment generation to every versioned SR/SRS
+`set/clear` operation. DU stages the request, then publishes a new active
+assignment only after resource allocation and the MAC/scheduler configuration
+transaction both succeed. Its registry stores the actual SR/SRS parameters;
+the audit response joins those parameters with the current C-RNTI and both
+current F1 UE IDs. A complete per-cell snapshot contains at most 1,024 entries
+and is bound to the exact gNB-DU, cell, audit generation and connection token.
+
+CU-CP reapplies a missing expected assignment once with its original generation,
+or clears a resolved DU-only assignment once with the next generation. The
+one-attempt bound applies to the exact UE, operation, assignment generation and
+resource content. Same-generation parameter differences, a newer DU generation,
+duplicate identity or an unresolved F1 UE remain blocked or quarantined; no
+automatic overwrite or UE release occurs. Disconnect invalidates the old token,
+capability and applied state. Reconnect requires another complete snapshot
+before the DU becomes `reconciled`.
+
+RNTI retirement and UE-slot reconciliation are independent domains. A legacy DU
+keeps prior feedback and RNTI behavior without enabling automatic UE-slot repair;
+a new DU continues to answer the earlier request format for an older CU. No new
+state file or public ASN.1 field is introduced, and NTN default off does not
+start the audit. Build and test results and the scripted software-flow simulation are
+recorded in `docs/ntn_ue_slot_audit_recovery.md`.
 
 ## Global sequencing rule
 

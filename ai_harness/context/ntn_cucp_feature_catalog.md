@@ -118,12 +118,14 @@ per-entry `generation_id`. A lease result is applied only when its generation
 and full accepted/rejected set match the update. Missing, partial, duplicate or
 contradictory results become `ack_unknown`; the complete audit then retries the
 original generation. A normal in-flight pool waits for its ACK and blocks a new
-low-water generation. Matching pending evidence promotes a CU lease from
+low-water generation. A matching pending DU record promotes a CU lease from
 `sent_to_du` to `applied_by_du`; stale generations, duplicates and unknown
 RNTIs block that domain instead of triggering refill. Explicit audit rejection
 also reaches the conflict path; a later accepted complete audit resolves its
-generic target blocker. The UE-slot domain is currently incomplete because DU
-cannot yet identify every slot entry with a reliable CU-global UE identity.
+generic target blocker. CUCP-038 originally left the UE-slot domain incomplete
+because DU could not reliably identify every entry on the current F1 connection.
+CUCP-050 completes that mapping with current F1 UE identities and an exact
+connection target.
 
 CU-CP reconciles `consumed_by_mac` to its consumed state and DU expiry to its
 expired state. It may resend only an unused CU-CP lease missing from a complete
@@ -139,8 +141,41 @@ does not change the terrestrial RNTI selection sequence. The same DU cannot
 track one C-RNTI value in two cells; different DUs can. DU also rejects a pool
 with the wrong gNB-DU, NCGI or PCI and rejects a complete snapshot for the wrong
 cell. SR/SRS repair caches the DU-reported `applied_request`, not merely the
-requested shape. Terminal-history GC and a durable C-RNTI reuse policy remain
-follow-up work, so this lifecycle is not yet a long-duration exhaustion proof.
+requested shape. CUCP-049 completes guarded C-RNTI retirement and reuse: the
+current DU must report the same expired generation, MAC rechecks the whole batch
+atomically, compact generation history blocks delayed messages, and reconnect
+or restart requires another complete audit before reuse. Unknown pending or
+consumed DU records remain isolated. A legacy DU can keep the original pool flow
+but cannot make an uncertain retired number reusable.
+
+CUCP-050 gives versioned SR/SRS `set/clear` operations a nonzero
+`assignment_generation`. DU stages each request and publishes a new active
+assignment only after resource allocation and the MAC/scheduler configuration
+transaction both succeed. The DU registry stores the actual SR/SRS parameters;
+the audit response joins them with the current C-RNTI and F1 UE identities. The
+complete snapshot is bounded to 1,024 entries and identifies each UE with the current
+`gnb_cu_ue_f1ap_id`, `gnb_du_ue_f1ap_id`, NCGI, PCI and C-RNTI. The request and
+response also bind gNB-DU ID, cell, audit generation and a nonzero connection
+token. Missing expected entries can be reapplied once with the same generation;
+resolved DU-only entries can be cleared once with the next generation. This
+one-attempt limit is keyed by the exact UE, operation, generation and resource
+content. A parameter conflict, newer DU generation, duplicate identity or
+unresolved F1 UE is blocked or quarantined rather than overwritten. Repair is
+followed by a new complete snapshot before the DU returns to `reconciled`.
+
+The RNTI and UE-slot domains are independent, so an incomplete SR/SRS snapshot
+leaves a safe RNTI retirement on its own lifecycle. Old DUs retain the existing
+applied feedback and RNTI audit without enabling automatic UE-slot repair. New
+DUs continue to answer the earlier request format for old CUs. Disconnect
+invalidates the connection token, in-flight result and DU-applied status; no
+state file is added. Build, test and scripted software-flow results are recorded
+in `docs/ntn_ue_slot_audit_recovery.md`.
+
+Read-only status aggregates `matched`, `missing`, `conflict` and `quarantined`
+from each target's latest complete snapshot. `repaired` counts successful repair
+acknowledgements on the current DU connection and target set; reconnect or a
+target-set change starts a new count.
+
 Codec v2 is a same-version deployment boundary: a new CU can fail-safe decode
 v1, but an old CU cannot decode v2. These changes are opt-in NTN resource
 behavior.
@@ -232,8 +267,9 @@ HARQ timing, TA scheduler, raw PRACH detection, PHY/lower PHY, RU/RF/radio
 drivers, ZMQ channel behavior, O-DU/flexible_o_du behavior, generated ASN.1 and
 GIS-site behavior remain excluded without explicit authorization.
 
-Resource-audit completeness is MAC/DU software-state evidence only. It does not
-prove that a RAR was transmitted, identify a raw PRACH detection, authenticate
-Initial UL position metadata, or provide PHY/RU/RF telemetry. Connection-epoch
-binding, sender authentication, freshness/anti-replay, and reliable UE-slot
-identity mapping remain separate follow-up work.
+Resource-audit completeness covers CU-CP and DU/MAC software state. RAR
+transmission, raw PRACH detection, authenticated Initial UL position metadata
+and PHY/RU/RF telemetry remain separate work. CUCP-050 binds its UE-slot query
+to a current local connection token and current F1 UE identities; transport
+sender authentication and end-to-end freshness/anti-replay remain outside this
+task.

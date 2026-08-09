@@ -1,6 +1,6 @@
 # NTN CU-CP Agent Memory
 
-Last updated: 2026-08-08
+Last updated: 2026-08-09
 
 This file is the compact handoff memory for future conversations. It keeps the
 durable NTN CU-CP design context without pulling in the old project-management
@@ -350,17 +350,28 @@ Use a staged validation ladder:
   Initial-UL-seen, committed or expired lease. Explicit audit rejection reaches
   conflict observability; a later accepted complete audit resolves the generic
   target blocker.
-- UE-slot audit remains incomplete because DU does not yet have a reliable
-  CU-global UE identity mapping for every local SR/SRS entry. Do not infer
-  authoritative absence from its empty snapshot.
-- Resource audit is MAC/DU software-state evidence, not RAR transmission, raw
-  PRACH, trusted Initial UL position evidence or PHY/RU/RF telemetry. DU
-  connection-epoch/stable audit-target binding, authentication,
-  freshness/anti-replay, UE-slot identity mapping and terminal-history GC/RNTI
-  reuse remain follow-up risks. Snapshot lookup is indexed, but without durable
-  GC/reuse this is not an endurance or long-duration namespace-exhaustion proof.
-  Codec v2 requires same-version CU/DU deployment; its v1 compatibility is
-  decode-only and fail safe. Successful SR/SRS repair must cache the DU's actual
+- CUCP-049 completes guarded C-RNTI retirement and reuse. The current DU must
+  report the same expired generation, MAC atomically rechecks the entire batch,
+  and retained generation history rejects delayed add/retire messages. Restart
+  and reconnect quarantine unknown records until a fresh complete audit.
+- CUCP-050 completes the UE-slot list with a current-connection F1 identity
+  contract. DU first records its internal UE/cell identity, assignment generation
+  and actual SR/SRS parameters. The response then joins the current C-RNTI and
+  both current F1 UE IDs, and binds the query/result to the exact gNB-DU, cell
+  and a nonzero connection token. Missing expected state may be resent once; a
+  resolved DU-only assignment may be cleared once. The one-attempt limit is
+  keyed by the exact UE, operation, generation and resource content. Parameter
+  conflicts, DU-ahead generations and unresolved identities remain blocked or
+  quarantined. Build and test results are recorded in
+  `docs/ntn_ue_slot_audit_recovery.md`.
+- Resource audit covers MAC/DU software state. RAR transmission, raw PRACH,
+  trusted Initial UL position input and PHY/RU/RF telemetry use their respective
+  runtime interfaces.
+  The local connection token rejects old-connection results; transport sender
+  authentication and end-to-end freshness/anti-replay remain follow-up risks.
+  Codec v2's historical compatibility remains decode-only and fail safe, while
+  the newer capability probe lets a current CU fall back when a DU lacks the
+  authoritative UE-slot list. Successful SR/SRS repair caches the DU's actual
   `applied_request`.
 
 ### UE Capability Policy
@@ -470,12 +481,13 @@ For a more detailed task-to-change lookup, use
   lease membership, converts uncertain delivery to same-generation repair,
   prevents in-flight generation stacking, and reconciles terminal state without
   resending consumed, Initial-UL-seen, committed or expired leases. Generic
-  audit-rejection blockers recover after a later clean complete audit. The
-  UE-slot domain remains incomplete until reliable CU-global identity mapping
-  exists. SIB19 completion also requires matching request/current generation,
-  in-flight state and operation result. This is software-state evidence only
-  and does not close connection epoch, authentication, anti-replay, long-term
-  lease GC/reuse, Initial UL position or RF evidence gaps.
+  audit-rejection blockers recover after a later clean complete audit. At that
+  task boundary the UE-slot domain remains incomplete; CUCP-050 later replaces
+  its CU-internal identity with the current pair of F1 UE IDs and a
+  connection-bound target. SIB19 completion also requires matching
+  request/current generation, in-flight state and operation result. CUCP-049
+  later closes guarded C-RNTI retirement/reuse. Authentication, trusted Initial
+  UL position input and RF execution remain separate work.
 - CUCP-039: private durable onboard-plan state and restart reconciliation. DU
   execution requires `state_file`; historical `applied` data is hidden until a
   complete matching DU query succeeds, while expired deployments retain exact
@@ -557,14 +569,14 @@ For a more detailed task-to-change lookup, use
   clear it. This task adds only the CU-CP consumer and injection boundary. A
   production lower-layer source remains a separate, explicitly authorized
   cross-layer task. See `docs/ntn_initial_ul_position_consumer.md`.
-- CUCP-049 adds safe retirement and reuse for NTN C-RNTI access leases. A
+- CUCP-049 completes safe retirement and reuse for NTN C-RNTI access leases. A
   C-RNTI is a cell-local temporary UE identifier, assigned during access and
   retained during the connection: CU-CP may retire it only after local
   UE ownership has ended, a complete audit on the current DU connection reports
   the same generation as expired, and MAC atomically rechecks the whole batch.
   Compact generation tombstones reject delayed add/retire messages and require
   a strictly newer generation before reuse. DU disconnect invalidates in-flight
-  evidence; restart or reconnect first imports unknown DU records into a
+  retirement state; restart or reconnect first imports unknown DU records into a
   non-authorizing quarantine and completes a fresh audit. An old DU that cannot
   confirm retirement remains usable for the existing pool flow but never makes
   a retired number reusable. Allocation scans the finite per-DU namespace and
@@ -577,6 +589,33 @@ For a more detailed task-to-change lookup, use
   tests passing. The software-flow scenario ran three non-empty groups and
   passed 37/37 with process cleanup. See
   `docs/ntn_rnti_retirement_reuse.md`.
+- CUCP-050 completes a connection-bound audit for DU-applied UE SR/SRS
+  resources. Every new `set` or `clear` carries a nonzero
+  `assignment_generation`: an exact retry keeps its generation, a content
+  change uses the next generation, and stale or conflicting generations are
+  rejected. DU stages the operation and publishes an active assignment only
+  after resource allocation and the MAC/scheduler configuration transaction
+  both succeed. Its registry stores the actual SR/SRS parameters; the private
+  audit joins the current pair of F1 UE IDs plus NCGI, PCI and C-RNTI;
+  CU-CP never reconstructs that identity from an ordinal or an old connection.
+  The request and response also echo the exact DU/cell target and a nonzero
+  connection token, and a complete cell snapshot is bounded to 1,024 entries.
+  A matching item needs no action; a missing local expectation is reapplied
+  once with the same generation; a resolved DU-only item is cleared once with
+  the next generation. This one-attempt limit uses the exact UE, operation,
+  generation and resource content. A same-generation content mismatch, a DU
+  generation ahead of CU-CP, or an entry that cannot be resolved to the current F1 UE is
+  kept as `conflict` or `quarantined` and is not overwritten automatically.
+  Disconnect invalidates capability, token, in-flight results and applied
+  status; reconnect requires a new complete snapshot before the DU returns to
+  `reconciled`. RNTI and UE-slot audit domains remain independent. Old DUs keep
+  the previous feedback and RNTI flow but do not enable automatic UE-slot
+  repair. New DUs continue to answer the earlier request format for old CUs. No
+  state file or public ASN.1 field is added, and the default-off terrestrial path
+  does not start this audit. Verified results include 69/69 resource-manager
+  tests, 14/14 F1 CU tests, 6/6 F1 DU tests, 15/15 DU tests, the read-only CLI
+  check and the `srsran_cu_cp` build. The complete result table is maintained in
+  `docs/ntn_ue_slot_audit_recovery.md`.
 
 ## Protocol References
 
