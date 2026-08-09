@@ -62,7 +62,22 @@ du_ue_resource_update_response dummy_ue_resource_configurator_factory::dummy_res
     const ue_capability_summary*          reestablished_ue_caps)
 {
   parent.ue_resource_pool[ue_index] = parent.next_context_update_result;
+  if (upd_req.ntn_ul_slot_request.has_value() && upd_req.ntn_ul_slot_request->assignment_generation != 0) {
+    parent.last_update_completed.reset();
+    parent.versioned_slot_update_pending    = true;
+    parent.versioned_slot_snapshot_complete = false;
+  }
   return parent.next_config_resp;
+}
+
+void dummy_ue_resource_configurator_factory::dummy_resource_updater::update_completed(bool applied)
+{
+  parent.last_update_completed = applied;
+  if (!parent.versioned_slot_update_pending) {
+    return;
+  }
+  parent.versioned_slot_update_pending    = false;
+  parent.versioned_slot_snapshot_complete = applied;
 }
 
 const du_ue_resource_config& dummy_ue_resource_configurator_factory::dummy_resource_updater::get()
@@ -142,7 +157,7 @@ du_manager_test_bench::du_manager_test_bench(span<const du_cell_config> cells) :
   cell_exec_mapper(worker),
   params{{"srsgnb", (gnb_du_id_t)1, 1, du_cells},
          {timers, du_mng_exec, ue_exec_mapper, cell_exec_mapper},
-         {f1ap, f1ap, f1ap},
+         {f1ap, f1ap, f1ap, f1ap},
          {f1u_gw},
          {mac, f1ap, f1ap, rlc_pcap},
          {mac}},

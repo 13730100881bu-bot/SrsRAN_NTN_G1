@@ -69,6 +69,43 @@ const f1ap_du_context& f1ap_cu_impl::get_context() const
   return du_ctxt;
 }
 
+std::optional<ue_index_t>
+f1ap_cu_impl::resolve_ue_identity(gnb_cu_ue_f1ap_id_t cu_ue_f1ap_id, gnb_du_ue_f1ap_id_t du_ue_f1ap_id) const
+{
+  if (cu_ue_f1ap_id == gnb_cu_ue_f1ap_id_t::invalid || du_ue_f1ap_id == gnb_du_ue_f1ap_id_t::invalid) {
+    return std::nullopt;
+  }
+
+  const f1ap_ue_context* ue_ctxt = ue_ctxt_list.find(cu_ue_f1ap_id);
+  if (ue_ctxt == nullptr || ue_ctxt->marked_for_release ||
+      ue_ctxt->ue_ids.ue_index == ue_index_t::invalid ||
+      ue_ctxt->ue_ids.cu_ue_f1ap_id != cu_ue_f1ap_id || !ue_ctxt->ue_ids.du_ue_f1ap_id.has_value() ||
+      *ue_ctxt->ue_ids.du_ue_f1ap_id == gnb_du_ue_f1ap_id_t::invalid ||
+      *ue_ctxt->ue_ids.du_ue_f1ap_id != du_ue_f1ap_id) {
+    return std::nullopt;
+  }
+
+  return ue_ctxt->ue_ids.ue_index;
+}
+
+std::optional<f1ap_ue_identity> f1ap_cu_impl::get_ue_identity(ue_index_t ue_index) const
+{
+  if (ue_index == ue_index_t::invalid) {
+    return std::nullopt;
+  }
+
+  const f1ap_ue_context* ue_ctxt = ue_ctxt_list.find(ue_index);
+  if (ue_ctxt == nullptr || ue_ctxt->marked_for_release ||
+      ue_ctxt->ue_ids.ue_index != ue_index ||
+      ue_ctxt->ue_ids.cu_ue_f1ap_id == gnb_cu_ue_f1ap_id_t::invalid ||
+      !ue_ctxt->ue_ids.du_ue_f1ap_id.has_value() ||
+      *ue_ctxt->ue_ids.du_ue_f1ap_id == gnb_du_ue_f1ap_id_t::invalid) {
+    return std::nullopt;
+  }
+
+  return f1ap_ue_identity{ue_index, ue_ctxt->ue_ids.cu_ue_f1ap_id, *ue_ctxt->ue_ids.du_ue_f1ap_id};
+}
+
 void f1ap_cu_impl::handle_dl_rrc_message_transfer(const f1ap_dl_rrc_message& msg)
 {
   f1ap_ue_context* ue_ctxt = ue_ctxt_list.find(msg.ue_index);

@@ -25,6 +25,9 @@
 #include "du_ue_resource_config.h"
 #include "ue_capability_summary.h"
 #include "srsran/f1ap/du/f1ap_du_ue_context_update.h"
+#include <cstdint>
+#include <string>
+#include <vector>
 
 namespace srsran {
 namespace srs_du {
@@ -33,12 +36,32 @@ namespace srs_du {
 struct du_ue_resource_update_response {
   /// \brief Defines whether the UE resource allocation failed during the config update procedure.
   /// If \c procedure_error doesn't contain any error string, then the UE resource update was successful.
-  error_type<std::string>        procedure_error = {};
-  std::vector<drb_id_t>          failed_drbs;
-  std::vector<serv_cell_index_t> failed_scells;
+  error_type<std::string>                         procedure_error = {};
+  std::vector<drb_id_t>                           failed_drbs;
+  std::vector<serv_cell_index_t>                  failed_scells;
   std::optional<f1ap_ntn_ul_slot_resource_result> ntn_ul_slot_result;
 
   bool failed() const { return not procedure_error.has_value(); }
+};
+
+/// Complete DU-side view of one versioned NTN SR/SRS assignment.
+///
+/// Connection-scoped F1 UE identities are deliberately not stored here. The DU manager joins this stable resource
+/// record with the current UE context when it builds an authoritative F1 audit response.
+struct du_ntn_ue_slot_resource_snapshot_entry {
+  du_ue_index_t                     ue_index              = INVALID_DU_UE_INDEX;
+  du_cell_index_t                   cell_index            = INVALID_DU_CELL_INDEX;
+  uint32_t                          assignment_generation = 0;
+  f1ap_ntn_ul_slot_resource_request request;
+};
+
+/// Snapshot of all active versioned NTN SR/SRS assignments for one DU cell.
+struct du_ntn_ue_slot_resource_snapshot {
+  du_cell_index_t                                     cell_index                       = INVALID_DU_CELL_INDEX;
+  bool                                                complete                         = false;
+  uint32_t                                            assignment_generation_high_water = 0;
+  std::string                                         failure_reason;
+  std::vector<du_ntn_ue_slot_resource_snapshot_entry> entries;
 };
 
 /// \brief This class manages the PHY (e.g. RB and symbols used for PUCCH), MAC (e.g. LCIDs) and RLC resources used
@@ -57,6 +80,9 @@ public:
                                                   const f1ap_ue_context_update_request& upd_req,
                                                   const du_ue_resource_config*          reestablished_context,
                                                   const ue_capability_summary*          reestablished_ue_caps) = 0;
+
+    /// Called once the MAC/scheduler transaction for the latest update has completed.
+    virtual void update_completed(bool applied) = 0;
 
     /// Called when the UE confirms the configuration is applied.
     virtual void config_applied() = 0;
@@ -93,6 +119,9 @@ public:
     return ue_res_impl->update(pcell_index, upd_req, reestablished_context, reestablished_ue_caps);
   }
 
+  /// Complete the current resource update only after MAC/scheduler has accepted or rejected it.
+  void handle_update_completed(bool applied) { ue_res_impl->update_completed(applied); }
+
   /// \brief Checks whether the allocation of resources to the UE failed, due to lack of resources.
   bool resource_alloc_failed() const { return not configurator_error.empty(); }
 
@@ -125,11 +154,10 @@ public:
   /// \brief Create a new UE resource allocation config object.
   /// \return UE Resource configuration if correctly created. Unexpected if no space in the manager was found.
   virtual expected<ue_ran_resource_configurator, std::string>
-  create_ue_resource_configurator(
-      du_ue_index_t                                    ue_index,
-      du_cell_index_t                                  pcell_index,
-      bool                                             has_tc_rnti,
-      std::optional<ntn_ul_slot_resource_request>      ntn_ul_slot_request = std::nullopt) = 0;
+  create_ue_resource_configurator(du_ue_index_t                               ue_index,
+                                  du_cell_index_t                             pcell_index,
+                                  bool                                        has_tc_rnti,
+                                  std::optional<ntn_ul_slot_resource_request> ntn_ul_slot_request = std::nullopt) = 0;
 };
 
 } // namespace srs_du

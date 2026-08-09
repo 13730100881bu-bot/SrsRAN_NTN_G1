@@ -78,6 +78,9 @@ void ue_configuration_procedure::operator()(coro_context<async_task<f1ap_ue_cont
   // > Update MAC bearers.
   CORO_AWAIT_VALUE(mac_res, update_mac_and_sched());
 
+  // A versioned NTN assignment is authoritative only after the MAC/scheduler transaction succeeds.
+  ue->resources.handle_update_completed(mac_res.result);
+
   // > Destroy old DU UE bearers that are now detached from remaining layers.
   clear_old_ue_context();
 

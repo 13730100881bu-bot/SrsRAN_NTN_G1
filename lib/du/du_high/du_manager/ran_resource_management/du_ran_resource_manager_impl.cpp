@@ -26,6 +26,8 @@
 #include "srsran/ran/sr_configuration.h"
 #include "srsran/scheduler/config/serving_cell_config_factory.h"
 #include "srsran/srslog/srslog.h"
+#include <algorithm>
+#include <limits>
 
 using namespace srsran;
 using namespace srs_du;
@@ -50,6 +52,11 @@ du_ue_ran_resource_updater_impl::update(du_cell_index_t                       pc
                                         const ue_capability_summary*          reestablished_ue_caps)
 {
   return parent->update_context(ue_index, pcell_index, upd_req, reestablished_context, reestablished_ue_caps);
+}
+
+void du_ue_ran_resource_updater_impl::update_completed(bool applied)
+{
+  parent->complete_versioned_slot_request(ue_index, applied);
 }
 
 void du_ue_ran_resource_updater_impl::config_applied()
@@ -105,8 +112,10 @@ static bool is_same_ntn_ul_slot_resource_request(const std::optional<ntn_ul_slot
          current_request->srs_slot_period == next_request->srs_slot_period;
 }
 
-static f1ap_ntn_ul_slot_resource_result make_f1ap_ntn_ul_slot_resource_result(
-    bool accepted, f1ap_ntn_ul_slot_resource_result_reason reason, const std::optional<ntn_ul_slot_resource_request>& request)
+static f1ap_ntn_ul_slot_resource_result
+make_f1ap_ntn_ul_slot_resource_result(bool                                               accepted,
+                                      f1ap_ntn_ul_slot_resource_result_reason            reason,
+                                      const std::optional<ntn_ul_slot_resource_request>& request)
 {
   f1ap_ntn_ul_slot_resource_result result;
   result.accepted = accepted;
@@ -120,6 +129,23 @@ static f1ap_ntn_ul_slot_resource_result make_f1ap_ntn_ul_slot_resource_result(
     if (!is_empty(f1ap_request)) {
       result.applied_request = f1ap_request;
     }
+  }
+  return result;
+}
+
+static f1ap_ntn_ul_slot_resource_result make_versioned_ntn_ul_slot_resource_result(
+    bool                                                    accepted,
+    f1ap_ntn_ul_slot_resource_result_reason                 reason,
+    const f1ap_ntn_ul_slot_resource_request&                request,
+    const std::optional<f1ap_ntn_ul_slot_resource_request>& applied_request = std::nullopt)
+{
+  f1ap_ntn_ul_slot_resource_result result;
+  result.accepted              = accepted;
+  result.reason                = reason;
+  result.assignment_generation = request.assignment_generation;
+  result.operation             = request.operation;
+  if (accepted) {
+    result.applied_request = applied_request.has_value() ? applied_request : std::optional{request};
   }
   return result;
 }
@@ -178,8 +204,269 @@ du_ran_resource_manager_impl::du_ran_resource_manager_impl(span<const du_cell_co
   }
 }
 
-expected<ue_ran_resource_configurator, std::string>
-du_ran_resource_manager_impl::create_ue_resource_configurator(
+du_ran_resource_manager_impl::versioned_slot_request_decision
+du_ran_resource_manager_impl::validate_versioned_slot_request(du_ue_index_t                            ue_index,
+                                                              du_cell_index_t                          cell_index,
+                                                              const f1ap_ntn_ul_slot_resource_request& request)
+{
+  versioned_slot_request_decision decision;
+
+  const bool has_sr    = request.sr_slot_offset.has_value();
+  const bool has_srs   = request.srs_slot_offset.has_value();
+  const bool malformed = request.assignment_generation == 0 ||
+                         request.operation == f1ap_ntn_ul_slot_resource_operation::legacy ||
+                         (request.operation != f1ap_ntn_ul_slot_resource_operation::set &&
+                          request.operation != f1ap_ntn_ul_slot_resource_operation::clear) ||
+                         (request.operation == f1ap_ntn_ul_slot_resource_operation::set && !has_sr && !has_srs) ||
+                         (request.operation == f1ap_ntn_ul_slot_resource_operation::clear &&
+                          (has_sr || has_srs || request.sr_slot_period.has_value() ||
+                           request.srs_slot_period.has_value() || request.requested_c_rnti.has_value())) ||
+                         (request.sr_slot_period.has_value() && (!has_sr || *request.sr_slot_period == 0)) ||
+                         (request.srs_slot_period.has_value() && (!has_srs || *request.srs_slot_period == 0)) ||
+                         (request.requested_c_rnti.has_value() && !is_crnti(*request.requested_c_rnti));
+  if (malformed) {
+    decision.action        = versioned_slot_request_action::reject;
+    decision.reject_reason = f1ap_ntn_ul_slot_resource_result_reason::malformed_request;
+    return decision;
+  }
+
+  std::lock_guard<std::mutex> lock(ntn_ue_slot_registry_mutex);
+  if (!ntn_ue_slot_registry.contains(ue_index)) {
+    decision.action        = versioned_slot_request_action::reject;
+    decision.reject_reason = f1ap_ntn_ul_slot_resource_result_reason::du_context_update_failed;
+    return decision;
+  }
+
+  ntn_ue_slot_registry_state& state = ntn_ue_slot_registry[ue_index];
+  if (state.update_in_progress) {
+    decision.action        = versioned_slot_request_action::reject;
+    decision.reject_reason = f1ap_ntn_ul_slot_resource_result_reason::du_resource_conflict;
+    return decision;
+  }
+  if (request.assignment_generation < state.assignment_generation_high_water) {
+    decision.action        = versioned_slot_request_action::reject;
+    decision.reject_reason = f1ap_ntn_ul_slot_resource_result_reason::stale_assignment_generation;
+    return decision;
+  }
+  if (request.assignment_generation == state.assignment_generation_high_water &&
+      state.assignment_generation_high_water != 0) {
+    if (!state.last_request.has_value() ||
+        !are_f1ap_ntn_ul_slot_resource_requests_equal(*state.last_request, request)) {
+      decision.action        = versioned_slot_request_action::reject;
+      decision.reject_reason = state.assignment_generation_high_water == std::numeric_limits<uint32_t>::max()
+                                   ? f1ap_ntn_ul_slot_resource_result_reason::slot_assignment_generation_exhausted
+                                   : f1ap_ntn_ul_slot_resource_result_reason::assignment_generation_conflict;
+      return decision;
+    }
+    if (!state.consistent) {
+      decision.action        = versioned_slot_request_action::reject;
+      decision.reject_reason = f1ap_ntn_ul_slot_resource_result_reason::du_resource_conflict;
+      return decision;
+    }
+
+    if (request.operation == f1ap_ntn_ul_slot_resource_operation::set) {
+      if (!state.active_assignment.has_value()) {
+        decision.action        = versioned_slot_request_action::reject;
+        decision.reject_reason = f1ap_ntn_ul_slot_resource_result_reason::du_context_update_failed;
+        return decision;
+      }
+      decision.applied_request                   = state.active_assignment->request;
+      decision.applied_request->requested_c_rnti = request.requested_c_rnti;
+    } else {
+      decision.applied_request = request;
+    }
+    decision.action = versioned_slot_request_action::idempotent;
+    return decision;
+  }
+
+  state.cell_index         = cell_index;
+  state.update_in_progress = true;
+  decision.action          = versioned_slot_request_action::apply;
+  return decision;
+}
+
+std::optional<f1ap_ntn_ul_slot_resource_request>
+du_ran_resource_manager_impl::read_actual_slot_assignment(const du_ue_resource_config&             ue_res,
+                                                          const f1ap_ntn_ul_slot_resource_request& requested) const
+{
+  if (!ue_res.cell_group.cells.contains(SERVING_CELL_PCELL_IDX)) {
+    return std::nullopt;
+  }
+  const serving_cell_config& pcell = ue_res.cell_group.cells[SERVING_CELL_PCELL_IDX].serv_cell_cfg;
+  if (!pcell.ul_config.has_value()) {
+    return std::nullopt;
+  }
+
+  f1ap_ntn_ul_slot_resource_request actual = requested;
+  if (requested.sr_slot_offset.has_value()) {
+    if (!pcell.ul_config->init_ul_bwp.pucch_cfg.has_value() ||
+        pcell.ul_config->init_ul_bwp.pucch_cfg->sr_res_list.empty()) {
+      return std::nullopt;
+    }
+    const auto& sr_resource = pcell.ul_config->init_ul_bwp.pucch_cfg->sr_res_list.front();
+    actual.sr_slot_offset   = sr_resource.offset;
+    actual.sr_slot_period   = sr_periodicity_to_slot(sr_resource.period);
+  } else {
+    actual.sr_slot_period.reset();
+  }
+
+  if (requested.srs_slot_offset.has_value()) {
+    if (!pcell.ul_config->init_ul_bwp.srs_cfg.has_value() ||
+        pcell.ul_config->init_ul_bwp.srs_cfg->srs_res_list.empty() ||
+        !pcell.ul_config->init_ul_bwp.srs_cfg->srs_res_list.front().periodicity_and_offset.has_value()) {
+      return std::nullopt;
+    }
+    const auto& srs_resource = pcell.ul_config->init_ul_bwp.srs_cfg->srs_res_list.front();
+    actual.srs_slot_offset   = srs_resource.periodicity_and_offset->offset;
+    actual.srs_slot_period   = static_cast<unsigned>(srs_resource.periodicity_and_offset->period);
+  } else {
+    actual.srs_slot_period.reset();
+  }
+  return actual;
+}
+
+void du_ran_resource_manager_impl::stage_versioned_slot_request(
+    du_ue_index_t                                           ue_index,
+    du_cell_index_t                                         cell_index,
+    const f1ap_ntn_ul_slot_resource_request&                request,
+    const std::optional<f1ap_ntn_ul_slot_resource_request>& actual_request)
+{
+  std::lock_guard<std::mutex> lock(ntn_ue_slot_registry_mutex);
+  if (!ntn_ue_slot_registry.contains(ue_index)) {
+    return;
+  }
+
+  ntn_ue_slot_registry_state& state = ntn_ue_slot_registry[ue_index];
+  state.pending_cell_index          = cell_index;
+  state.pending_request             = request;
+  state.pending_actual_request      = actual_request;
+}
+
+void du_ran_resource_manager_impl::complete_versioned_slot_request(du_ue_index_t ue_index, bool applied)
+{
+  std::lock_guard<std::mutex> lock(ntn_ue_slot_registry_mutex);
+  if (!ntn_ue_slot_registry.contains(ue_index)) {
+    return;
+  }
+
+  ntn_ue_slot_registry_state& state = ntn_ue_slot_registry[ue_index];
+  if (!state.pending_request.has_value()) {
+    return;
+  }
+
+  const f1ap_ntn_ul_slot_resource_request request = *state.pending_request;
+  const auto actual_request                       = state.pending_actual_request;
+  const du_cell_index_t cell_index                = state.pending_cell_index;
+  state.pending_request.reset();
+  state.pending_actual_request.reset();
+  state.pending_cell_index = INVALID_DU_CELL_INDEX;
+  state.update_in_progress = false;
+
+  if (!applied) {
+    // A failed scheduler transaction can leave local allocations and scheduler state out of step. Keep the previous
+    // authoritative record, but withhold complete snapshots until a later successful versioned update.
+    state.consistent = false;
+    return;
+  }
+
+  state.cell_index                        = cell_index;
+  state.assignment_generation_high_water = request.assignment_generation;
+  state.last_request                      = request;
+  state.consistent                        = true;
+  if (request.operation == f1ap_ntn_ul_slot_resource_operation::clear) {
+    state.active_assignment.reset();
+    return;
+  }
+
+  if (!actual_request.has_value()) {
+    state.consistent = false;
+    return;
+  }
+
+  du_ntn_ue_slot_resource_snapshot_entry entry;
+  entry.ue_index              = ue_index;
+  entry.cell_index            = cell_index;
+  entry.assignment_generation = request.assignment_generation;
+  entry.request               = *actual_request;
+  // C-RNTI is copied from the current DU UE context when the connection-bound audit response is built.
+  entry.request.requested_c_rnti.reset();
+  state.active_assignment = std::move(entry);
+}
+
+void du_ran_resource_manager_impl::mark_slot_snapshot_inconsistent(du_ue_index_t                  ue_index,
+                                                                   std::optional<du_cell_index_t> cell_index,
+                                                                   bool include_uncommitted_request)
+{
+  std::lock_guard<std::mutex> lock(ntn_ue_slot_registry_mutex);
+  if (ntn_ue_slot_registry.contains(ue_index) &&
+      (include_uncommitted_request || ntn_ue_slot_registry[ue_index].assignment_generation_high_water != 0)) {
+    ntn_ue_slot_registry[ue_index].consistent         = false;
+    ntn_ue_slot_registry[ue_index].update_in_progress = false;
+    if (cell_index.has_value()) {
+      ntn_ue_slot_registry[ue_index].cell_index = *cell_index;
+    }
+  }
+}
+
+void du_ran_resource_manager_impl::clear_slot_update_in_progress(du_ue_index_t ue_index)
+{
+  std::lock_guard<std::mutex> lock(ntn_ue_slot_registry_mutex);
+  if (ntn_ue_slot_registry.contains(ue_index)) {
+    ntn_ue_slot_registry[ue_index].update_in_progress = false;
+  }
+}
+
+du_ntn_ue_slot_resource_snapshot
+du_ran_resource_manager_impl::get_ntn_ue_slot_resource_snapshot(du_cell_index_t cell_index) const
+{
+  du_ntn_ue_slot_resource_snapshot snapshot;
+  snapshot.cell_index = cell_index;
+  if (fmt::underlying(cell_index) >= cell_cfg_list.size()) {
+    snapshot.failure_reason = "invalid_cell";
+    return snapshot;
+  }
+
+  snapshot.complete = true;
+  std::lock_guard<std::mutex> lock(ntn_ue_slot_registry_mutex);
+  for (const ntn_ue_slot_registry_state& state : ntn_ue_slot_registry) {
+    if (state.cell_index != cell_index) {
+      continue;
+    }
+    snapshot.assignment_generation_high_water =
+        std::max(snapshot.assignment_generation_high_water, state.assignment_generation_high_water);
+    if (state.update_in_progress) {
+      snapshot.complete       = false;
+      snapshot.failure_reason = "slot_update_in_progress";
+      continue;
+    }
+    if (!state.consistent) {
+      snapshot.complete       = false;
+      snapshot.failure_reason = "slot_registry_inconsistent";
+      continue;
+    }
+    if (!state.active_assignment.has_value()) {
+      continue;
+    }
+
+    const du_ntn_ue_slot_resource_snapshot_entry& entry = *state.active_assignment;
+    if (entry.ue_index != state.ue_index || entry.cell_index != cell_index || entry.assignment_generation == 0 ||
+        entry.assignment_generation != state.assignment_generation_high_water ||
+        !is_valid_f1ap_ntn_authoritative_ul_slot_set(entry.request) ||
+        entry.request.assignment_generation != entry.assignment_generation) {
+      snapshot.complete       = false;
+      snapshot.failure_reason = "slot_registry_inconsistent";
+      continue;
+    }
+    snapshot.entries.push_back(entry);
+  }
+
+  if (!snapshot.complete) {
+    snapshot.entries.clear();
+  }
+  return snapshot;
+}
+
+expected<ue_ran_resource_configurator, std::string> du_ran_resource_manager_impl::create_ue_resource_configurator(
     du_ue_index_t                               ue_index,
     du_cell_index_t                             pcell_index,
     bool                                        has_tc_rnti,
@@ -189,8 +476,12 @@ du_ran_resource_manager_impl::create_ue_resource_configurator(
     return make_unexpected(std::string("Double allocation of same UE not supported"));
   }
   ue_res_pool.emplace(ue_index, *this);
-  auto& ue_res = ue_res_pool[ue_index];
-  auto& mcg    = ue_res.cg_cfg;
+  {
+    std::lock_guard<std::mutex> lock(ntn_ue_slot_registry_mutex);
+    ntn_ue_slot_registry.emplace(ue_index, ue_index);
+  }
+  auto& ue_res                       = ue_res_pool[ue_index];
+  auto& mcg                          = ue_res.cg_cfg;
   mcg.cell_group.ntn_ul_slot_request = std::move(ntn_ul_slot_request);
 
   // UE initialized PCell.
@@ -224,13 +515,44 @@ du_ran_resource_manager_impl::update_context(du_ue_index_t                      
   ue_resource_context&           u      = ue_res_pool[ue_index];
   du_ue_resource_config&         ue_mcg = u.cg_cfg;
   du_ue_resource_update_response resp;
+
+  bool apply_ntn_ul_slot_request = upd_req.ntn_ul_slot_request.has_value();
+  if (upd_req.ntn_ul_slot_request.has_value() && is_versioned(*upd_req.ntn_ul_slot_request)) {
+    const versioned_slot_request_decision decision =
+        validate_versioned_slot_request(ue_index, pcell_idx, *upd_req.ntn_ul_slot_request);
+    if (decision.action == versioned_slot_request_action::reject) {
+      apply_ntn_ul_slot_request = false;
+      resp.ntn_ul_slot_result =
+          make_versioned_ntn_ul_slot_resource_result(false, decision.reject_reason, *upd_req.ntn_ul_slot_request);
+    } else if (decision.action == versioned_slot_request_action::idempotent) {
+      apply_ntn_ul_slot_request = false;
+      resp.ntn_ul_slot_result   = make_versioned_ntn_ul_slot_resource_result(
+          true,
+          upd_req.ntn_ul_slot_request->operation == f1ap_ntn_ul_slot_resource_operation::clear
+                ? f1ap_ntn_ul_slot_resource_result_reason::clear_applied
+                : f1ap_ntn_ul_slot_resource_result_reason::applied,
+          *upd_req.ntn_ul_slot_request,
+          decision.applied_request);
+    }
+  } else if (upd_req.ntn_ul_slot_request.has_value()) {
+    // Once this UE has accepted a versioned assignment, an old-format request must not bypass its generation guard.
+    std::lock_guard<std::mutex> lock(ntn_ue_slot_registry_mutex);
+    if (ntn_ue_slot_registry.contains(ue_index) &&
+        (ntn_ue_slot_registry[ue_index].assignment_generation_high_water != 0 ||
+         ntn_ue_slot_registry[ue_index].update_in_progress)) {
+      apply_ntn_ul_slot_request = false;
+      resp.ntn_ul_slot_result   = make_f1ap_ntn_ul_slot_resource_result(
+          false, f1ap_ntn_ul_slot_resource_result_reason::assignment_generation_conflict, std::nullopt);
+    }
+  }
+
   const std::optional<ntn_ul_slot_resource_request> next_ntn_ul_slot_request =
-      make_du_ntn_ul_slot_resource_request(upd_req.ntn_ul_slot_request);
-  const bool pcell_reallocated =
-      !ue_mcg.cell_group.cells.contains(SERVING_CELL_PCELL_IDX) ||
-      ue_mcg.cell_group.cells[SERVING_CELL_PCELL_IDX].serv_cell_cfg.cell_index != pcell_idx;
+      apply_ntn_ul_slot_request ? make_du_ntn_ul_slot_resource_request(upd_req.ntn_ul_slot_request)
+                                : ue_mcg.cell_group.ntn_ul_slot_request;
+  const bool pcell_reallocated = !ue_mcg.cell_group.cells.contains(SERVING_CELL_PCELL_IDX) ||
+                                 ue_mcg.cell_group.cells[SERVING_CELL_PCELL_IDX].serv_cell_cfg.cell_index != pcell_idx;
   const bool ntn_ul_slot_request_changed =
-      upd_req.ntn_ul_slot_request.has_value() &&
+      apply_ntn_ul_slot_request &&
       !is_same_ntn_ul_slot_resource_request(ue_mcg.cell_group.ntn_ul_slot_request, next_ntn_ul_slot_request);
 
   // > Deallocate resources for previously configured cells that have now been removed or changed.
@@ -251,7 +573,7 @@ du_ran_resource_manager_impl::update_context(du_ue_index_t                      
   }
 
   // > Allocate resources for new or modified cells.
-  if (upd_req.ntn_ul_slot_request.has_value() && pcell_reallocated) {
+  if (apply_ntn_ul_slot_request && pcell_reallocated) {
     ue_mcg.cell_group.ntn_ul_slot_request = next_ntn_ul_slot_request;
   }
   if (not ue_mcg.cell_group.cells.contains(0) or ue_mcg.cell_group.cells[0].serv_cell_cfg.cell_index != pcell_idx) {
@@ -259,7 +581,25 @@ du_ran_resource_manager_impl::update_context(du_ue_index_t                      
     error_type<std::string> outcome = allocate_cell_resources(ue_index, pcell_idx, SERVING_CELL_PCELL_IDX);
     if (not outcome.has_value()) {
       resp.procedure_error = outcome;
+      mark_slot_snapshot_inconsistent(ue_index,
+                                      pcell_idx,
+                                      upd_req.ntn_ul_slot_request.has_value() &&
+                                          is_versioned(*upd_req.ntn_ul_slot_request) && apply_ntn_ul_slot_request);
+      if (upd_req.ntn_ul_slot_request.has_value() && is_versioned(*upd_req.ntn_ul_slot_request) &&
+          apply_ntn_ul_slot_request) {
+        resp.ntn_ul_slot_result = make_versioned_ntn_ul_slot_resource_result(
+            false, get_ntn_ul_slot_reject_reason(outcome.error()), *upd_req.ntn_ul_slot_request);
+      }
       return resp;
+    }
+    if (!apply_ntn_ul_slot_request) {
+      // A generation that was verified for the old PCell cannot silently become authoritative for a different cell.
+      mark_slot_snapshot_inconsistent(ue_index, pcell_idx);
+      if (upd_req.ntn_ul_slot_request.has_value() && is_versioned(*upd_req.ntn_ul_slot_request) &&
+          resp.ntn_ul_slot_result.has_value() && resp.ntn_ul_slot_result->accepted) {
+        resp.ntn_ul_slot_result = make_versioned_ntn_ul_slot_resource_result(
+            false, f1ap_ntn_ul_slot_resource_result_reason::du_context_update_failed, *upd_req.ntn_ul_slot_request);
+      }
     }
   }
   for (const f1ap_scell_to_setup& sc : upd_req.scells_to_setup) {
@@ -269,17 +609,45 @@ du_ran_resource_manager_impl::update_context(du_ue_index_t                      
     }
   }
   if (ntn_ul_slot_request_changed && !pcell_reallocated) {
+    bool                    restore_failed = false;
     error_type<std::string> outcome =
-        reallocate_pcell_ul_slot_resources(ue_index, ue_mcg, next_ntn_ul_slot_request);
+        reallocate_pcell_ul_slot_resources(ue_index, ue_mcg, next_ntn_ul_slot_request, restore_failed);
     if (not outcome.has_value()) {
+      if (restore_failed) {
+        mark_slot_snapshot_inconsistent(ue_index, pcell_idx, is_versioned(*upd_req.ntn_ul_slot_request));
+      } else if (is_versioned(*upd_req.ntn_ul_slot_request)) {
+        clear_slot_update_in_progress(ue_index);
+      }
       resp.ntn_ul_slot_result =
-          make_f1ap_ntn_ul_slot_resource_result(false, get_ntn_ul_slot_reject_reason(outcome.error()), std::nullopt);
-    } else if (upd_req.ntn_ul_slot_request.has_value()) {
-      resp.ntn_ul_slot_result = make_f1ap_ntn_ul_slot_resource_result(
+          is_versioned(*upd_req.ntn_ul_slot_request)
+              ? make_versioned_ntn_ul_slot_resource_result(
+                    false, get_ntn_ul_slot_reject_reason(outcome.error()), *upd_req.ntn_ul_slot_request)
+              : make_f1ap_ntn_ul_slot_resource_result(
+                    false, get_ntn_ul_slot_reject_reason(outcome.error()), std::nullopt);
+    }
+  }
+
+  if (apply_ntn_ul_slot_request && upd_req.ntn_ul_slot_request.has_value() &&
+      is_versioned(*upd_req.ntn_ul_slot_request) && !resp.ntn_ul_slot_result.has_value()) {
+    std::optional<f1ap_ntn_ul_slot_resource_request> actual_request;
+    if (upd_req.ntn_ul_slot_request->operation == f1ap_ntn_ul_slot_resource_operation::clear) {
+      actual_request = *upd_req.ntn_ul_slot_request;
+    } else {
+      actual_request = read_actual_slot_assignment(ue_mcg, *upd_req.ntn_ul_slot_request);
+    }
+    if (!actual_request.has_value()) {
+      mark_slot_snapshot_inconsistent(ue_index, pcell_idx, true);
+      resp.ntn_ul_slot_result = make_versioned_ntn_ul_slot_resource_result(
+          false, f1ap_ntn_ul_slot_resource_result_reason::du_context_update_failed, *upd_req.ntn_ul_slot_request);
+    } else {
+      stage_versioned_slot_request(ue_index, pcell_idx, *upd_req.ntn_ul_slot_request, actual_request);
+      resp.ntn_ul_slot_result = make_versioned_ntn_ul_slot_resource_result(
           true,
-          next_ntn_ul_slot_request.has_value() ? f1ap_ntn_ul_slot_resource_result_reason::applied
-                                               : f1ap_ntn_ul_slot_resource_result_reason::clear_applied,
-          next_ntn_ul_slot_request);
+          upd_req.ntn_ul_slot_request->operation == f1ap_ntn_ul_slot_resource_operation::clear
+              ? f1ap_ntn_ul_slot_resource_result_reason::clear_applied
+              : f1ap_ntn_ul_slot_resource_result_reason::applied,
+          *upd_req.ntn_ul_slot_request,
+          actual_request);
     }
   }
 
@@ -318,8 +686,10 @@ du_ran_resource_manager_impl::update_context(du_ue_index_t                      
 error_type<std::string> du_ran_resource_manager_impl::reallocate_pcell_ul_slot_resources(
     du_ue_index_t                                      ue_index,
     du_ue_resource_config&                             ue_res,
-    const std::optional<ntn_ul_slot_resource_request>& slot_request)
+    const std::optional<ntn_ul_slot_resource_request>& slot_request,
+    bool&                                              restore_failed)
 {
+  restore_failed = false;
   if (!ue_res.cell_group.cells.contains(SERVING_CELL_PCELL_IDX)) {
     return make_unexpected(fmt::format("Unable to reallocate NTN UL slot resources for ue={}: PCell is missing",
                                        fmt::underlying(ue_index)));
@@ -327,18 +697,20 @@ error_type<std::string> du_ran_resource_manager_impl::reallocate_pcell_ul_slot_r
 
   const std::optional<ntn_ul_slot_resource_request> previous_slot_request = ue_res.cell_group.ntn_ul_slot_request;
 
-  auto restore_previous_resources = [&]() {
+  auto restore_previous_resources = [&]() -> bool {
     ue_res.cell_group.ntn_ul_slot_request = previous_slot_request;
     if (not srs_res_mng->alloc_resources(ue_res.cell_group)) {
       logger.error("ue={}: Failed to restore previous SRS resources after NTN UL slot reallocation failure",
                    fmt::underlying(ue_index));
-      return;
+      return false;
     }
     if (not pucch_res_mng.alloc_resources(ue_res.cell_group)) {
       srs_res_mng->dealloc_resources(ue_res.cell_group);
       logger.error("ue={}: Failed to restore previous PUCCH resources after NTN UL slot reallocation failure",
                    fmt::underlying(ue_index));
+      return false;
     }
+    return true;
   };
 
   pucch_res_mng.dealloc_resources(ue_res.cell_group);
@@ -346,13 +718,13 @@ error_type<std::string> du_ran_resource_manager_impl::reallocate_pcell_ul_slot_r
 
   ue_res.cell_group.ntn_ul_slot_request = slot_request;
   if (not srs_res_mng->alloc_resources(ue_res.cell_group)) {
-    restore_previous_resources();
+    restore_failed = !restore_previous_resources();
     return make_unexpected(fmt::format("Unable to reallocate SRS resources for ue={}", fmt::underlying(ue_index)));
   }
 
   if (not pucch_res_mng.alloc_resources(ue_res.cell_group)) {
     srs_res_mng->dealloc_resources(ue_res.cell_group);
-    restore_previous_resources();
+    restore_failed = !restore_previous_resources();
     return make_unexpected(fmt::format("Unable to reallocate PUCCH resources for ue={}", fmt::underlying(ue_index)));
   }
 
@@ -362,6 +734,10 @@ error_type<std::string> du_ran_resource_manager_impl::reallocate_pcell_ul_slot_r
 void du_ran_resource_manager_impl::deallocate_context(du_ue_index_t ue_index)
 {
   srsran_assert(ue_res_pool.contains(ue_index), "This function should only be called for an already allocated UE");
+  {
+    std::lock_guard<std::mutex> lock(ntn_ue_slot_registry_mutex);
+    ntn_ue_slot_registry.erase(ue_index);
+  }
   ue_resource_context&   ue_res = ue_res_pool[ue_index];
   du_ue_resource_config& ue_mcg = ue_res.cg_cfg;
 

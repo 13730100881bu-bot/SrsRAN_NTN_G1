@@ -181,6 +181,13 @@ public:
   handle_gnb_du_resource_coordination_request(const f1ap_gnb_du_resource_coordination_request& request) = 0;
 };
 
+/// Identifies a UE within the current F1 connection.
+struct f1ap_ue_identity {
+  ue_index_t              ue_index      = ue_index_t::invalid;
+  gnb_cu_ue_f1ap_id_t     cu_ue_f1ap_id = gnb_cu_ue_f1ap_id_t::invalid;
+  gnb_du_ue_f1ap_id_t     du_ue_f1ap_id = gnb_du_ue_f1ap_id_t::invalid;
+};
+
 /// Combined entry point for F1AP handling.
 class f1ap_cu : public f1ap_message_handler,
                 public f1ap_rrc_message_handler,
@@ -195,6 +202,15 @@ public:
   virtual ~f1ap_cu() = default;
 
   virtual const f1ap_du_context& get_context() const = 0;
+
+  /// Resolves an exact pair of gNB-CU and gNB-DU UE F1AP IDs in the current F1 connection.
+  /// Returns no value if either ID is invalid, the IDs do not belong to the same UE, or the UE is being released.
+  virtual std::optional<ue_index_t>
+  resolve_ue_identity(gnb_cu_ue_f1ap_id_t cu_ue_f1ap_id, gnb_du_ue_f1ap_id_t du_ue_f1ap_id) const = 0;
+
+  /// Returns the current F1AP identity of a UE.
+  /// Returns no value if the UE has no complete ID pair or is being released.
+  virtual std::optional<f1ap_ue_identity> get_ue_identity(ue_index_t ue_index) const = 0;
 
   virtual async_task<void> stop() = 0;
 

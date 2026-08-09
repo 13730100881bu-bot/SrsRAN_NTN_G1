@@ -108,6 +108,7 @@ public:
 
 class f1ap_test_dummy : public f1ap_connection_manager,
                         public f1ap_ue_context_manager,
+                        public f1ap_ue_id_translator,
                         public f1ap_message_handler,
                         public f1ap_rrc_message_transfer_procedure_handler,
                         public f1ap_metrics_collector
@@ -190,6 +191,37 @@ public:
   void handle_notify(const f1ap_notify_message& msg) override {}
 
   bool has_gnb_cu_ue_f1ap_id(const du_ue_index_t& ue_index) const override { return true; }
+
+  std::optional<gnb_cu_ue_f1ap_id_t> get_gnb_cu_ue_f1ap_id(const du_ue_index_t& ue_index) const override
+  {
+    return int_to_gnb_cu_ue_f1ap_id(ue_index);
+  }
+
+  std::optional<gnb_cu_ue_f1ap_id_t>
+  get_gnb_cu_ue_f1ap_id(const gnb_du_ue_f1ap_id_t& gnb_du_ue_f1ap_id) const override
+  {
+    return int_to_gnb_cu_ue_f1ap_id(gnb_du_ue_f1ap_id_to_uint(gnb_du_ue_f1ap_id));
+  }
+
+  gnb_du_ue_f1ap_id_t get_gnb_du_ue_f1ap_id(const du_ue_index_t& ue_index) override
+  {
+    return int_to_gnb_du_ue_f1ap_id(ue_index);
+  }
+
+  gnb_du_ue_f1ap_id_t get_gnb_du_ue_f1ap_id(const gnb_cu_ue_f1ap_id_t& gnb_cu_ue_f1ap_id) override
+  {
+    return int_to_gnb_du_ue_f1ap_id(gnb_cu_ue_f1ap_id_to_uint(gnb_cu_ue_f1ap_id));
+  }
+
+  du_ue_index_t get_ue_index(const gnb_du_ue_f1ap_id_t& gnb_du_ue_f1ap_id) override
+  {
+    return to_du_ue_index(gnb_du_ue_f1ap_id_to_uint(gnb_du_ue_f1ap_id));
+  }
+
+  du_ue_index_t get_ue_index(const gnb_cu_ue_f1ap_id_t& gnb_cu_ue_f1ap_id) override
+  {
+    return to_du_ue_index(gnb_cu_ue_f1ap_id_to_uint(gnb_cu_ue_f1ap_id));
+  }
 
   void handle_message(const f1ap_message& msg) override {}
 
@@ -404,6 +436,7 @@ public:
                                                        const du_ue_resource_config*          reestablished_context,
                                                        const ue_capability_summary*          reestablished_ue_caps) override;
     void                                        config_applied() override {}
+    void                                        update_completed(bool applied) override;
     const du_ue_resource_config&                get() override;
     const std::optional<ue_capability_summary>& ue_capabilities() const override;
 
@@ -418,6 +451,9 @@ public:
   std::map<du_ue_index_t, du_ue_resource_config> ue_resource_pool;
   du_ue_resource_config                          next_context_update_result;
   du_ue_resource_update_response                 next_config_resp;
+  std::optional<bool>                            last_update_completed;
+  bool                                           versioned_slot_update_pending    = false;
+  bool                                           versioned_slot_snapshot_complete = false;
 
   dummy_ue_resource_configurator_factory();
 

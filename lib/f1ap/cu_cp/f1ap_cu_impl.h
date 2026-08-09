@@ -49,6 +49,11 @@ public:
 
   const f1ap_du_context& get_context() const override;
 
+  std::optional<ue_index_t>
+  resolve_ue_identity(gnb_cu_ue_f1ap_id_t cu_ue_f1ap_id, gnb_du_ue_f1ap_id_t du_ue_f1ap_id) const override;
+
+  std::optional<f1ap_ue_identity> get_ue_identity(ue_index_t ue_index) const override;
+
   async_task<void> stop() override;
 
   // f1ap_rrc_message_handler functions.

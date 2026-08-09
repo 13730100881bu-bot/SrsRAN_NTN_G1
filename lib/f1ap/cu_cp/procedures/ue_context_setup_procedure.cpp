@@ -281,7 +281,8 @@ static void fill_asn1_ue_context_setup_request(asn1::f1ap::ue_context_setup_requ
     asn1_request->res_coordination_transfer_container         = request.res_coordination_transfer_container.copy();
   } else if (request.ntn_ul_slot_request.has_value() &&
              (!is_empty(*request.ntn_ul_slot_request) ||
-              request.ntn_ul_slot_request->requested_c_rnti.has_value())) {
+              request.ntn_ul_slot_request->requested_c_rnti.has_value() ||
+              request.ntn_ul_slot_request->operation == f1ap_ntn_ul_slot_resource_operation::clear)) {
     asn1_request->res_coordination_transfer_container_present = true;
     asn1_request->res_coordination_transfer_container =
         encode_f1ap_ntn_ul_slot_resource_request(*request.ntn_ul_slot_request);

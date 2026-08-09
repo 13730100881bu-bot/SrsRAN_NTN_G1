@@ -38,6 +38,7 @@
 #include <condition_variable>
 #include <future>
 #include <limits>
+#include <set>
 #include <thread>
 
 using namespace srsran;
@@ -265,33 +266,106 @@ du_manager_impl::handle_ntn_resource_audit_request(const f1ap_ntn_resource_audit
 
   f1ap_ntn_resource_audit_result result;
   result.generation_id = request.generation_id;
+  if (request.request_ue_slot_identity) {
+    result.ue_slot_identity_metadata_present = true;
+    result.ue_slot_identity_supported        = true;
+    result.gnb_du_id                         = request.gnb_du_id;
+    result.du_index                          = request.du_index;
+    result.cell_index                        = request.cell_index;
+    result.cell_cgi                          = request.cell_cgi;
+    result.pci                               = request.pci;
+    result.connection_token                  = request.connection_token;
+  }
   if (!cell_mng.has_cell(request.cell_index)) {
     result.reject_reason = "unknown_cell";
     return launch_result(std::move(result));
   }
-  if (cell_mng.get_cell_cfg(request.cell_index).pci != request.pci) {
+  const du_cell_config& cell_cfg = cell_mng.get_cell_cfg(request.cell_index);
+  if (cell_cfg.pci != request.pci) {
     result.reject_reason = "pci_mismatch";
+    return launch_result(std::move(result));
+  }
+  if (request.request_ue_slot_identity &&
+      (request.gnb_du_id != params.ran.gnb_du_id || request.cell_cgi != cell_cfg.nr_cgi ||
+       request.connection_token == 0)) {
+    result.reject_reason = request.gnb_du_id != params.ran.gnb_du_id ? "gnb_du_id_mismatch"
+                           : request.cell_cgi != cell_cfg.nr_cgi      ? "ncgi_mismatch"
+                                                                      : "invalid_connection_token";
     return launch_result(std::move(result));
   }
 
   const mac_ntn_rnti_lease_pool_snapshot snapshot = params.mac.mgr.get_ntn_rnti_lease_pool_snapshot(request.cell_index);
-  if (snapshot.complete && snapshot.cell_index != request.cell_index) {
-    result.reject_reason = "snapshot_cell_mismatch";
-    return launch_result(std::move(result));
-  }
-  result.accepted      = true;
-  result.rnti_snapshot_complete    = snapshot.complete;
-  result.ue_slot_snapshot_complete = false;
+  const bool rnti_snapshot_matches_target = !snapshot.complete || snapshot.cell_index == request.cell_index;
+  const std::string rnti_failure_reason = rnti_snapshot_matches_target ? "rnti_snapshot_incomplete"
+                                                                        : "snapshot_cell_mismatch";
+  result.accepted                   = true;
+  result.rnti_snapshot_complete     = snapshot.complete && rnti_snapshot_matches_target;
+  result.ue_slot_snapshot_complete  = false;
   result.retirement_metadata_present = request.request_retirement_metadata;
   if (request.request_retirement_metadata) {
-    result.retire_supported           = snapshot.retirement_supported;
-    result.rnti_generation_high_water = snapshot.rnti_generation_high_water;
+    result.retire_supported = result.rnti_snapshot_complete && snapshot.retirement_supported;
+    result.rnti_generation_high_water = result.rnti_snapshot_complete ? snapshot.rnti_generation_high_water : 0;
   }
-  result.reject_reason = snapshot.complete ? "ue_slot_snapshot_incomplete" : "rnti_and_ue_slot_snapshots_incomplete";
-  if (snapshot.complete) {
+  result.reject_reason = result.rnti_snapshot_complete
+                             ? "ue_slot_snapshot_incomplete"
+                             : (rnti_snapshot_matches_target ? "rnti_and_ue_slot_snapshots_incomplete"
+                                                             : rnti_failure_reason);
+  if (result.rnti_snapshot_complete) {
     result.rnti_leases.reserve(snapshot.leases.size());
     for (const auto& lease : snapshot.leases) {
       result.rnti_leases.push_back({lease.rnti, lease.state, lease.distribution_state, lease.generation_id});
+    }
+  }
+
+  if (request.request_ue_slot_identity) {
+    const du_ntn_ue_slot_resource_snapshot slot_snapshot =
+        cell_res_alloc.get_ntn_ue_slot_resource_snapshot(request.cell_index);
+    result.ue_slot_snapshot_complete = slot_snapshot.complete;
+    result.ue_slot_assignment_generation_high_water = slot_snapshot.assignment_generation_high_water;
+    if (slot_snapshot.complete) {
+      std::set<uint32_t> observed_cu_ids;
+      std::set<uint32_t> observed_du_ids;
+      result.ue_slots.reserve(slot_snapshot.entries.size());
+      for (const du_ntn_ue_slot_resource_snapshot_entry& entry : slot_snapshot.entries) {
+        const du_ue* ue = ue_mng.find_ue(entry.ue_index);
+        const std::optional<gnb_cu_ue_f1ap_id_t> cu_id =
+            params.f1ap.ue_ids.get_gnb_cu_ue_f1ap_id(entry.ue_index);
+        const gnb_du_ue_f1ap_id_t du_id = params.f1ap.ue_ids.get_gnb_du_ue_f1ap_id(entry.ue_index);
+        const bool current_identity = ue != nullptr && ue->pcell_index == request.cell_index &&
+                                      ue->nr_cgi == cell_cfg.nr_cgi && is_crnti(ue->rnti) && cu_id.has_value() &&
+                                      *cu_id != gnb_cu_ue_f1ap_id_t::invalid && du_id != gnb_du_ue_f1ap_id_t::invalid;
+        const uint32_t cu_id_value = current_identity ? gnb_cu_ue_f1ap_id_to_uint(*cu_id) : 0;
+        const uint32_t du_id_value = current_identity ? gnb_du_ue_f1ap_id_to_uint(du_id) : 0;
+        if (!current_identity || entry.cell_index != request.cell_index || entry.assignment_generation == 0 ||
+            entry.request.assignment_generation != entry.assignment_generation ||
+            entry.request.operation != f1ap_ntn_ul_slot_resource_operation::set || is_empty(entry.request) ||
+            !observed_cu_ids.emplace(cu_id_value).second || !observed_du_ids.emplace(du_id_value).second) {
+          result.ue_slot_snapshot_complete = false;
+          result.ue_slots.clear();
+          break;
+        }
+
+        f1ap_ntn_resource_audit_ue_slot slot;
+        slot.identity_present      = true;
+        slot.gnb_cu_ue_f1ap_id    = *cu_id;
+        slot.gnb_du_ue_f1ap_id    = du_id;
+        slot.cell_index           = request.cell_index;
+        slot.cell_cgi             = cell_cfg.nr_cgi;
+        slot.pci                  = cell_cfg.pci;
+        slot.c_rnti               = ue->rnti;
+        slot.assignment_generation = entry.assignment_generation;
+        slot.state                 = "applied_by_du";
+        slot.request               = entry.request;
+        result.ue_slots.push_back(std::move(slot));
+      }
+    }
+    if (result.rnti_snapshot_complete && result.ue_slot_snapshot_complete) {
+      result.reject_reason = "none";
+    } else if (result.rnti_snapshot_complete) {
+      result.reject_reason = slot_snapshot.failure_reason.empty() ? "ue_slot_snapshot_incomplete"
+                                                                  : slot_snapshot.failure_reason;
+    } else if (result.ue_slot_snapshot_complete) {
+      result.reject_reason = rnti_failure_reason;
     }
   }
 

@@ -31,6 +31,7 @@
 #include "ra_resource_manager.h"
 #include "ue_capability_manager.h"
 #include "srsran/ran/qos/five_qi.h"
+#include <mutex>
 
 namespace srsran {
 namespace srs_du {
@@ -54,6 +55,8 @@ public:
                                         const f1ap_ue_context_update_request& upd_req,
                                         const du_ue_resource_config*          reestablished_context,
                                         const ue_capability_summary*          reestablished_ue_caps) override;
+
+  void update_completed(bool applied) override;
 
   void config_applied() override;
 
@@ -81,12 +84,11 @@ public:
   du_ran_resource_manager_impl& operator=(du_ran_resource_manager_impl&&)      = delete;
   du_ran_resource_manager_impl& operator=(const du_ran_resource_manager_impl&) = delete;
 
-  expected<ue_ran_resource_configurator, std::string>
-  create_ue_resource_configurator(
-      du_ue_index_t                                    ue_index,
-      du_cell_index_t                                  pcell_index,
-      bool                                             has_tc_rnti,
-      std::optional<ntn_ul_slot_resource_request>      ntn_ul_slot_request = std::nullopt) override;
+  expected<ue_ran_resource_configurator, std::string> create_ue_resource_configurator(
+      du_ue_index_t                               ue_index,
+      du_cell_index_t                             pcell_index,
+      bool                                        has_tc_rnti,
+      std::optional<ntn_ul_slot_resource_request> ntn_ul_slot_request = std::nullopt) override;
 
   /// \brief Updates a UE's cell configuration context based on the F1 UE Context Update request.
   ///
@@ -112,14 +114,59 @@ public:
   /// The UE has confirmed that correct application of the new configuration.
   void ue_config_applied(du_ue_index_t ue_index);
 
+  /// Complete a staged NTN slot update after the MAC/scheduler transaction returns.
+  void complete_versioned_slot_request(du_ue_index_t ue_index, bool applied);
+
+  /// Returns a connection-independent snapshot of the SR/SRS assignments actually applied by this resource manager.
+  du_ntn_ue_slot_resource_snapshot get_ntn_ue_slot_resource_snapshot(du_cell_index_t cell_index) const;
+
 private:
+  enum class versioned_slot_request_action { apply, idempotent, reject };
+
+  struct versioned_slot_request_decision {
+    versioned_slot_request_action                    action        = versioned_slot_request_action::apply;
+    f1ap_ntn_ul_slot_resource_result_reason          reject_reason = f1ap_ntn_ul_slot_resource_result_reason::rejected;
+    std::optional<f1ap_ntn_ul_slot_resource_request> applied_request;
+  };
+
+  struct ntn_ue_slot_registry_state {
+    du_ue_index_t                                         ue_index                         = INVALID_DU_UE_INDEX;
+    du_cell_index_t                                       cell_index                       = INVALID_DU_CELL_INDEX;
+    uint32_t                                              assignment_generation_high_water = 0;
+    std::optional<f1ap_ntn_ul_slot_resource_request>      last_request;
+    std::optional<du_ntn_ue_slot_resource_snapshot_entry> active_assignment;
+    std::optional<f1ap_ntn_ul_slot_resource_request>      pending_request;
+    std::optional<f1ap_ntn_ul_slot_resource_request>      pending_actual_request;
+    du_cell_index_t                                       pending_cell_index = INVALID_DU_CELL_INDEX;
+    bool                                                  consistent         = true;
+    bool                                                  update_in_progress = false;
+
+    explicit ntn_ue_slot_registry_state(du_ue_index_t ue_index_) : ue_index(ue_index_) {}
+  };
+
   error_type<std::string>
        allocate_cell_resources(du_ue_index_t ue_index, du_cell_index_t cell_index, serv_cell_index_t serv_cell_index);
   void deallocate_cell_resources(du_ue_index_t ue_index, serv_cell_index_t serv_cell_index);
   error_type<std::string>
   reallocate_pcell_ul_slot_resources(du_ue_index_t                                      ue_index,
                                      du_ue_resource_config&                             ue_res,
-                                     const std::optional<ntn_ul_slot_resource_request>& slot_request);
+                                     const std::optional<ntn_ul_slot_resource_request>& slot_request,
+                                     bool&                                              restore_failed);
+
+  versioned_slot_request_decision validate_versioned_slot_request(du_ue_index_t                            ue_index,
+                                                                  du_cell_index_t                          cell_index,
+                                                                  const f1ap_ntn_ul_slot_resource_request& request);
+  std::optional<f1ap_ntn_ul_slot_resource_request>
+       read_actual_slot_assignment(const du_ue_resource_config&             ue_res,
+                                   const f1ap_ntn_ul_slot_resource_request& requested) const;
+  void stage_versioned_slot_request(du_ue_index_t                                           ue_index,
+                                    du_cell_index_t                                         cell_index,
+                                    const f1ap_ntn_ul_slot_resource_request&                request,
+                                    const std::optional<f1ap_ntn_ul_slot_resource_request>& actual_request);
+  void mark_slot_snapshot_inconsistent(du_ue_index_t                  ue_index,
+                                       std::optional<du_cell_index_t> cell_index                  = std::nullopt,
+                                       bool                           include_uncommitted_request = false);
+  void clear_slot_update_in_progress(du_ue_index_t ue_index);
 
   span<const du_cell_config> cell_cfg_list;
   srslog::basic_logger&      logger;
@@ -136,6 +183,11 @@ private:
 
   // Current UE Resource Allocations.
   slotted_array<ue_resource_context, MAX_NOF_DU_UES, false> ue_res_pool;
+
+  // Version identities are kept separately from the mutable cell configuration. Snapshot reads never hold this
+  // mutex while SR/SRS allocation is running.
+  mutable std::mutex                                               ntn_ue_slot_registry_mutex;
+  slotted_array<ntn_ue_slot_registry_state, MAX_NOF_DU_UES, false> ntn_ue_slot_registry;
 
   // Allocator of UE PUCCH resources.
   du_pucch_resource_manager pucch_res_mng;

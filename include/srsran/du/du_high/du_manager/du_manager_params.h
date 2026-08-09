@@ -67,6 +67,7 @@ struct du_manager_params {
   struct f1ap_config_params {
     f1ap_connection_manager& conn_mng;
     f1ap_ue_context_manager& ue_mng;
+    f1ap_ue_id_translator&   ue_ids;
     f1ap_metrics_collector&  metrics;
   };
 
