@@ -352,6 +352,20 @@ private:
                                            const rrc_ue_release_context& release_context,
                                            const char*                   reason);
   void schedule_ntn_ul_slot_updates_for_online_ues();
+  struct ntn_ue_slot_operation_binding {
+    ue_index_t          ue_index = ue_index_t::invalid;
+    du_index_t          du_index = du_index_t::invalid;
+    du_cell_index_t     cell_index = du_cell_index_t::invalid;
+    pci_t               pci = INVALID_PCI;
+    rnti_t              c_rnti = rnti_t::INVALID_RNTI;
+    nr_cell_identity    nci = nr_cell_identity::min();
+    gnb_du_id_t         gnb_du_id = gnb_du_id_t::invalid;
+    gnb_cu_ue_f1ap_id_t cu_ue_f1ap_id = gnb_cu_ue_f1ap_id_t::invalid;
+    gnb_du_ue_f1ap_id_t du_ue_f1ap_id = gnb_du_ue_f1ap_id_t::invalid;
+    uint64_t            connection_token = 0;
+  };
+  std::optional<ntn_ue_slot_operation_binding> capture_ntn_ue_slot_operation_binding(cu_cp_ue& ue);
+  bool is_ntn_ue_slot_operation_binding_current(const ntn_ue_slot_operation_binding& binding);
   void schedule_ntn_rnti_lease_pool_updates_for_access_beams();
   void schedule_ntn_rnti_retirement_updates();
   void schedule_ntn_sib19_broadcast_updates();
@@ -886,6 +900,14 @@ private:
   uint64_t                                                             next_ntn_pre_service_relocation_attempt_id = 1;
   uint64_t                                                             next_ntn_service_switch_over_handover_attempt_id = 1;
   enum class ntn_rnti_retirement_capability { unknown, supported, unsupported };
+  enum class ntn_ue_slot_audit_capability { unknown, supported, unsupported };
+  enum class ntn_ue_slot_audit_stage { awaiting_capability, awaiting_complete_snapshot, reconciled };
+  struct ntn_ue_slot_audit_target_stats {
+    unsigned matched     = 0;
+    unsigned missing     = 0;
+    unsigned conflict    = 0;
+    unsigned quarantined = 0;
+  };
   struct ntn_rnti_du_reconciliation_state {
     uint64_t                                            connection_generation = 0;
     bool                                                connected             = false;
@@ -896,6 +918,24 @@ private:
     std::set<std::pair<srsran::du_cell_index_t, pci_t>> reconciled_targets;
   };
   std::map<du_index_t, ntn_rnti_du_reconciliation_state>                     ntn_rnti_du_reconciliation_states;
+  struct ntn_ue_slot_du_reconciliation_state {
+    bool                                                connected = false;
+    uint64_t                                            connection_token = 0;
+    ntn_ue_slot_audit_capability                        capability = ntn_ue_slot_audit_capability::unknown;
+    ntn_ue_slot_audit_stage                             stage = ntn_ue_slot_audit_stage::awaiting_capability;
+    std::set<std::pair<srsran::du_cell_index_t, pci_t>> expected_targets;
+    std::set<std::pair<srsran::du_cell_index_t, pci_t>> complete_targets;
+    std::map<std::pair<srsran::du_cell_index_t, pci_t>, ntn_ue_slot_audit_target_stats> latest_target_stats;
+    unsigned                                            matched = 0;
+    unsigned                                            missing = 0;
+    unsigned                                            conflict = 0;
+    unsigned                                            quarantined = 0;
+    unsigned                                            repaired = 0;
+    uint32_t                                            assignment_generation_high_water = 0;
+    std::string                                         last_reason = "none";
+  };
+  std::map<du_index_t, ntn_ue_slot_du_reconciliation_state>                 ntn_ue_slot_du_reconciliation_states;
+  uint64_t                                                                  next_ntn_ue_slot_connection_token = 1;
   std::map<du_index_t, uint16_t>                                             next_ntn_rnti_lease_value_by_du;
   std::map<std::tuple<du_index_t, srsran::du_cell_index_t, pci_t>, uint32_t> ntn_rnti_audits_in_flight;
   uint32_t                                                             next_ntn_resource_audit_generation_id = 1;

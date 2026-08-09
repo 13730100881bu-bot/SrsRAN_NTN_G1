@@ -99,12 +99,20 @@ public:
   ntn_slot_resource_update_decision set_digital_slot_intent_from_request(
       ue_index_t ue_index, const f1ap_ntn_ul_slot_resource_request& request, std::string reason = "legacy_ntn_slot");
 
+  /// Upgrades a legacy desired assignment after the current DU has advertised generation support.
+  ntn_slot_resource_update_decision make_digital_slot_intent_versioned(ue_index_t ue_index);
+
   ntn_slot_resource_update_decision clear_digital_service_slot_intent(ue_index_t ue_index,
                                                                       std::string reason = "no_digital_service");
 
   void restore_or_clear_failed_slot_update(ue_index_t                                               ue_index,
                                            const f1ap_ntn_ul_slot_resource_request&                 attempted_request,
                                            const std::optional<f1ap_ntn_ul_slot_resource_request>& restore_request);
+
+  /// Keeps the desired assignment after an inconclusive DU outcome so a complete snapshot can resolve it.
+  void mark_slot_update_outcome_unknown(ue_index_t                               ue_index,
+                                        const f1ap_ntn_ul_slot_resource_request& attempted_request,
+                                        std::string                              reason);
 
   void mark_slot_update_sent_to_du(ue_index_t ue_index, const f1ap_ntn_ul_slot_resource_request& request);
 
@@ -114,6 +122,9 @@ public:
                                const f1ap_ntn_ul_slot_resource_result&                  result);
 
   void mark_slot_update_applied(ue_index_t ue_index, const f1ap_ntn_ul_slot_resource_request& request);
+
+  /// Invalidates DU-applied proof while preserving the desired resource assignment across a reconnect.
+  void invalidate_ue_slot_audit_for_du(du_index_t du_index);
 
   bool has_active_digital_slot_intent(ue_index_t ue_index) const;
 
@@ -164,7 +175,8 @@ private:
                                 srsran::du_cell_index_t,
                                 pci_t,
                                 rnti_t,
-                                std::string>;
+                                std::string,
+                                uint32_t>;
   using retirement_group_key = std::tuple<du_index_t, srsran::du_cell_index_t, pci_t, uint32_t, uint64_t>;
   using retired_rnti_key     = std::pair<du_index_t, rnti_t>;
 
@@ -185,6 +197,8 @@ private:
   static bool is_valid_lease_pool_update(const ntn_rnti_lease_pool_update& update);
   static bool are_slot_requests_equal(const f1ap_ntn_ul_slot_resource_request& lhs,
                                       const f1ap_ntn_ul_slot_resource_request& rhs);
+  static bool are_slot_resource_contents_equal(const f1ap_ntn_ul_slot_resource_request& lhs,
+                                               const f1ap_ntn_ul_slot_resource_request& rhs);
   static repair_key make_repair_key(const ntn_resource_repair& repair);
   static ntn_resource_repair_record make_repair_record(const ntn_resource_repair& repair, uint32_t generation_id);
 
@@ -203,6 +217,7 @@ private:
   std::map<ue_index_t, ntn_digital_slot_resource_intent> digital_slot_intent_by_ue;
   std::map<ue_index_t, f1ap_ntn_ul_slot_resource_request> cached_slot_requests_by_ue;
   std::map<ue_index_t, f1ap_ntn_ul_slot_resource_request> applied_slot_requests_by_ue;
+  std::map<ue_index_t, uint32_t>                           slot_assignment_generation_high_water_by_ue;
   std::map<repair_key, ntn_resource_repair_record> resource_repairs_by_key;
   bool authoritative_rnti_lease_validation_enabled = false;
   uint64_t                                                nof_rnti_leases_retired                     = 0;

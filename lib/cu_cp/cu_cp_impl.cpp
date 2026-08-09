@@ -1669,6 +1669,81 @@ make_ntn_ul_slot_request_for_ue_context_setup(du_processor_repository&        du
   return make_ntn_ul_slot_request_for_nci(serving_nci.value(), ue.get_du_index(), current_plan);
 }
 
+std::optional<cu_cp_impl::ntn_ue_slot_operation_binding>
+cu_cp_impl::capture_ntn_ue_slot_operation_binding(cu_cp_ue& ue)
+{
+  const du_index_t du_index = ue.get_du_index();
+  const auto slot_state_it  = ntn_ue_slot_du_reconciliation_states.find(du_index);
+  if (slot_state_it == ntn_ue_slot_du_reconciliation_states.end() || !slot_state_it->second.connected ||
+      slot_state_it->second.connection_token == 0) {
+    return std::nullopt;
+  }
+
+  du_processor* processor = du_db.find_du_processor(du_index);
+  if (processor == nullptr || processor->get_context() == nullptr) {
+    return std::nullopt;
+  }
+  const auto identity = processor->get_f1ap_handler().get_ue_identity(ue.get_ue_index());
+  if (!identity.has_value() || identity->ue_index != ue.get_ue_index()) {
+    return std::nullopt;
+  }
+
+  const du_cell_index_t cell_index = ue.get_pcell_index();
+  const du_cell_configuration* cell = nullptr;
+  for (const du_cell_configuration& candidate : processor->get_context()->served_cells) {
+    if (candidate.cell_index == cell_index && candidate.pci == ue.get_pci()) {
+      cell = &candidate;
+      break;
+    }
+  }
+  if (cell == nullptr || !is_crnti(ue.get_c_rnti())) {
+    return std::nullopt;
+  }
+
+  ntn_ue_slot_operation_binding binding;
+  binding.ue_index         = ue.get_ue_index();
+  binding.du_index         = du_index;
+  binding.cell_index       = cell_index;
+  binding.pci              = ue.get_pci();
+  binding.c_rnti           = ue.get_c_rnti();
+  binding.nci              = cell->cgi.nci;
+  binding.gnb_du_id        = processor->get_context()->id;
+  binding.cu_ue_f1ap_id    = identity->cu_ue_f1ap_id;
+  binding.du_ue_f1ap_id    = identity->du_ue_f1ap_id;
+  binding.connection_token = slot_state_it->second.connection_token;
+  return binding;
+}
+
+bool cu_cp_impl::is_ntn_ue_slot_operation_binding_current(const ntn_ue_slot_operation_binding& binding)
+{
+  cu_cp_ue* ue = ue_mng.find_du_ue(binding.ue_index);
+  if (ue == nullptr || ue->get_du_index() != binding.du_index || ue->get_pcell_index() != binding.cell_index ||
+      ue->get_pci() != binding.pci || ue->get_c_rnti() != binding.c_rnti) {
+    return false;
+  }
+  const auto slot_state_it = ntn_ue_slot_du_reconciliation_states.find(binding.du_index);
+  if (slot_state_it == ntn_ue_slot_du_reconciliation_states.end() || !slot_state_it->second.connected ||
+      slot_state_it->second.connection_token != binding.connection_token) {
+    return false;
+  }
+  du_processor* processor = du_db.find_du_processor(binding.du_index);
+  if (processor == nullptr || processor->get_context() == nullptr ||
+      processor->get_context()->id != binding.gnb_du_id) {
+    return false;
+  }
+  const auto identity = processor->get_f1ap_handler().get_ue_identity(binding.ue_index);
+  if (!identity.has_value() || identity->cu_ue_f1ap_id != binding.cu_ue_f1ap_id ||
+      identity->du_ue_f1ap_id != binding.du_ue_f1ap_id) {
+    return false;
+  }
+  return std::any_of(processor->get_context()->served_cells.begin(),
+                     processor->get_context()->served_cells.end(),
+                     [&binding](const du_cell_configuration& cell) {
+                        return cell.cell_index == binding.cell_index && cell.pci == binding.pci &&
+                              cell.cgi.nci == binding.nci;
+                     });
+}
+
 void cu_cp_impl::schedule_ntn_ul_slot_updates_for_online_ues()
 {
   std::set<ue_index_t> live_ues;
@@ -1684,9 +1759,14 @@ void cu_cp_impl::schedule_ntn_ul_slot_updates_for_online_ues()
              const f1ap_ntn_ul_slot_resource_request&         requested_slot_request,
              std::optional<f1ap_ntn_ul_slot_resource_request> restore_request_on_failure) {
         const ue_index_t ue_index = ue.get_ue_index();
+        const auto       binding  = capture_ntn_ue_slot_operation_binding(ue);
+        if (!binding.has_value()) {
+          return false;
+        }
         return ue.get_task_sched().schedule_async_task(
             launch_async([this,
                           ue_index,
+                          binding = *binding,
                           slot_request = requested_slot_request,
                           restore_request_on_failure](coro_context<async_task<void>>& ctx) mutable {
           cu_cp_ue*                                current_ue = nullptr;
@@ -1698,6 +1778,11 @@ void cu_cp_impl::schedule_ntn_ul_slot_updates_for_online_ues()
 
           CORO_BEGIN(ctx);
 
+          if (!is_ntn_ue_slot_operation_binding_current(binding)) {
+            logger.warning("ue={}: NTN SR/SRS slot update cancelled because the F1 identity or DU connection changed",
+                           ue_index);
+            CORO_EARLY_RETURN();
+          }
           current_ue = ue_mng.find_du_ue(ue_index);
           if (current_ue == nullptr || current_ue->get_rrc_ue() == nullptr ||
               current_ue->get_ue_context().reconfiguration_disabled) {
@@ -1711,23 +1796,24 @@ void cu_cp_impl::schedule_ntn_ul_slot_updates_for_online_ues()
           ue_context_mod_request.ntn_ul_slot_request = slot_request;
 
           CORO_AWAIT_VALUE(ue_context_mod_response,
-                           du_db.get_du_processor(current_ue->get_du_index())
+                           du_db.get_du_processor(binding.du_index)
                                .get_f1ap_handler()
                                .handle_ue_context_modification_request(ue_context_mod_request));
 
+          if (!is_ntn_ue_slot_operation_binding_current(binding)) {
+            logger.warning("ue={}: Ignoring stale NTN SR/SRS slot response from an earlier F1 connection", ue_index);
+            CORO_EARLY_RETURN();
+          }
+
           if (!ue_context_mod_response.success) {
             logger.warning("ue={}: Failed to apply NTN SR/SRS slot update at DU", ue_index);
-            ntn_service_resource_mng.restore_or_clear_failed_slot_update(
-                ue_index, slot_request, restore_request_on_failure);
+            ntn_service_resource_mng.mark_slot_update_outcome_unknown(
+                ue_index, slot_request, "du_context_update_outcome_unknown");
             CORO_EARLY_RETURN();
           }
           if (!ue_context_mod_response.ntn_ul_slot_result.has_value()) {
             logger.warning("ue={}: DU did not return NTN SR/SRS slot update result", ue_index);
-            f1ap_ntn_ul_slot_resource_result result;
-            result.accepted = false;
-            result.reason   = f1ap_ntn_ul_slot_resource_result_reason::malformed_request;
-            ntn_service_resource_mng.mark_slot_update_result(
-                ue_index, slot_request, restore_request_on_failure, result);
+            ntn_service_resource_mng.mark_slot_update_outcome_unknown(ue_index, slot_request, "du_response_missing");
             CORO_EARLY_RETURN();
           }
           if (!ue_context_mod_response.ntn_ul_slot_result->accepted) {
@@ -1741,8 +1827,8 @@ void cu_cp_impl::schedule_ntn_ul_slot_updates_for_online_ues()
 
           current_ue = ue_mng.find_du_ue(ue_index);
           if (current_ue == nullptr || current_ue->get_rrc_ue() == nullptr) {
-            ntn_service_resource_mng.restore_or_clear_failed_slot_update(
-                ue_index, slot_request, restore_request_on_failure);
+            ntn_service_resource_mng.mark_slot_update_outcome_unknown(
+                ue_index, slot_request, "ue_disappeared_after_du_apply");
             CORO_EARLY_RETURN();
           }
 
@@ -1754,10 +1840,14 @@ void cu_cp_impl::schedule_ntn_ul_slot_updates_for_online_ues()
 
             CORO_AWAIT_VALUE(rrc_reconfig_result,
                              current_ue->get_rrc_ue()->handle_rrc_reconfiguration_request(rrc_reconfig_args));
+            if (!is_ntn_ue_slot_operation_binding_current(binding)) {
+              logger.warning("ue={}: Ignoring NTN SR/SRS completion after the F1 identity changed", ue_index);
+              CORO_EARLY_RETURN();
+            }
             if (!rrc_reconfig_result) {
               logger.warning("ue={}: Failed to deliver NTN SR/SRS slot RRC reconfiguration", ue_index);
-              ntn_service_resource_mng.restore_or_clear_failed_slot_update(
-                  ue_index, slot_request, restore_request_on_failure);
+              ntn_service_resource_mng.mark_slot_update_outcome_unknown(
+                  ue_index, slot_request, "rrc_reconfiguration_outcome_unknown");
               CORO_EARLY_RETURN();
             }
           }
@@ -1770,17 +1860,27 @@ void cu_cp_impl::schedule_ntn_ul_slot_updates_for_online_ues()
       };
 
   auto schedule_slot_decision = [&](cu_cp_ue& ue, const ntn_slot_resource_update_decision& decision) {
-    if (decision.action == ntn_slot_resource_update_action::none) {
+    ntn_slot_resource_update_decision effective_decision = decision;
+    const auto slot_state_it = ntn_ue_slot_du_reconciliation_states.find(ue.get_du_index());
+    const auto current_request = decision.request.has_value() ? decision.request
+                                                              : ntn_service_resource_mng.get_cached_slot_request(
+                                                                    ue.get_ue_index());
+    if (slot_state_it != ntn_ue_slot_du_reconciliation_states.end() &&
+        slot_state_it->second.capability == ntn_ue_slot_audit_capability::supported && current_request.has_value() &&
+        !is_versioned(*current_request)) {
+      effective_decision = ntn_service_resource_mng.make_digital_slot_intent_versioned(ue.get_ue_index());
+    }
+    if (effective_decision.action == ntn_slot_resource_update_action::none) {
       return;
     }
     const f1ap_ntn_ul_slot_resource_request request_to_send =
-        decision.request.value_or(f1ap_ntn_ul_slot_resource_request{});
-    if (schedule_slot_update(ue, request_to_send, decision.previous_request)) {
+        effective_decision.request.value_or(f1ap_ntn_ul_slot_resource_request{});
+    if (schedule_slot_update(ue, request_to_send, effective_decision.previous_request)) {
       ntn_service_resource_mng.mark_slot_update_sent_to_du(ue.get_ue_index(), request_to_send);
     } else {
       ntn_service_resource_mng.restore_or_clear_failed_slot_update(
-          ue.get_ue_index(), request_to_send, decision.previous_request);
-      logger.warning("ue={}: Failed to schedule NTN SR/SRS slot {}", ue.get_ue_index(), decision.reason);
+          ue.get_ue_index(), request_to_send, effective_decision.previous_request);
+      logger.warning("ue={}: Failed to schedule NTN SR/SRS slot {}", ue.get_ue_index(), effective_decision.reason);
     }
   };
 
@@ -2363,7 +2463,9 @@ void cu_cp_impl::handle_ntn_resource_audit_decision(const ntn_resource_audit_dec
 {
   nof_ntn_resource_audit_mismatches += decision.nof_mismatches;
   nof_ntn_resource_audit_repair_actions += decision.nof_repairs;
-  for (const ntn_resource_repair& repair : decision.repairs) {
+  for (const ntn_resource_repair& repair_from_audit : decision.repairs) {
+    ntn_resource_repair repair = repair_from_audit;
+    repair.audit_generation_id = decision.generation_id;
     const bool service_pair_repair = is_ntn_service_pair_resource_repair(repair);
     if (service_pair_repair) {
       ++nof_ntn_service_pair_resource_audit_mismatches;
@@ -2496,6 +2598,13 @@ void cu_cp_impl::handle_ntn_resource_audit_decision(const ntn_resource_audit_dec
         mark_ntn_service_pair_resource_repair_skipped(repair, "ue_not_found");
         continue;
       }
+      const auto operation_binding = capture_ntn_ue_slot_operation_binding(*ue);
+      if (!operation_binding.has_value() || operation_binding->du_index != repair.du_index ||
+          to_f1ap_du_cell_index(operation_binding->cell_index) != repair.cell_index ||
+          operation_binding->pci != repair.pci) {
+        mark_ntn_service_pair_resource_repair_skipped(repair, "ue_slot_connection_identity_mismatch");
+        continue;
+      }
 
       if (service_pair_repair && (ntn_release_allowed_release_requested_ues.count(repair.ue_index) != 0 ||
                                   ntn_location_watchdog_release_requested_ues.count(repair.ue_index) != 0)) {
@@ -2521,7 +2630,8 @@ void cu_cp_impl::handle_ntn_resource_audit_decision(const ntn_resource_audit_dec
 
       ntn_service_resource_mng.mark_resource_repair_sent(repair);
       if (!ue->get_task_sched().schedule_async_task(
-              launch_async([this, repair, slot_request](coro_context<async_task<void>>& ctx) mutable {
+              launch_async([this, repair, slot_request, binding = *operation_binding](
+                               coro_context<async_task<void>>& ctx) mutable {
                 cu_cp_ue*                              current_ue = nullptr;
                 f1ap_ue_context_modification_request  ue_context_mod_request;
                 f1ap_ue_context_modification_response ue_context_mod_response;
@@ -2531,6 +2641,10 @@ void cu_cp_impl::handle_ntn_resource_audit_decision(const ntn_resource_audit_dec
 
                 CORO_BEGIN(ctx);
 
+                if (!is_ntn_ue_slot_operation_binding_current(binding)) {
+                  mark_ntn_service_pair_resource_repair_skipped(repair, "stale_ue_slot_connection_identity");
+                  CORO_EARLY_RETURN();
+                }
                 current_ue = ue_mng.find_du_ue(repair.ue_index);
                 if (current_ue == nullptr || current_ue->get_rrc_ue() == nullptr ||
                     current_ue->get_ue_context().reconfiguration_disabled) {
@@ -2543,12 +2657,34 @@ void cu_cp_impl::handle_ntn_resource_audit_decision(const ntn_resource_audit_dec
                 ue_context_mod_request.ntn_ul_slot_request = slot_request;
 
                 CORO_AWAIT_VALUE(ue_context_mod_response,
-                                 du_db.get_du_processor(current_ue->get_du_index())
+                                 du_db.get_du_processor(binding.du_index)
                                      .get_f1ap_handler()
                                      .handle_ue_context_modification_request(ue_context_mod_request));
 
+                if (!is_ntn_ue_slot_operation_binding_current(binding)) {
+                  mark_ntn_service_pair_resource_repair_skipped(repair, "stale_ue_slot_response");
+                  CORO_EARLY_RETURN();
+                }
+
                 if (!ue_context_mod_response.success || !ue_context_mod_response.ntn_ul_slot_result.has_value()) {
                   mark_ntn_service_pair_resource_repair_skipped(repair, "du_response_missing");
+                  CORO_EARLY_RETURN();
+                }
+                if (is_versioned(slot_request) &&
+                    (ue_context_mod_response.ntn_ul_slot_result->assignment_generation !=
+                         slot_request.assignment_generation ||
+                     ue_context_mod_response.ntn_ul_slot_result->operation != slot_request.operation ||
+                     (ue_context_mod_response.ntn_ul_slot_result->applied_request.has_value() &&
+                       (ue_context_mod_response.ntn_ul_slot_result->applied_request->assignment_generation !=
+                            slot_request.assignment_generation ||
+                        ue_context_mod_response.ntn_ul_slot_result->applied_request->operation != slot_request.operation ||
+                        (slot_request.operation == f1ap_ntn_ul_slot_resource_operation::set &&
+                         is_empty(*ue_context_mod_response.ntn_ul_slot_result->applied_request)) ||
+                        (slot_request.operation == f1ap_ntn_ul_slot_resource_operation::clear &&
+                         (!is_empty(*ue_context_mod_response.ntn_ul_slot_result->applied_request) ||
+                          ue_context_mod_response.ntn_ul_slot_result->applied_request->requested_c_rnti.has_value())))))) {
+                  ntn_service_resource_mng.mark_resource_repair_result(
+                      repair, false, "slot_result_identity_mismatch");
                   CORO_EARLY_RETURN();
                 }
                 if (!ue_context_mod_response.ntn_ul_slot_result->accepted) {
@@ -2574,6 +2710,10 @@ void cu_cp_impl::handle_ntn_resource_audit_decision(const ntn_resource_audit_dec
 
                   CORO_AWAIT_VALUE(rrc_reconfig_result,
                                    current_ue->get_rrc_ue()->handle_rrc_reconfiguration_request(rrc_reconfig_args));
+                  if (!is_ntn_ue_slot_operation_binding_current(binding)) {
+                    mark_ntn_service_pair_resource_repair_skipped(repair, "stale_ue_slot_rrc_completion");
+                    CORO_EARLY_RETURN();
+                  }
                   if (!rrc_reconfig_result) {
                     mark_ntn_service_pair_resource_repair_skipped(repair, "rrc_reconfiguration_failed");
                     CORO_EARLY_RETURN();
@@ -2585,6 +2725,14 @@ void cu_cp_impl::handle_ntn_resource_audit_decision(const ntn_resource_audit_dec
                     ue_context_mod_response.ntn_ul_slot_result->applied_request.value_or(slot_request));
                 ntn_service_resource_mng.mark_resource_repair_result(
                     repair, true, to_string(ue_context_mod_response.ntn_ul_slot_result->reason));
+                const auto slot_state_it = ntn_ue_slot_du_reconciliation_states.find(binding.du_index);
+                if (slot_state_it != ntn_ue_slot_du_reconciliation_states.end() && slot_state_it->second.connected &&
+                    slot_state_it->second.connection_token == binding.connection_token) {
+                  ++slot_state_it->second.repaired;
+                  slot_state_it->second.complete_targets.clear();
+                  slot_state_it->second.stage       = ntn_ue_slot_audit_stage::awaiting_complete_snapshot;
+                  slot_state_it->second.last_reason = "repair_applied_awaiting_recheck";
+                }
                 CORO_RETURN();
               }))) {
         mark_ntn_service_pair_resource_repair_skipped(repair, "task_scheduler_unavailable");
@@ -2671,12 +2819,42 @@ void cu_cp_impl::schedule_ntn_resource_audits()
   }
 
   const std::vector<ntn_resource_audit_target> targets = collect_ntn_resource_audit_targets();
+  std::map<du_index_t, std::set<std::pair<srsran::du_cell_index_t, pci_t>>> expected_targets_by_du;
+  for (const ntn_resource_audit_target& target : targets) {
+    expected_targets_by_du[target.du_index].emplace(target.cell_index, target.pci);
+  }
   for (auto& entry : ntn_rnti_du_reconciliation_states) {
-    entry.second.expected_targets.clear();
+    const auto expected_it = expected_targets_by_du.find(entry.first);
+    entry.second.expected_targets = expected_it == expected_targets_by_du.end() ? decltype(entry.second.expected_targets){}
+                                                                                : expected_it->second;
+  }
+  for (auto& entry : ntn_ue_slot_du_reconciliation_states) {
+    const auto expected_it = expected_targets_by_du.find(entry.first);
+    const auto expected = expected_it == expected_targets_by_du.end() ? decltype(entry.second.expected_targets){}
+                                                                       : expected_it->second;
+    if (entry.second.expected_targets != expected) {
+      entry.second.expected_targets = expected;
+      entry.second.complete_targets.clear();
+      entry.second.latest_target_stats.clear();
+      entry.second.matched     = 0;
+      entry.second.missing     = 0;
+      entry.second.conflict    = 0;
+      entry.second.quarantined = 0;
+      entry.second.repaired    = 0;
+      if (entry.second.capability == ntn_ue_slot_audit_capability::unknown) {
+        entry.second.stage = ntn_ue_slot_audit_stage::awaiting_capability;
+      } else {
+        entry.second.stage = ntn_ue_slot_audit_stage::awaiting_complete_snapshot;
+      }
+    }
   }
   for (const ntn_resource_audit_target& target : targets) {
     ntn_rnti_du_reconciliation_state& state = ntn_rnti_du_reconciliation_states[target.du_index];
     state.expected_targets.emplace(target.cell_index, target.pci);
+    ntn_ue_slot_du_reconciliation_state& slot_state = ntn_ue_slot_du_reconciliation_states[target.du_index];
+    if (slot_state.expected_targets.empty()) {
+      slot_state.expected_targets = expected_targets_by_du[target.du_index];
+    }
   }
 
   for (const ntn_resource_audit_target& target : targets) {
@@ -2698,10 +2876,27 @@ void cu_cp_impl::schedule_ntn_resource_audits()
     }
 
     ntn_rnti_du_reconciliation_state& du_state = du_state_it->second;
+    ntn_ue_slot_du_reconciliation_state& slot_state = ntn_ue_slot_du_reconciliation_states[target.du_index];
     du_state.reconciled_targets.erase({target.cell_index, target.pci});
     const uint64_t connection_generation = du_state.connection_generation;
     const bool     request_retirement_metadata =
         du_state.retirement_capability != ntn_rnti_retirement_capability::unsupported;
+
+    const du_cell_configuration* audit_cell = nullptr;
+    for (const du_cell_configuration& cell : processor->get_context()->served_cells) {
+      if (to_f1ap_du_cell_index(cell.cell_index) == target.cell_index && cell.pci == target.pci) {
+        audit_cell = &cell;
+        break;
+      }
+    }
+    if (audit_cell == nullptr) {
+      ++nof_ntn_resource_audit_failures;
+      last_ntn_resource_audit_reason = "cell_unavailable";
+      slot_state.last_reason         = "cell_unavailable";
+      continue;
+    }
+    const bool request_ue_slot_identity =
+        slot_state.capability != ntn_ue_slot_audit_capability::unsupported && slot_state.connection_token != 0;
 
     f1ap_gnb_du_resource_coordination_request request;
     request.ntn_resource_audit_request.du_index      = target.du_index;
@@ -2709,6 +2904,12 @@ void cu_cp_impl::schedule_ntn_resource_audits()
     request.ntn_resource_audit_request.pci           = target.pci;
     request.ntn_resource_audit_request.generation_id = next_ntn_resource_audit_generation_id++;
     request.ntn_resource_audit_request.request_retirement_metadata = request_retirement_metadata;
+    request.ntn_resource_audit_request.request_ue_slot_identity = request_ue_slot_identity;
+    if (request_ue_slot_identity) {
+      request.ntn_resource_audit_request.gnb_du_id        = processor->get_context()->id;
+      request.ntn_resource_audit_request.cell_cgi         = audit_cell->cgi;
+      request.ntn_resource_audit_request.connection_token = slot_state.connection_token;
+    }
     last_ntn_resource_audit_generation               = request.ntn_resource_audit_request.generation_id;
     ntn_rnti_audits_in_flight[target_key]                          = request.ntn_resource_audit_request.generation_id;
     ++nof_ntn_resource_audit_queries_sent;
@@ -2744,11 +2945,24 @@ void cu_cp_impl::schedule_ntn_resource_audits()
             last_ntn_resource_audit_reason = "stale_du_connection_generation";
             CORO_EARLY_RETURN();
           }
+          auto live_slot_state_it = ntn_ue_slot_du_reconciliation_states.find(audit_request.du_index);
+          if (live_slot_state_it == ntn_ue_slot_du_reconciliation_states.end() ||
+              !live_slot_state_it->second.connected ||
+              (audit_request.request_ue_slot_identity &&
+               live_slot_state_it->second.connection_token != audit_request.connection_token)) {
+            last_ntn_resource_audit_reason = "stale_ue_slot_connection_token";
+            CORO_EARLY_RETURN();
+          }
           // A present result is an explicit DU answer even when it rejects the audit. Route that rejection through
           // the authoritative manager so its reason becomes a conflict instead of being dropped as transport loss.
           if (!response.audit_result.has_value()) {
             ++nof_ntn_resource_audit_failures;
-            if (audit_request.request_retirement_metadata && response.result.has_value()) {
+            if (audit_request.request_ue_slot_identity && response.result.has_value()) {
+              live_slot_state_it->second.capability  = ntn_ue_slot_audit_capability::unsupported;
+              live_slot_state_it->second.stage       = ntn_ue_slot_audit_stage::awaiting_complete_snapshot;
+              live_slot_state_it->second.last_reason = "ue_slot_identity_unsupported_fallback_pending";
+              last_ntn_resource_audit_reason         = "ue_slot_identity_unsupported_fallback_pending";
+            } else if (audit_request.request_retirement_metadata && response.result.has_value()) {
               if (live_du_state_it->second.retirement_capability != ntn_rnti_retirement_capability::unsupported) {
                 ++nof_ntn_rnti_retire_unsupported;
               }
@@ -2767,6 +2981,29 @@ void cu_cp_impl::schedule_ntn_resource_audits()
             CORO_EARLY_RETURN();
           }
 
+          if (audit_request.request_ue_slot_identity) {
+            const bool target_matches = response.audit_result->ue_slot_identity_metadata_present &&
+                                        response.audit_result->gnb_du_id == audit_request.gnb_du_id &&
+                                        response.audit_result->du_index == audit_request.du_index &&
+                                        response.audit_result->cell_index == audit_request.cell_index &&
+                                        response.audit_result->cell_cgi == audit_request.cell_cgi &&
+                                        response.audit_result->pci == audit_request.pci &&
+                                        response.audit_result->connection_token == audit_request.connection_token;
+            if (!target_matches) {
+              ++nof_ntn_resource_audit_failures;
+              live_slot_state_it->second.last_reason = "ue_slot_audit_target_mismatch";
+              last_ntn_resource_audit_reason         = "ue_slot_audit_target_mismatch";
+              CORO_EARLY_RETURN();
+            }
+            live_slot_state_it->second.capability = response.audit_result->ue_slot_identity_supported
+                                                        ? ntn_ue_slot_audit_capability::supported
+                                                        : ntn_ue_slot_audit_capability::unsupported;
+            live_slot_state_it->second.stage = ntn_ue_slot_audit_stage::awaiting_complete_snapshot;
+            live_slot_state_it->second.last_reason = response.audit_result->ue_slot_identity_supported
+                                                         ? "awaiting_complete_snapshot"
+                                                         : "ue_slot_identity_unsupported";
+          }
+
           report.du_index                  = audit_request.du_index;
           report.cell_index                = audit_request.cell_index;
           report.pci                       = audit_request.pci;
@@ -2774,7 +3011,12 @@ void cu_cp_impl::schedule_ntn_resource_audits()
           report.du_connection_generation  = connection_generation;
           report.accepted                  = response.audit_result->accepted;
           report.rnti_snapshot_complete    = response.audit_result->rnti_snapshot_complete;
-          report.ue_slot_snapshot_complete = response.audit_result->ue_slot_snapshot_complete;
+          report.ue_slot_identity_capability_known =
+              audit_request.request_ue_slot_identity && response.audit_result->ue_slot_identity_metadata_present;
+          report.ue_slot_identity_supported = report.ue_slot_identity_capability_known &&
+                                              response.audit_result->ue_slot_identity_supported;
+          report.ue_slot_snapshot_complete = report.ue_slot_identity_supported &&
+                                             response.audit_result->ue_slot_snapshot_complete;
           if (audit_request.request_retirement_metadata && !response.audit_result->retirement_metadata_present) {
             if (live_du_state_it->second.retirement_capability != ntn_rnti_retirement_capability::unsupported) {
               ++nof_ntn_rnti_retire_unsupported;
@@ -2795,8 +3037,35 @@ void cu_cp_impl::schedule_ntn_resource_audits()
             report.rnti_leases.push_back({lease.rnti, lease.state, lease.distribution_state, lease.generation_id});
             report.rnti_generation_high_water = std::max(report.rnti_generation_high_water, lease.generation_id);
           }
-          for (const f1ap_ntn_resource_audit_ue_slot& slot : response.audit_result->ue_slots) {
-            report.ue_slots.push_back({slot.ue_index, slot.state, slot.request});
+          if (report.ue_slot_snapshot_complete) {
+            du_processor* live_processor = du_db.find_du_processor(audit_request.du_index);
+            std::set<ue_index_t> resolved_ues;
+            if (live_processor == nullptr || live_processor->get_context() == nullptr) {
+              report.ue_slot_snapshot_complete = false;
+              live_slot_state_it->second.last_reason = "du_unavailable_during_slot_snapshot";
+            } else {
+              for (const f1ap_ntn_resource_audit_ue_slot& slot : response.audit_result->ue_slots) {
+                if (!slot.identity_present) {
+                  ++report.nof_ue_slot_conflict;
+                  continue;
+                }
+                const std::optional<ue_index_t> resolved = live_processor->get_f1ap_handler().resolve_ue_identity(
+                    slot.gnb_cu_ue_f1ap_id, slot.gnb_du_ue_f1ap_id);
+                if (!resolved.has_value()) {
+                  ++report.nof_ue_slot_quarantined;
+                  continue;
+                }
+                cu_cp_ue* current_ue = ue_mng.find_du_ue(*resolved);
+                if (current_ue == nullptr || current_ue->get_du_index() != audit_request.du_index ||
+                    to_f1ap_du_cell_index(current_ue->get_pcell_index()) != audit_request.cell_index ||
+                    current_ue->get_pci() != audit_request.pci || current_ue->get_c_rnti() != slot.c_rnti ||
+                    !resolved_ues.emplace(*resolved).second) {
+                  ++report.nof_ue_slot_conflict;
+                  continue;
+                }
+                report.ue_slots.push_back({*resolved, slot.state, slot.request});
+              }
+            }
           }
 
           if (report.accepted) {
@@ -2826,16 +3095,45 @@ void cu_cp_impl::schedule_ntn_resource_audits()
           }
           decision = ntn_service_resource_mng.handle_resource_audit_report(report);
           handle_ntn_resource_audit_decision(decision);
-          rnti_domain_clean = std::none_of(decision.repairs.begin(),
-                                           decision.repairs.end(),
-                                           [](const ntn_resource_repair& repair) {
-                                             return repair.action == ntn_resource_repair_action::resend_rnti_lease_pool ||
-                                                    repair.action == ntn_resource_repair_action::mark_resource_conflict;
-                                           });
+          rnti_domain_clean = decision.rnti_domain_clean;
           if (report.accepted && report.rnti_snapshot_complete && rnti_domain_clean) {
             live_du_state_it->second.reconciled_targets.emplace(audit_request.cell_index, audit_request.pci);
             schedule_ntn_rnti_retirement_updates();
             schedule_ntn_rnti_lease_pool_updates_for_access_beams();
+          }
+          if (report.ue_slot_snapshot_complete) {
+            auto& latest_stats = live_slot_state_it->second.latest_target_stats[
+                {audit_request.cell_index, audit_request.pci}];
+            latest_stats.matched     = decision.nof_ue_slot_matched;
+            latest_stats.missing     = decision.nof_ue_slot_missing;
+            latest_stats.conflict    = decision.nof_ue_slot_conflict;
+            latest_stats.quarantined = decision.nof_ue_slot_quarantined;
+            live_slot_state_it->second.matched     = 0;
+            live_slot_state_it->second.missing     = 0;
+            live_slot_state_it->second.conflict    = 0;
+            live_slot_state_it->second.quarantined = 0;
+            for (const auto& target_stats : live_slot_state_it->second.latest_target_stats) {
+              live_slot_state_it->second.matched += target_stats.second.matched;
+              live_slot_state_it->second.missing += target_stats.second.missing;
+              live_slot_state_it->second.conflict += target_stats.second.conflict;
+              live_slot_state_it->second.quarantined += target_stats.second.quarantined;
+            }
+          }
+          live_slot_state_it->second.assignment_generation_high_water =
+              std::max(live_slot_state_it->second.assignment_generation_high_water,
+                       response.audit_result->ue_slot_assignment_generation_high_water);
+          if (report.accepted && report.ue_slot_snapshot_complete && decision.ue_slot_domain_clean) {
+            live_slot_state_it->second.complete_targets.emplace(audit_request.cell_index, audit_request.pci);
+            if (live_slot_state_it->second.complete_targets == live_slot_state_it->second.expected_targets) {
+              live_slot_state_it->second.stage       = ntn_ue_slot_audit_stage::reconciled;
+              live_slot_state_it->second.last_reason = "reconciled";
+            }
+          } else if (report.ue_slot_identity_supported) {
+            live_slot_state_it->second.complete_targets.erase({audit_request.cell_index, audit_request.pci});
+            live_slot_state_it->second.stage = ntn_ue_slot_audit_stage::awaiting_complete_snapshot;
+            live_slot_state_it->second.last_reason = report.ue_slot_snapshot_complete
+                                                         ? "ue_slot_differences_pending_repair"
+                                                         : "ue_slot_snapshot_incomplete";
           }
           CORO_RETURN();
         };
@@ -9863,6 +10161,56 @@ cu_cp_ntn_runtime_status cu_cp_impl::get_current_ntn_runtime_status() const
   status.nof_ntn_resource_audit_rnti_incomplete = nof_ntn_resource_audit_rnti_incomplete;
   status.nof_ntn_resource_audit_ue_slot_incomplete = nof_ntn_resource_audit_ue_slot_incomplete;
   status.last_ntn_resource_audit_reason = last_ntn_resource_audit_reason;
+  bool any_slot_awaiting_capability = ntn_ue_slot_du_reconciliation_states.empty();
+  bool any_slot_awaiting_snapshot   = false;
+  bool all_slot_reconciled          = !ntn_ue_slot_du_reconciliation_states.empty();
+  for (const auto& entry : ntn_ue_slot_du_reconciliation_states) {
+    cu_cp_ntn_ue_slot_audit_du_status du_status;
+    du_status.du_index = entry.first;
+    du_status.capability = entry.second.capability == ntn_ue_slot_audit_capability::supported
+                               ? "supported"
+                           : entry.second.capability == ntn_ue_slot_audit_capability::unsupported ? "unsupported"
+                                                                                                : "unknown";
+    du_status.stage = entry.second.stage == ntn_ue_slot_audit_stage::reconciled
+                          ? "reconciled"
+                      : entry.second.stage == ntn_ue_slot_audit_stage::awaiting_complete_snapshot
+                          ? "awaiting_complete_snapshot"
+                          : "awaiting_capability";
+    du_status.snapshot_complete = !entry.second.expected_targets.empty() &&
+                                  entry.second.complete_targets == entry.second.expected_targets;
+    du_status.matched       = entry.second.matched;
+    du_status.missing       = entry.second.missing;
+    du_status.conflict      = entry.second.conflict;
+    du_status.quarantined   = entry.second.quarantined;
+    du_status.repaired      = entry.second.repaired;
+    du_status.assignment_generation_high_water = entry.second.assignment_generation_high_water;
+    du_status.last_reason = entry.second.last_reason;
+    status.ue_slot_audit_du_statuses.push_back(std::move(du_status));
+
+    any_slot_awaiting_capability |= entry.second.stage == ntn_ue_slot_audit_stage::awaiting_capability;
+    any_slot_awaiting_snapshot |= entry.second.stage == ntn_ue_slot_audit_stage::awaiting_complete_snapshot;
+    all_slot_reconciled &= entry.second.stage == ntn_ue_slot_audit_stage::reconciled;
+    status.nof_ue_slot_audit_matched += entry.second.matched;
+    status.nof_ue_slot_audit_missing += entry.second.missing;
+    status.nof_ue_slot_audit_conflict += entry.second.conflict;
+    status.nof_ue_slot_audit_quarantined += entry.second.quarantined;
+    status.nof_ue_slot_audit_repaired += entry.second.repaired;
+    status.ue_slot_assignment_generation_high_water =
+        std::max(status.ue_slot_assignment_generation_high_water,
+                 entry.second.assignment_generation_high_water);
+    if (entry.second.last_reason != "none") {
+      status.last_ue_slot_audit_reason = entry.second.last_reason;
+    }
+  }
+  const bool ntn_resource_audit_enabled = cfg.mobility.meas_manager_config.ntn_location_mobility.enabled;
+  status.ue_slot_audit_stage = !ntn_resource_audit_enabled   ? "disabled"
+                               : all_slot_reconciled          ? "reconciled"
+                               : any_slot_awaiting_capability ? "awaiting_capability"
+                               : any_slot_awaiting_snapshot   ? "awaiting_complete_snapshot"
+                                                              : "awaiting_capability";
+  if (!ntn_resource_audit_enabled) {
+    status.last_ue_slot_audit_reason = "feature_disabled";
+  }
   bool has_rnti_retirement_supported                         = false;
   bool has_rnti_retirement_unsupported                       = false;
   bool has_rnti_retirement_unknown                           = ntn_rnti_du_reconciliation_states.empty();
@@ -12221,6 +12569,22 @@ void cu_cp_impl::handle_du_connection_established(du_index_t du_index)
     state.reconciled_targets.clear();
     state.generation_exhausted      = false;
     last_ntn_rnti_retirement_reason = "du_connected_awaiting_complete_audit";
+
+    ntn_ue_slot_du_reconciliation_state& slot_state = ntn_ue_slot_du_reconciliation_states[du_index];
+    slot_state = {};
+    slot_state.connected = true;
+    if (next_ntn_ue_slot_connection_token != 0) {
+      slot_state.connection_token = next_ntn_ue_slot_connection_token;
+      if (next_ntn_ue_slot_connection_token == std::numeric_limits<uint64_t>::max()) {
+        next_ntn_ue_slot_connection_token = 0;
+      } else {
+        ++next_ntn_ue_slot_connection_token;
+      }
+      slot_state.last_reason = "du_connected_awaiting_capability";
+    } else {
+      slot_state.capability  = ntn_ue_slot_audit_capability::unsupported;
+      slot_state.last_reason = "connection_token_exhausted";
+    }
   }
   if (!cfg.mobility.onboard_position_plan.du_execution_enabled) {
     return;
@@ -12253,6 +12617,15 @@ void cu_cp_impl::handle_du_disconnection(du_index_t du_index)
       }
     }
     ntn_service_resource_mng.invalidate_rnti_retirement_for_du(du_index);
+    ntn_service_resource_mng.invalidate_ue_slot_audit_for_du(du_index);
+    ntn_ue_slot_du_reconciliation_state& slot_state = ntn_ue_slot_du_reconciliation_states[du_index];
+    slot_state.connected        = false;
+    slot_state.connection_token = 0;
+    slot_state.capability       = ntn_ue_slot_audit_capability::unknown;
+    slot_state.stage            = ntn_ue_slot_audit_stage::awaiting_capability;
+    slot_state.expected_targets.clear();
+    slot_state.complete_targets.clear();
+    slot_state.last_reason = "du_disconnected";
     last_ntn_rnti_retirement_reason = "du_disconnected_awaiting_complete_audit";
   }
 

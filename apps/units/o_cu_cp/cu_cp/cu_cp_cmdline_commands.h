@@ -1340,6 +1340,31 @@ public:
                status.nof_ntn_resource_audit_rnti_incomplete,
                status.nof_ntn_resource_audit_ue_slot_incomplete,
                status.last_ntn_resource_audit_reason);
+    fmt::print("NTN UE slot audit: stage={} matched={} missing={} conflicts={} quarantined={} repaired={} "
+               "assignment_generation_high_water={} reason={}\n",
+               status.ue_slot_audit_stage,
+               status.nof_ue_slot_audit_matched,
+               status.nof_ue_slot_audit_missing,
+               status.nof_ue_slot_audit_conflict,
+               status.nof_ue_slot_audit_quarantined,
+               status.nof_ue_slot_audit_repaired,
+               status.ue_slot_assignment_generation_high_water,
+               status.last_ue_slot_audit_reason);
+    for (const srs_cu_cp::cu_cp_ntn_ue_slot_audit_du_status& du_status : status.ue_slot_audit_du_statuses) {
+      fmt::print("NTN UE slot audit DU: du={} capability={} stage={} complete={} matched={} missing={} "
+                 "conflicts={} quarantined={} repaired={} generation_high_water={} reason={}\n",
+                 du_index_to_uint(du_status.du_index),
+                 du_status.capability,
+                 du_status.stage,
+                 du_status.snapshot_complete,
+                 du_status.matched,
+                 du_status.missing,
+                 du_status.conflict,
+                 du_status.quarantined,
+                 du_status.repaired,
+                 du_status.assignment_generation_high_water,
+                 du_status.last_reason);
+    }
     fmt::print("NTN RNTI retirement: capability={} generation_high_water={} unsupported={} "
                "namespace_exhausted={} generation_exhausted={} reason={}\n",
                status.ntn_rnti_retirement_capability,

@@ -295,6 +295,20 @@ struct cu_cp_ntn_position_plan_status {
   std::array<cu_cp_ntn_onboard_cell_plan_status, 2> cells{};
 };
 
+struct cu_cp_ntn_ue_slot_audit_du_status {
+  du_index_t  du_index = du_index_t::invalid;
+  std::string capability = "unknown";
+  std::string stage = "awaiting_capability";
+  bool        snapshot_complete = false;
+  unsigned    matched = 0;
+  unsigned    missing = 0;
+  unsigned    conflict = 0;
+  unsigned    quarantined = 0;
+  unsigned    repaired = 0;
+  uint32_t    assignment_generation_high_water = 0;
+  std::string last_reason = "none";
+};
+
 /// Public CU-CP NTN runtime summary for observability commands.
 struct cu_cp_ntn_runtime_status {
   bool enabled                   = false;
@@ -594,6 +608,15 @@ struct cu_cp_ntn_runtime_status {
   unsigned nof_ntn_resource_audit_rnti_incomplete   = 0;
   unsigned nof_ntn_resource_audit_ue_slot_incomplete = 0;
   std::string last_ntn_resource_audit_reason        = "none";
+  std::string ue_slot_audit_stage                    = "awaiting_capability";
+  unsigned    nof_ue_slot_audit_matched              = 0;
+  unsigned    nof_ue_slot_audit_missing              = 0;
+  unsigned    nof_ue_slot_audit_conflict             = 0;
+  unsigned    nof_ue_slot_audit_quarantined          = 0;
+  unsigned    nof_ue_slot_audit_repaired             = 0;
+  uint32_t    ue_slot_assignment_generation_high_water = 0;
+  std::string last_ue_slot_audit_reason              = "none";
+  std::vector<cu_cp_ntn_ue_slot_audit_du_status> ue_slot_audit_du_statuses;
   std::string                              ntn_rnti_retirement_capability                          = "unknown";
   uint32_t                                 ntn_rnti_generation_high_water                          = 0;
   unsigned                                 nof_ntn_rnti_retire_pending                             = 0;

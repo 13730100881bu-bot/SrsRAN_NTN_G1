@@ -21,6 +21,7 @@
 
 #include "ntn_beam_service_resource_manager.h"
 #include <algorithm>
+#include <limits>
 
 using namespace srsran;
 using namespace srs_cu_cp;
@@ -46,6 +47,13 @@ bool ntn_beam_service_resource_manager::is_valid_lease_pool_update(const ntn_rnt
 bool ntn_beam_service_resource_manager::are_slot_requests_equal(const f1ap_ntn_ul_slot_resource_request& lhs,
                                                                 const f1ap_ntn_ul_slot_resource_request& rhs)
 {
+  return are_f1ap_ntn_ul_slot_resource_requests_equal(lhs, rhs);
+}
+
+bool ntn_beam_service_resource_manager::are_slot_resource_contents_equal(
+    const f1ap_ntn_ul_slot_resource_request& lhs,
+    const f1ap_ntn_ul_slot_resource_request& rhs)
+{
   return lhs.sr_slot_offset == rhs.sr_slot_offset && lhs.sr_slot_period == rhs.sr_slot_period &&
          lhs.srs_slot_offset == rhs.srs_slot_offset && lhs.srs_slot_period == rhs.srs_slot_period;
 }
@@ -59,7 +67,8 @@ ntn_beam_service_resource_manager::make_repair_key(const ntn_resource_repair& re
           repair.cell_index,
           repair.pci,
           repair.rnti,
-          repair.analog_beam_id};
+          repair.analog_beam_id,
+          repair.slot_request.has_value() ? repair.slot_request->assignment_generation : 0U};
 }
 
 ntn_resource_repair_record ntn_beam_service_resource_manager::make_repair_record(const ntn_resource_repair& repair,
@@ -79,6 +88,8 @@ ntn_resource_repair_record ntn_beam_service_resource_manager::make_repair_record
   record.uplink_resource_nci      = repair.uplink_resource_nci;
   record.has_uplink_resource_nci  = repair.has_uplink_resource_nci;
   record.generation_id  = generation_id;
+  record.slot_assignment_generation =
+      repair.slot_request.has_value() ? repair.slot_request->assignment_generation : 0U;
   record.state          = "queued";
   record.reason         = repair.reason;
   return record;
@@ -608,6 +619,55 @@ ntn_slot_resource_update_decision ntn_beam_service_resource_manager::update_digi
     return clear_digital_service_slot_intent(update.ue_index, "no_slot_resources");
   }
 
+  f1ap_ntn_ul_slot_resource_request desired_request = *slot_request;
+  const auto                        cached_it       = cached_slot_requests_by_ue.find(update.ue_index);
+  if (cached_it != cached_slot_requests_by_ue.end() &&
+      are_slot_resource_contents_equal(cached_it->second, desired_request)) {
+    desired_request = cached_it->second;
+  } else {
+    uint32_t high_water = slot_assignment_generation_high_water_by_ue[update.ue_index];
+    if (cached_it != cached_slot_requests_by_ue.end()) {
+      high_water = std::max(high_water, cached_it->second.assignment_generation);
+    }
+    const auto applied_it = applied_slot_requests_by_ue.find(update.ue_index);
+    if (applied_it != applied_slot_requests_by_ue.end()) {
+      high_water = std::max(high_water, applied_it->second.assignment_generation);
+    }
+    if (high_water != 0) {
+      if (high_water == std::numeric_limits<uint32_t>::max()) {
+        ntn_slot_resource_update_decision exhausted;
+        exhausted.ue_index = update.ue_index;
+        exhausted.reason   = "slot_assignment_generation_exhausted";
+        return exhausted;
+      }
+      desired_request.assignment_generation = high_water + 1;
+      desired_request.operation             = f1ap_ntn_ul_slot_resource_operation::set;
+      slot_assignment_generation_high_water_by_ue[update.ue_index] = desired_request.assignment_generation;
+    }
+  }
+
+  const auto existing_intent_it = digital_slot_intent_by_ue.find(update.ue_index);
+  const bool service_binding_unchanged =
+      existing_intent_it != digital_slot_intent_by_ue.end() &&
+      existing_intent_it->second.digital_beam_id == update.digital_beam_id &&
+      existing_intent_it->second.service_du_index == update.service_du_index &&
+      existing_intent_it->second.service_cell_index == update.service_cell_index &&
+      existing_intent_it->second.service_pci == update.service_pci &&
+      existing_intent_it->second.has_service_nci && existing_intent_it->second.service_nci == update.service_nci &&
+      (has_paired_uplink_resource
+           ? existing_intent_it->second.uplink_resource_beam_id == update.uplink_resource_beam_id &&
+                 existing_intent_it->second.uplink_resource_du_index == update.uplink_resource_du_index &&
+                 existing_intent_it->second.uplink_resource_cell_index == update.uplink_resource_cell_index &&
+                 existing_intent_it->second.uplink_resource_pci == update.uplink_resource_pci &&
+                 existing_intent_it->second.has_uplink_resource_nci &&
+                 existing_intent_it->second.uplink_resource_nci == update.uplink_resource_nci
+           : existing_intent_it->second.uplink_resource_beam_id.empty() &&
+                 existing_intent_it->second.uplink_resource_du_index == du_index_t::invalid &&
+                 !existing_intent_it->second.has_uplink_resource_nci);
+  const bool assignment_unchanged = cached_it != cached_slot_requests_by_ue.end() &&
+                                    are_slot_requests_equal(cached_it->second, desired_request) &&
+                                    service_binding_unchanged;
+
   ntn_digital_slot_resource_intent intent;
   intent.ue_index         = update.ue_index;
   intent.digital_beam_id  = update.digital_beam_id;
@@ -626,16 +686,21 @@ ntn_slot_resource_update_decision ntn_beam_service_resource_manager::update_digi
   }
   intent.state            = "active";
   intent.reason           = "loaded_service_calendar";
-  intent.request          = *slot_request;
+  intent.request          = desired_request;
+  if (assignment_unchanged) {
+    // Refresh beam/cell metadata without discarding the proof of what the DU actually applied.
+    intent.state           = existing_intent_it->second.state;
+    intent.reason          = existing_intent_it->second.reason;
+    intent.applied_request = existing_intent_it->second.applied_request;
+  }
   digital_slot_intent_by_ue[update.ue_index] = intent;
 
   ntn_slot_resource_update_decision decision;
   decision.ue_index = update.ue_index;
-  decision.request  = *slot_request;
+  decision.request  = desired_request;
   decision.reason   = "loaded_service_calendar";
 
-  const auto cached_it = cached_slot_requests_by_ue.find(update.ue_index);
-  if (cached_it != cached_slot_requests_by_ue.end() && are_slot_requests_equal(cached_it->second, *slot_request)) {
+  if (assignment_unchanged) {
     decision.action = ntn_slot_resource_update_action::none;
     return decision;
   }
@@ -644,7 +709,7 @@ ntn_slot_resource_update_decision ntn_beam_service_resource_manager::update_digi
   if (applied_it != applied_slot_requests_by_ue.end()) {
     decision.previous_request = applied_it->second;
   }
-  cached_slot_requests_by_ue[update.ue_index] = *slot_request;
+  cached_slot_requests_by_ue[update.ue_index] = desired_request;
   decision.action = ntn_slot_resource_update_action::set;
   return decision;
 }
@@ -656,6 +721,39 @@ ntn_slot_resource_update_decision ntn_beam_service_resource_manager::set_digital
 {
   if (ue_index == ue_index_t::invalid || is_empty(request)) {
     return clear_digital_service_slot_intent(ue_index, "empty_slot_request");
+  }
+  if (is_versioned(request) &&
+      (request.operation != f1ap_ntn_ul_slot_resource_operation::set || request.assignment_generation == 0)) {
+    ntn_slot_resource_update_decision invalid;
+    invalid.ue_index = ue_index;
+    invalid.reason   = "invalid_slot_assignment_generation";
+    return invalid;
+  }
+  if (is_versioned(request)) {
+    slot_assignment_generation_high_water_by_ue[ue_index] =
+        std::max(slot_assignment_generation_high_water_by_ue[ue_index], request.assignment_generation);
+  }
+
+  const auto cached_it = cached_slot_requests_by_ue.find(ue_index);
+  if (cached_it != cached_slot_requests_by_ue.end() && are_slot_requests_equal(cached_it->second, request)) {
+    // A periodic planner pass may repeat the same desired assignment after the DU has already applied it. Keep the
+    // applied proof and its state instead of replacing the intent with a fresh, unconfirmed copy.
+    auto intent_it = digital_slot_intent_by_ue.find(ue_index);
+    if (intent_it == digital_slot_intent_by_ue.end()) {
+      ntn_digital_slot_resource_intent intent;
+      intent.ue_index = ue_index;
+      intent.state    = "active";
+      intent.reason   = std::move(reason);
+      intent.request  = request;
+      digital_slot_intent_by_ue.emplace(ue_index, std::move(intent));
+    }
+
+    ntn_slot_resource_update_decision decision;
+    decision.ue_index = ue_index;
+    decision.request  = request;
+    decision.reason   = "slot_assignment_unchanged";
+    decision.action   = ntn_slot_resource_update_action::none;
+    return decision;
   }
 
   ntn_digital_slot_resource_intent intent;
@@ -670,18 +768,52 @@ ntn_slot_resource_update_decision ntn_beam_service_resource_manager::set_digital
   decision.request  = request;
   decision.reason   = reason;
 
-  const auto cached_it = cached_slot_requests_by_ue.find(ue_index);
-  if (cached_it != cached_slot_requests_by_ue.end() && are_slot_requests_equal(cached_it->second, request)) {
-    decision.action = ntn_slot_resource_update_action::none;
-    return decision;
-  }
-
   const auto applied_it = applied_slot_requests_by_ue.find(ue_index);
   if (applied_it != applied_slot_requests_by_ue.end()) {
     decision.previous_request = applied_it->second;
   }
   cached_slot_requests_by_ue[ue_index] = request;
   decision.action = ntn_slot_resource_update_action::set;
+  return decision;
+}
+
+ntn_slot_resource_update_decision
+ntn_beam_service_resource_manager::make_digital_slot_intent_versioned(ue_index_t ue_index)
+{
+  ntn_slot_resource_update_decision decision;
+  decision.ue_index = ue_index;
+  const auto cached_it = cached_slot_requests_by_ue.find(ue_index);
+  if (cached_it == cached_slot_requests_by_ue.end() || is_versioned(cached_it->second)) {
+    decision.reason = "slot_assignment_already_versioned_or_absent";
+    return decision;
+  }
+
+  uint32_t& high_water = slot_assignment_generation_high_water_by_ue[ue_index];
+  if (high_water == std::numeric_limits<uint32_t>::max()) {
+    decision.reason = "slot_assignment_generation_exhausted";
+    return decision;
+  }
+
+  f1ap_ntn_ul_slot_resource_request versioned_request = cached_it->second;
+  versioned_request.assignment_generation = high_water + 1;
+  versioned_request.operation = is_empty(versioned_request) ? f1ap_ntn_ul_slot_resource_operation::clear
+                                                             : f1ap_ntn_ul_slot_resource_operation::set;
+  high_water                              = versioned_request.assignment_generation;
+  const auto applied_it = applied_slot_requests_by_ue.find(ue_index);
+  if (applied_it != applied_slot_requests_by_ue.end()) {
+    decision.previous_request = applied_it->second;
+  }
+  cached_it->second = versioned_request;
+  auto intent_it = digital_slot_intent_by_ue.find(ue_index);
+  if (intent_it != digital_slot_intent_by_ue.end()) {
+    intent_it->second.request = versioned_request;
+    intent_it->second.reason  = "du_supports_slot_assignment_generation";
+  }
+  decision.action = versioned_request.operation == f1ap_ntn_ul_slot_resource_operation::clear
+                        ? ntn_slot_resource_update_action::clear
+                        : ntn_slot_resource_update_action::set;
+  decision.request = versioned_request;
+  decision.reason  = "du_supports_slot_assignment_generation";
   return decision;
 }
 
@@ -697,11 +829,33 @@ ntn_beam_service_resource_manager::clear_digital_service_slot_intent(ue_index_t 
   }
 
   const auto applied_it = applied_slot_requests_by_ue.find(ue_index);
-  if (applied_it != applied_slot_requests_by_ue.end() && !is_empty(applied_it->second)) {
-    decision.action           = ntn_slot_resource_update_action::clear;
-    decision.previous_request = applied_it->second;
-    decision.request          = f1ap_ntn_ul_slot_resource_request{};
-    cached_slot_requests_by_ue[ue_index] = f1ap_ntn_ul_slot_resource_request{};
+  const auto cached_it  = cached_slot_requests_by_ue.find(ue_index);
+  const bool has_applied = applied_it != applied_slot_requests_by_ue.end() && !is_empty(applied_it->second);
+  const bool has_desired = cached_it != cached_slot_requests_by_ue.end() && !is_empty(cached_it->second);
+  if (has_applied || has_desired) {
+    if (has_applied) {
+      decision.previous_request = applied_it->second;
+    }
+    uint32_t high_water = slot_assignment_generation_high_water_by_ue[ue_index];
+    if (has_applied) {
+      high_water = std::max(high_water, applied_it->second.assignment_generation);
+    }
+    if (has_desired) {
+      high_water = std::max(high_water, cached_it->second.assignment_generation);
+    }
+    f1ap_ntn_ul_slot_resource_request clear_request;
+    if (high_water != 0) {
+      if (high_water == std::numeric_limits<uint32_t>::max()) {
+        decision.reason = "slot_assignment_generation_exhausted";
+        return decision;
+      }
+      clear_request.assignment_generation = high_water + 1;
+      clear_request.operation             = f1ap_ntn_ul_slot_resource_operation::clear;
+      slot_assignment_generation_high_water_by_ue[ue_index] = clear_request.assignment_generation;
+    }
+    decision.action  = ntn_slot_resource_update_action::clear;
+    decision.request = clear_request;
+    cached_slot_requests_by_ue[ue_index] = clear_request;
   } else {
     cached_slot_requests_by_ue.erase(ue_index);
   }
@@ -716,7 +870,7 @@ ntn_beam_service_resource_manager::clear_digital_service_slot_intent(ue_index_t 
   } else {
     intent_it->second.state   = "cleared";
     intent_it->second.reason  = std::move(reason);
-    intent_it->second.request = {};
+    intent_it->second.request = decision.request.value_or(f1ap_ntn_ul_slot_resource_request{});
   }
   return decision;
 }
@@ -752,6 +906,25 @@ void ntn_beam_service_resource_manager::restore_or_clear_failed_slot_update(
   }
 }
 
+void ntn_beam_service_resource_manager::mark_slot_update_outcome_unknown(
+    ue_index_t                               ue_index,
+    const f1ap_ntn_ul_slot_resource_request& attempted_request,
+    std::string                              reason)
+{
+  const auto cached_it = cached_slot_requests_by_ue.find(ue_index);
+  if (cached_it == cached_slot_requests_by_ue.end() || !are_slot_requests_equal(cached_it->second, attempted_request)) {
+    return;
+  }
+  applied_slot_requests_by_ue.erase(ue_index);
+  auto intent_it = digital_slot_intent_by_ue.find(ue_index);
+  if (intent_it != digital_slot_intent_by_ue.end()) {
+    intent_it->second.state           = "awaiting_audit";
+    intent_it->second.reason          = std::move(reason);
+    intent_it->second.request         = attempted_request;
+    intent_it->second.applied_request = std::nullopt;
+  }
+}
+
 void ntn_beam_service_resource_manager::mark_slot_update_sent_to_du(ue_index_t                               ue_index,
                                                                     const f1ap_ntn_ul_slot_resource_request& request)
 {
@@ -775,8 +948,26 @@ void ntn_beam_service_resource_manager::mark_slot_update_result(
     return;
   }
 
+  const bool applied_shape_valid =
+      !result.applied_request.has_value() ||
+      (result.applied_request->operation == f1ap_ntn_ul_slot_resource_operation::set
+           ? !is_empty(*result.applied_request)
+           : result.applied_request->operation == f1ap_ntn_ul_slot_resource_operation::clear &&
+                 is_empty(*result.applied_request) && !result.applied_request->requested_c_rnti.has_value());
+  if (is_versioned(attempted_request) &&
+      (result.assignment_generation != attempted_request.assignment_generation ||
+       result.operation != attempted_request.operation || !applied_shape_valid ||
+       (result.applied_request.has_value() &&
+        (result.applied_request->assignment_generation != attempted_request.assignment_generation ||
+         result.applied_request->operation != attempted_request.operation)))) {
+    mark_slot_update_outcome_unknown(ue_index, attempted_request, "slot_result_identity_mismatch");
+    return;
+  }
+
   if (result.accepted) {
     const f1ap_ntn_ul_slot_resource_request applied_request = result.applied_request.value_or(attempted_request);
+    slot_assignment_generation_high_water_by_ue[ue_index] =
+        std::max(slot_assignment_generation_high_water_by_ue[ue_index], applied_request.assignment_generation);
     if (is_empty(applied_request)) {
       cached_slot_requests_by_ue.erase(ue_index);
       applied_slot_requests_by_ue.erase(ue_index);
@@ -787,11 +978,13 @@ void ntn_beam_service_resource_manager::mark_slot_update_result(
       return;
     }
 
-    cached_slot_requests_by_ue[ue_index]  = applied_request;
+    // Keep the requested assignment separate from the values actually selected by the DU. This prevents a valid
+    // DU adjustment from being interpreted as a fresh planner change on the next scheduling pass.
+    cached_slot_requests_by_ue[ue_index]  = attempted_request;
     applied_slot_requests_by_ue[ue_index] = applied_request;
     intent_it->second.state               = "applied_by_du";
     intent_it->second.reason              = to_string(result.reason);
-    intent_it->second.request             = applied_request;
+    intent_it->second.request             = attempted_request;
     intent_it->second.applied_request     = applied_request;
     return;
   }
@@ -814,6 +1007,8 @@ void ntn_beam_service_resource_manager::mark_slot_update_result(
 void ntn_beam_service_resource_manager::mark_slot_update_applied(ue_index_t                               ue_index,
                                                                  const f1ap_ntn_ul_slot_resource_request& request)
 {
+  slot_assignment_generation_high_water_by_ue[ue_index] =
+      std::max(slot_assignment_generation_high_water_by_ue[ue_index], request.assignment_generation);
   if (is_empty(request)) {
     cached_slot_requests_by_ue.erase(ue_index);
     applied_slot_requests_by_ue.erase(ue_index);
@@ -826,14 +1021,47 @@ void ntn_beam_service_resource_manager::mark_slot_update_applied(ue_index_t     
     }
     return;
   }
-  cached_slot_requests_by_ue[ue_index] = request;
+  const auto cached_it = cached_slot_requests_by_ue.find(ue_index);
+  if (cached_it == cached_slot_requests_by_ue.end() ||
+      cached_it->second.assignment_generation != request.assignment_generation ||
+      cached_it->second.operation != request.operation) {
+    cached_slot_requests_by_ue[ue_index] = request;
+  }
   applied_slot_requests_by_ue[ue_index] = request;
   auto intent_it = digital_slot_intent_by_ue.find(ue_index);
   if (intent_it != digital_slot_intent_by_ue.end()) {
     intent_it->second.state           = "applied_by_du";
     intent_it->second.reason          = "applied";
-    intent_it->second.request         = request;
+    intent_it->second.request         = cached_slot_requests_by_ue[ue_index];
     intent_it->second.applied_request = request;
+  }
+}
+
+void ntn_beam_service_resource_manager::invalidate_ue_slot_audit_for_du(du_index_t du_index)
+{
+  for (auto& entry : digital_slot_intent_by_ue) {
+    ntn_digital_slot_resource_intent& intent = entry.second;
+    const bool uses_service_pair = intent.uplink_resource_du_index != du_index_t::invalid;
+    const du_index_t intent_du = uses_service_pair ? intent.uplink_resource_du_index : intent.service_du_index;
+    if (intent_du != du_index) {
+      continue;
+    }
+    applied_slot_requests_by_ue.erase(entry.first);
+    if (!is_empty(intent.request) || intent.request.operation == f1ap_ntn_ul_slot_resource_operation::clear) {
+      intent.state           = "awaiting_reconciliation";
+      intent.reason          = "du_disconnected";
+      intent.applied_request = std::nullopt;
+    }
+  }
+  for (auto& entry : resource_repairs_by_key) {
+    ntn_resource_repair_record& repair = entry.second;
+    const bool slot_repair = repair.action == ntn_resource_repair_action::apply_sr_srs_assignment ||
+                             repair.action == ntn_resource_repair_action::resend_sr_srs_clear ||
+                             repair.action == ntn_resource_repair_action::clear_unknown_sr_srs_assignment;
+    if (slot_repair && repair.du_index == du_index && (repair.state == "queued" || repair.state == "sent")) {
+      repair.state  = "invalidated";
+      repair.reason = "du_disconnected_repair_invalidated";
+    }
   }
 }
 
@@ -842,7 +1070,8 @@ bool ntn_beam_service_resource_manager::has_active_digital_slot_intent(ue_index_
   const auto intent_it = digital_slot_intent_by_ue.find(ue_index);
   return intent_it != digital_slot_intent_by_ue.end() &&
          (intent_it->second.state == "active" || intent_it->second.state == "sent_to_du" ||
-          intent_it->second.state == "applied_by_du" || intent_it->second.state == "rollback_restored") &&
+          intent_it->second.state == "applied_by_du" || intent_it->second.state == "rollback_restored" ||
+          intent_it->second.state == "awaiting_audit" || intent_it->second.state == "awaiting_reconciliation") &&
          !is_empty(intent_it->second.request);
 }
 
@@ -1214,6 +1443,14 @@ ntn_beam_service_resource_manager::handle_resource_audit_report(const ntn_resour
     }
   }
 
+  decision.rnti_domain_clean = report.rnti_snapshot_complete &&
+                               std::none_of(decision.repairs.begin(), decision.repairs.end(), [](const auto& repair) {
+                                 return repair.action == ntn_resource_repair_action::resend_rnti_lease_pool ||
+                                        repair.action == ntn_resource_repair_action::rollback_handover_target_rnti ||
+                                        repair.action == ntn_resource_repair_action::mark_resource_conflict;
+                               });
+  decision.nof_ue_slot_quarantined = report.nof_ue_slot_quarantined;
+  decision.nof_ue_slot_conflict    = report.nof_ue_slot_conflict;
   if (!report.ue_slot_snapshot_complete) {
     decision.nof_mismatches = decision.repairs.size();
     decision.nof_repairs    = decision.repairs.size();
@@ -1221,19 +1458,37 @@ ntn_beam_service_resource_manager::handle_resource_audit_report(const ntn_resour
     return decision;
   }
 
-  const auto du_has_matching_slot = [&report](ue_index_t                                      ue_index,
-                                              const f1ap_ntn_ul_slot_resource_request& request) {
-    return std::find_if(report.ue_slots.begin(), report.ue_slots.end(), [ue_index, &request](const auto& slot) {
-             return slot.ue_index == ue_index && slot.state == "applied_by_du" &&
-                    ntn_beam_service_resource_manager::are_slot_requests_equal(slot.request, request);
-           }) != report.ue_slots.end();
-  };
+  std::map<ue_index_t, const ntn_resource_audit_ue_slot*> observed_slots;
+  for (const ntn_resource_audit_ue_slot& slot : report.ue_slots) {
+    const bool valid = slot.ue_index != ue_index_t::invalid && slot.state == "applied_by_du" &&
+                       slot.request.operation == f1ap_ntn_ul_slot_resource_operation::set &&
+                       slot.request.assignment_generation != 0 && !is_empty(slot.request);
+    if (!valid || !observed_slots.emplace(slot.ue_index, &slot).second) {
+      ntn_resource_repair conflict;
+      conflict.action     = ntn_resource_repair_action::mark_resource_conflict;
+      conflict.ue_index   = slot.ue_index;
+      conflict.du_index   = report.du_index;
+      conflict.cell_index = report.cell_index;
+      conflict.pci        = report.pci;
+      conflict.reason     = valid ? "duplicate_du_ue_slot_identity" : "invalid_du_ue_slot_snapshot";
+      conflict.slot_request = slot.request;
+      decision.repairs.push_back(std::move(conflict));
+      ++decision.nof_ue_slot_conflict;
+    }
+  }
 
-  for (const auto& entry : digital_slot_intent_by_ue) {
-    const ntn_digital_slot_resource_intent& intent = entry.second;
-    if (is_empty(intent.request) ||
+  std::set<ue_index_t> consumed_observed_slots;
+  for (auto& entry : digital_slot_intent_by_ue) {
+    ntn_digital_slot_resource_intent& intent = entry.second;
+    const bool pending_versioned_clear =
+        is_versioned(intent.request) && intent.request.operation == f1ap_ntn_ul_slot_resource_operation::clear &&
+        is_empty(intent.request) &&
+        (intent.state == "clear_sent" || intent.state == "awaiting_audit" ||
+         intent.state == "awaiting_reconciliation");
+    if ((!pending_versioned_clear && is_empty(intent.request)) ||
         (intent.state != "active" && intent.state != "sent_to_du" && intent.state != "applied_by_du" &&
-         intent.state != "rollback_restored")) {
+         intent.state != "rollback_restored" && intent.state != "awaiting_audit" &&
+         intent.state != "awaiting_reconciliation" && intent.state != "clear_sent")) {
       continue;
     }
     const bool has_service_pair =
@@ -1243,28 +1498,127 @@ ntn_beam_service_resource_manager::handle_resource_audit_report(const ntn_resour
     const srsran::du_cell_index_t audit_cell_index =
         has_service_pair ? intent.uplink_resource_cell_index : intent.service_cell_index;
     const pci_t audit_pci = has_service_pair ? intent.uplink_resource_pci : intent.service_pci;
+    if ((audit_du_index != du_index_t::invalid && audit_du_index != report.du_index) ||
+        (audit_cell_index != srsran::INVALID_DU_CELL_INDEX && audit_cell_index != report.cell_index) ||
+        (audit_pci != INVALID_PCI && audit_pci != report.pci)) {
+      continue;
+    }
 
-    if (audit_du_index != du_index_t::invalid && audit_du_index != report.du_index) {
+    auto observed_it = observed_slots.find(intent.ue_index);
+    if (observed_it != observed_slots.end()) {
+      consumed_observed_slots.emplace(intent.ue_index);
+      const auto& observed_request = observed_it->second->request;
+      if (pending_versioned_clear) {
+        if (observed_request.assignment_generation >= intent.request.assignment_generation) {
+          ntn_resource_repair conflict;
+          conflict.action       = ntn_resource_repair_action::mark_resource_conflict;
+          conflict.ue_index     = intent.ue_index;
+          conflict.du_index     = report.du_index;
+          conflict.cell_index   = report.cell_index;
+          conflict.pci          = report.pci;
+          conflict.reason       = observed_request.assignment_generation == intent.request.assignment_generation
+                                      ? "slot_clear_generation_conflict"
+                                      : "du_slot_assignment_generation_ahead";
+          conflict.slot_request = observed_request;
+          decision.repairs.push_back(std::move(conflict));
+          ++decision.nof_ue_slot_conflict;
+          continue;
+        }
+      }
+      if (!pending_versioned_clear) {
+        const auto applied_it = applied_slot_requests_by_ue.find(intent.ue_index);
+        const bool desired_update_pending =
+            intent.state == "sent_to_du" || intent.state == "awaiting_audit" ||
+            intent.state == "awaiting_reconciliation" ||
+            (applied_it != applied_slot_requests_by_ue.end() &&
+             !are_slot_requests_equal(applied_it->second, intent.request));
+        const auto& expected_request = applied_it != applied_slot_requests_by_ue.end() && !desired_update_pending
+                                           ? applied_it->second
+                                           : intent.request;
+        // The requested C-RNTI is a one-time setup hint. The authoritative DU snapshot carries the current C-RNTI as
+        // UE identity and therefore compares only the persistent SR/SRS assignment plus its generation here.
+        if (expected_request.assignment_generation == observed_request.assignment_generation &&
+            expected_request.operation == observed_request.operation &&
+            are_slot_resource_contents_equal(expected_request, observed_request)) {
+          mark_slot_update_applied(intent.ue_index, observed_request);
+          ++decision.nof_ue_slot_matched;
+          continue;
+        }
+        if (applied_it == applied_slot_requests_by_ue.end() &&
+            (intent.state == "awaiting_audit" || intent.state == "awaiting_reconciliation") &&
+            intent.request.assignment_generation == observed_request.assignment_generation &&
+            intent.request.operation == observed_request.operation) {
+          // An applied feedback can be lost after the DU adjusted an otherwise valid request. A complete current-DU
+          // snapshot is authoritative for that generation and restores the applied values without changing the
+          // planner's desired assignment.
+          mark_slot_update_applied(intent.ue_index, observed_request);
+          ++decision.nof_ue_slot_matched;
+          continue;
+        }
+        if (intent.request.assignment_generation == 0 ||
+            observed_request.assignment_generation >= intent.request.assignment_generation) {
+          ntn_resource_repair conflict;
+          conflict.action       = ntn_resource_repair_action::mark_resource_conflict;
+          conflict.ue_index     = intent.ue_index;
+          conflict.du_index     = report.du_index;
+          conflict.cell_index   = report.cell_index;
+          conflict.pci          = report.pci;
+          conflict.reason       = intent.request.assignment_generation == observed_request.assignment_generation
+                                      ? "slot_assignment_generation_conflict"
+                                      : "du_slot_assignment_generation_ahead";
+          conflict.slot_request = observed_request;
+          decision.repairs.push_back(std::move(conflict));
+          ++decision.nof_ue_slot_conflict;
+          continue;
+        }
+      }
+    }
+
+    if (pending_versioned_clear && observed_it == observed_slots.end()) {
+      // A complete snapshot that no longer contains this UE is authoritative confirmation of a lost clear ACK.
+      mark_slot_update_applied(intent.ue_index, intent.request);
+      ++decision.nof_ue_slot_matched;
       continue;
     }
-    if (audit_cell_index != srsran::INVALID_DU_CELL_INDEX && audit_cell_index != report.cell_index) {
-      continue;
-    }
-    if (audit_pci != INVALID_PCI && audit_pci != report.pci) {
-      continue;
-    }
-    if (du_has_matching_slot(intent.ue_index, intent.request)) {
-      continue;
+
+    f1ap_ntn_ul_slot_resource_request repair_request = intent.request;
+    if (!is_versioned(repair_request)) {
+      uint32_t& high_water = slot_assignment_generation_high_water_by_ue[intent.ue_index];
+      if (high_water == std::numeric_limits<uint32_t>::max()) {
+        ntn_resource_repair conflict;
+        conflict.action       = ntn_resource_repair_action::mark_resource_conflict;
+        conflict.ue_index     = intent.ue_index;
+        conflict.du_index     = report.du_index;
+        conflict.cell_index   = report.cell_index;
+        conflict.pci          = report.pci;
+        conflict.reason       = "slot_assignment_generation_exhausted";
+        conflict.slot_request = intent.request;
+        decision.repairs.push_back(std::move(conflict));
+        ++decision.nof_ue_slot_conflict;
+        continue;
+      }
+      repair_request.assignment_generation = high_water == 0 ? 1 : high_water + 1;
+      repair_request.operation             = f1ap_ntn_ul_slot_resource_operation::set;
+      high_water                           = repair_request.assignment_generation;
+      intent.request                       = repair_request;
+      cached_slot_requests_by_ue[intent.ue_index] = repair_request;
+    } else {
+      slot_assignment_generation_high_water_by_ue[intent.ue_index] =
+          std::max(slot_assignment_generation_high_water_by_ue[intent.ue_index],
+                   repair_request.assignment_generation);
     }
 
     ntn_resource_repair repair;
-    repair.action       = ntn_resource_repair_action::apply_sr_srs_assignment;
+    repair.action       = pending_versioned_clear ? ntn_resource_repair_action::resend_sr_srs_clear
+                                                  : ntn_resource_repair_action::apply_sr_srs_assignment;
     repair.ue_index     = intent.ue_index;
     repair.du_index     = report.du_index;
     repair.cell_index   = report.cell_index;
     repair.pci          = report.pci;
-    repair.reason       = has_service_pair ? "du_missing_service_pair_ul_sr_srs_assignment" :
-                                             "du_missing_sr_srs_assignment";
+    repair.reason = pending_versioned_clear
+                        ? "du_still_has_cleared_sr_srs_assignment"
+                        : (has_service_pair ? "du_missing_service_pair_ul_sr_srs_assignment"
+                                            : "du_missing_sr_srs_assignment");
     repair.service_beam_id = intent.digital_beam_id;
     if (has_service_pair) {
       repair.uplink_resource_beam_id  = intent.uplink_resource_beam_id;
@@ -1272,41 +1626,54 @@ ntn_beam_service_resource_manager::handle_resource_audit_report(const ntn_resour
       repair.uplink_resource_nci      = intent.uplink_resource_nci;
       repair.has_uplink_resource_nci  = intent.has_uplink_resource_nci;
     }
-    repair.slot_request = intent.request;
+    repair.slot_request = repair_request;
     decision.repairs.push_back(std::move(repair));
+    ++decision.nof_ue_slot_missing;
   }
 
-  for (const ntn_resource_audit_ue_slot& du_slot : report.ue_slots) {
-    const auto local_it = digital_slot_intent_by_ue.find(du_slot.ue_index);
-    if (local_it != digital_slot_intent_by_ue.end() &&
-        (local_it->second.state == "sent_to_du" || local_it->second.state == "applied_by_du" ||
-         local_it->second.state == "rollback_restored") &&
-        are_slot_requests_equal(local_it->second.request, du_slot.request)) {
+  for (const auto& observed_entry : observed_slots) {
+    if (consumed_observed_slots.count(observed_entry.first) != 0) {
+      continue;
+    }
+    const auto& observed_request = observed_entry.second->request;
+    uint32_t&   high_water       = slot_assignment_generation_high_water_by_ue[observed_entry.first];
+    high_water                   = std::max(high_water, observed_request.assignment_generation);
+    if (high_water == std::numeric_limits<uint32_t>::max()) {
+      ntn_resource_repair conflict;
+      conflict.action       = ntn_resource_repair_action::mark_resource_conflict;
+      conflict.ue_index     = observed_entry.first;
+      conflict.du_index     = report.du_index;
+      conflict.cell_index   = report.cell_index;
+      conflict.pci          = report.pci;
+      conflict.reason       = "slot_assignment_generation_exhausted";
+      conflict.slot_request = observed_request;
+      decision.repairs.push_back(std::move(conflict));
+      ++decision.nof_ue_slot_conflict;
       continue;
     }
 
+    f1ap_ntn_ul_slot_resource_request clear_request;
+    if (high_water == observed_request.assignment_generation) {
+      ++high_water;
+    }
+    clear_request.assignment_generation = high_water;
+    clear_request.operation             = f1ap_ntn_ul_slot_resource_operation::clear;
     ntn_resource_repair repair;
     repair.action       = ntn_resource_repair_action::clear_unknown_sr_srs_assignment;
-    repair.ue_index     = du_slot.ue_index;
+    repair.ue_index     = observed_entry.first;
     repair.du_index     = report.du_index;
     repair.cell_index   = report.cell_index;
     repair.pci          = report.pci;
     repair.reason       = "du_unknown_sr_srs_assignment";
-    repair.slot_request = f1ap_ntn_ul_slot_resource_request{};
+    repair.slot_request = clear_request;
     repair.uplink_resource_du_index = report.du_index;
-    if (local_it != digital_slot_intent_by_ue.end()) {
-      repair.service_beam_id = local_it->second.digital_beam_id;
-      if (!local_it->second.uplink_resource_beam_id.empty()) {
-        repair.uplink_resource_beam_id  = local_it->second.uplink_resource_beam_id;
-        repair.uplink_resource_du_index = local_it->second.uplink_resource_du_index;
-        repair.uplink_resource_nci      = local_it->second.uplink_resource_nci;
-        repair.has_uplink_resource_nci  = local_it->second.has_uplink_resource_nci;
-      }
-    }
     decision.repairs.push_back(std::move(repair));
+    ++decision.nof_ue_slot_missing;
   }
 
-  decision.nof_mismatches = decision.repairs.size();
+  decision.ue_slot_domain_clean = decision.nof_ue_slot_missing == 0 && decision.nof_ue_slot_conflict == 0 &&
+                                  decision.nof_ue_slot_quarantined == 0;
+  decision.nof_mismatches = decision.repairs.size() + decision.nof_ue_slot_quarantined;
   decision.nof_repairs    = decision.repairs.size();
   resolve_recovered_audit_rejection();
   return decision;
@@ -1601,7 +1968,10 @@ bool ntn_beam_service_resource_manager::is_rnti_excluded_for_du(du_index_t du_in
 ntn_resource_repair_record ntn_beam_service_resource_manager::queue_resource_repair(const ntn_resource_repair& repair,
                                                                                     uint32_t generation_id)
 {
-  static constexpr unsigned max_repair_retries = 1;
+  const bool slot_repair = repair.action == ntn_resource_repair_action::apply_sr_srs_assignment ||
+                           repair.action == ntn_resource_repair_action::resend_sr_srs_clear ||
+                           repair.action == ntn_resource_repair_action::clear_unknown_sr_srs_assignment;
+  const unsigned max_repair_retries = slot_repair ? 0U : 1U;
 
   if (repair.action == ntn_resource_repair_action::none) {
     return {};
@@ -1619,19 +1989,29 @@ ntn_resource_repair_record ntn_beam_service_resource_manager::queue_resource_rep
   }
 
   ntn_resource_repair_record& record = it->second;
-  record.generation_id = generation_id;
-  record.reason        = repair.reason;
-
   if (record.state == "blocked_conflict" || record.state == "retry_exhausted" || record.state == "queued" ||
       record.state == "sent") {
     return record;
   }
 
   if (repair.action == ntn_resource_repair_action::mark_resource_conflict) {
-    record.state = "blocked_conflict";
+    record.generation_id = generation_id;
+    record.reason        = repair.reason;
+    record.state         = "blocked_conflict";
     return record;
   }
 
+  if (slot_repair && record.state == "applied") {
+    // The DU acknowledged this exact repair but a later complete snapshot still reports the same difference.
+    // Repeating it indefinitely cannot converge and would let a periodic audit become an update loop.
+    record.generation_id = generation_id;
+    record.state         = "retry_exhausted";
+    record.reason        = "slot_repair_did_not_converge";
+    return record;
+  }
+
+  record.generation_id = generation_id;
+  record.reason        = repair.reason;
   if (record.state == "failed") {
     if (record.retry_count >= max_repair_retries) {
       record.state = "retry_exhausted";
@@ -1648,7 +2028,8 @@ ntn_resource_repair_record ntn_beam_service_resource_manager::queue_resource_rep
 void ntn_beam_service_resource_manager::mark_resource_repair_sent(const ntn_resource_repair& repair)
 {
   auto repair_it = resource_repairs_by_key.find(make_repair_key(repair));
-  if (repair_it == resource_repairs_by_key.end() || repair_it->second.state != "queued") {
+  if (repair_it == resource_repairs_by_key.end() || repair_it->second.state != "queued" ||
+      (repair.audit_generation_id != 0 && repair_it->second.generation_id != repair.audit_generation_id)) {
     return;
   }
   repair_it->second.state  = "sent";
@@ -1659,10 +2040,14 @@ void ntn_beam_service_resource_manager::mark_resource_repair_result(const ntn_re
                                                                     bool                       accepted,
                                                                     std::string                reason)
 {
-  static constexpr unsigned max_repair_retries = 1;
+  const bool slot_repair = repair.action == ntn_resource_repair_action::apply_sr_srs_assignment ||
+                           repair.action == ntn_resource_repair_action::resend_sr_srs_clear ||
+                           repair.action == ntn_resource_repair_action::clear_unknown_sr_srs_assignment;
+  const unsigned max_repair_retries = slot_repair ? 0U : 1U;
 
   auto repair_it = resource_repairs_by_key.find(make_repair_key(repair));
-  if (repair_it == resource_repairs_by_key.end()) {
+  if (repair_it == resource_repairs_by_key.end() || repair_it->second.state == "invalidated" ||
+      (repair.audit_generation_id != 0 && repair_it->second.generation_id != repair.audit_generation_id)) {
     return;
   }
 
@@ -1706,6 +2091,17 @@ void ntn_beam_service_resource_manager::remove_ue(ue_index_t ue_index)
   digital_slot_intent_by_ue.erase(ue_index);
   cached_slot_requests_by_ue.erase(ue_index);
   applied_slot_requests_by_ue.erase(ue_index);
+  slot_assignment_generation_high_water_by_ue.erase(ue_index);
+  for (auto it = resource_repairs_by_key.begin(); it != resource_repairs_by_key.end();) {
+    const bool slot_repair = it->second.action == ntn_resource_repair_action::apply_sr_srs_assignment ||
+                             it->second.action == ntn_resource_repair_action::resend_sr_srs_clear ||
+                             it->second.action == ntn_resource_repair_action::clear_unknown_sr_srs_assignment;
+    if (slot_repair && it->second.ue_index == ue_index) {
+      it = resource_repairs_by_key.erase(it);
+    } else {
+      ++it;
+    }
+  }
 }
 
 void ntn_beam_service_resource_manager::remove_missing_ues(const std::set<ue_index_t>& live_ues)
@@ -1727,6 +2123,11 @@ void ntn_beam_service_resource_manager::remove_missing_ues(const std::set<ue_ind
     }
   }
   for (const auto& entry : applied_slot_requests_by_ue) {
+    if (live_ues.find(entry.first) == live_ues.end()) {
+      stale_ues.push_back(entry.first);
+    }
+  }
+  for (const auto& entry : slot_assignment_generation_high_water_by_ue) {
     if (live_ues.find(entry.first) == live_ues.end()) {
       stale_ues.push_back(entry.first);
     }
@@ -1840,7 +2241,13 @@ ntn_beam_service_resource_snapshot ntn_beam_service_resource_manager::get_snapsh
     } else if (entry.second.state == "rollback_restored") {
       ++snapshot.nof_digital_slot_rollback;
       ++snapshot.nof_digital_slot_active;
+    } else if (entry.second.state == "awaiting_audit" || entry.second.state == "awaiting_reconciliation") {
+      ++snapshot.nof_digital_slot_active;
     }
+  }
+  for (const auto& entry : slot_assignment_generation_high_water_by_ue) {
+    snapshot.slot_assignment_generation_high_water =
+        std::max(snapshot.slot_assignment_generation_high_water, entry.second);
   }
 
   snapshot.resource_repairs.reserve(resource_repairs_by_key.size());

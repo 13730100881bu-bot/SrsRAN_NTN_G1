@@ -175,6 +175,12 @@ struct ntn_resource_audit_report {
   bool                                  rnti_snapshot_complete = false;
   /// True only when the DU returned an authoritative, complete per-UE SR/SRS snapshot for the requested cell.
   bool                                  ue_slot_snapshot_complete = false;
+  /// True when the current DU connection supports F1-identified UE-slot snapshots.
+  bool                                  ue_slot_identity_capability_known = false;
+  bool                                  ue_slot_identity_supported = false;
+  /// Entries that could not be resolved through the current F1 UE context are counted, never guessed or cleared.
+  unsigned                              nof_ue_slot_quarantined = 0;
+  unsigned                              nof_ue_slot_conflict = 0;
   /// Identifies the live DU connection that produced this report. Zero keeps legacy in-process callers compatible.
   uint64_t du_connection_generation = 0;
   /// True when the DU explicitly advertised whether safe terminal-lease retirement is supported.
@@ -212,6 +218,8 @@ struct ntn_resource_repair {
   nr_cell_identity           uplink_resource_nci = nr_cell_identity::min();
   bool                       has_uplink_resource_nci = false;
   std::string                reason;
+  /// Resource-audit round that created this action. Used to reject delayed completion from an invalidated DU link.
+  uint32_t                   audit_generation_id = 0;
   uint32_t                   rnti_lease_generation_id = 0;
   std::vector<rnti_t>        rnti_leases;
   std::optional<f1ap_ntn_ul_slot_resource_request> slot_request;
@@ -221,6 +229,12 @@ struct ntn_resource_audit_decision {
   uint32_t                         generation_id = 0;
   unsigned                         nof_mismatches = 0;
   unsigned                         nof_repairs = 0;
+  unsigned                         nof_ue_slot_matched = 0;
+  unsigned                         nof_ue_slot_missing = 0;
+  unsigned                         nof_ue_slot_conflict = 0;
+  unsigned                         nof_ue_slot_quarantined = 0;
+  bool                             rnti_domain_clean = false;
+  bool                             ue_slot_domain_clean = false;
   std::vector<ntn_resource_repair> repairs;
 };
 
@@ -259,6 +273,7 @@ struct ntn_resource_repair_record {
   nr_cell_identity           uplink_resource_nci = nr_cell_identity::min();
   bool                       has_uplink_resource_nci = false;
   uint32_t                   generation_id = 0;
+  uint32_t                   slot_assignment_generation = 0;
   unsigned                   retry_count = 0;
   std::string                state = "none";
   std::string                reason = "none";
@@ -314,6 +329,7 @@ struct ntn_beam_service_resource_snapshot {
   unsigned nof_digital_slot_rollback       = 0;
   unsigned nof_digital_slot_active         = 0;
   unsigned nof_digital_slot_cleared        = 0;
+  uint32_t slot_assignment_generation_high_water = 0;
   unsigned nof_resource_repairs_queued          = 0;
   unsigned nof_resource_repairs_sent            = 0;
   unsigned nof_resource_repairs_applied         = 0;
