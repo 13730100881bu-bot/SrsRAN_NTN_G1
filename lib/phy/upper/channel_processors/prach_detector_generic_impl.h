@@ -30,6 +30,18 @@
 
 namespace srsran {
 
+namespace detail {
+
+/// Classifies a receive-port attribution from the two strongest per-port power measurements.
+prach_detection_result::rx_port_attribution classify_prach_rx_port_attribution(bool     enabled,
+                                                                               unsigned nof_rx_ports,
+                                                                               unsigned strongest_port_index,
+                                                                               float    strongest_power,
+                                                                               float    second_strongest_power,
+                                                                               float    unique_margin_dB) noexcept;
+
+} // namespace detail
+
 /// Implements a parameter validator for the PRACH detector.
 class prach_detector_validator_impl : public prach_detector_validator
 {
@@ -101,6 +113,17 @@ private:
   /// Metric global denominator.
   static_tensor<static_cast<unsigned>(metric_global_dims::all), float, MAX_IDFT_SIZE, metric_global_dims>
       metric_global_den;
+  /// Per-port numerator for the port currently being processed.
+  static_tensor<static_cast<unsigned>(metric_global_dims::all), float, MAX_IDFT_SIZE, metric_global_dims>
+      metric_port_num;
+  /// Strongest per-port numerator for every detection sample.
+  static_tensor<static_cast<unsigned>(metric_global_dims::all), float, MAX_IDFT_SIZE, metric_global_dims>
+      metric_port_strongest;
+  /// Second strongest per-port numerator for every detection sample.
+  static_tensor<static_cast<unsigned>(metric_global_dims::all), float, MAX_IDFT_SIZE, metric_global_dims>
+      metric_port_second_strongest;
+  /// Zero-based input port that produced the strongest per-port numerator for every detection sample.
+  std::array<unsigned, MAX_IDFT_SIZE> metric_port_strongest_index;
   /// Temporal storage.
   std::array<cf_t, MAX_IDFT_SIZE>  cf_temp;
   std::array<float, MAX_IDFT_SIZE> temp;

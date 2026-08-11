@@ -41,9 +41,55 @@
 
 using namespace srsran;
 
+namespace srsran::detail {
+
+prach_detection_result::rx_port_attribution classify_prach_rx_port_attribution(bool     enabled,
+                                                                               unsigned nof_rx_ports,
+                                                                               unsigned strongest_port_index,
+                                                                               float    strongest_power,
+                                                                               float    second_strongest_power,
+                                                                               float    unique_margin_dB) noexcept
+{
+  prach_detection_result::rx_port_attribution result;
+
+  if (!enabled || (nof_rx_ports == 0) || (strongest_port_index >= nof_rx_ports) || !std::isfinite(strongest_power) ||
+      (strongest_power <= 0.0F) || !std::isfinite(second_strongest_power) || (second_strongest_power < 0.0F) ||
+      !std::isfinite(unique_margin_dB) || (unique_margin_dB < 0.0F)) {
+    return result;
+  }
+
+  result.strongest_port_index = strongest_port_index;
+  if ((nof_rx_ports == 1) || (second_strongest_power == 0.0F)) {
+    result.status                        = prach_detection_result::rx_port_attribution_status::unique;
+    // Keep the confidence representable across the private F1 transport. An infinite value would be rejected by the
+    // bounded wire codec even though a single receive port is an unambiguous attribution.
+    result.strongest_to_second_margin_dB = 120.0F;
+    return result;
+  }
+
+  result.strongest_to_second_margin_dB = convert_power_to_dB(strongest_power / second_strongest_power);
+  result.status                        = (result.strongest_to_second_margin_dB >= unique_margin_dB)
+                                             ? prach_detection_result::rx_port_attribution_status::unique
+                                             : prach_detection_result::rx_port_attribution_status::ambiguous;
+  return result;
+}
+
+} // namespace srsran::detail
+
 error_type<std::string> prach_detector_validator_impl::is_valid(const prach_detector::configuration& config) const
 {
-  return validate_prach_detector_phy(config.format, config.ra_scs, config.zero_correlation_zone, config.nof_rx_ports);
+  error_type<std::string> result =
+      validate_prach_detector_phy(config.format, config.ra_scs, config.zero_correlation_zone, config.nof_rx_ports);
+  if (!result) {
+    return result;
+  }
+
+  if (config.port_attribution.enabled &&
+      (!std::isfinite(config.port_attribution.unique_margin_dB) || (config.port_attribution.unique_margin_dB < 0.0F))) {
+    return make_unexpected(std::string("The PRACH receive-port attribution margin must be finite and non-negative."));
+  }
+
+  return default_success_t();
 }
 
 prach_detector_generic_impl::prach_detector_generic_impl(std::unique_ptr<dft_processor>   idft_long_,
@@ -219,8 +265,23 @@ prach_detection_result prach_detector_generic_impl::detect(const prach_buffer& i
     metric_global_den.resize({win_width, nof_shifts});
     srsvec::zero(metric_global_den.get_data());
 
+    // Prepare the optional per-port power tracking. These tensors are not touched when attribution is disabled, so the
+    // default detector path keeps the same calculations and output values.
+    if (config.port_attribution.enabled) {
+      metric_port_num.resize({win_width, nof_shifts});
+      metric_port_strongest.resize({win_width, nof_shifts});
+      metric_port_second_strongest.resize({win_width, nof_shifts});
+      srsvec::zero(metric_port_strongest.get_data());
+      srsvec::zero(metric_port_second_strongest.get_data());
+      std::fill_n(metric_port_strongest_index.begin(), metric_port_strongest.get_data().size(), 0U);
+    }
+
     // Iterate over all receive ports.
     for (unsigned i_port = 0; i_port != config.nof_rx_ports; ++i_port) {
+      if (config.port_attribution.enabled) {
+        srsvec::zero(metric_port_num.get_data());
+      }
+
       // Iterate all PRACH symbols if they are not combined, otherwise process only one PRACH symbol.
       for (unsigned i_symbol = 0, i_symbol_end = (combine_symbols) ? 1 : nof_symbols; i_symbol != i_symbol_end;
            ++i_symbol) {
@@ -296,8 +357,32 @@ prach_detection_result prach_detector_generic_impl::detect(const prach_buffer& i
           // Scale modulus square and accumulate numerator.
           srsvec::add(window_metric_global_num, window_mod_square, window_metric_global_num);
 
+          // Accumulate the same numerator for the current port without changing the global detection metric.
+          if (config.port_attribution.enabled) {
+            span<float> window_metric_port_num = metric_port_num.get_view({i_window});
+            srsvec::add(window_metric_port_num, window_mod_square, window_metric_port_num);
+          }
+
           // Scale modulus square and accumulate denominator.
           vector_noise_estimation(window_metric_global_den, reference, window_mod_square);
+        }
+      }
+
+      if (config.port_attribution.enabled) {
+        span<const float> port_num           = metric_port_num.get_data();
+        span<float>       strongest          = metric_port_strongest.get_data();
+        span<float>       second_strongest   = metric_port_second_strongest.get_data();
+        unsigned          nof_metric_samples = port_num.size();
+
+        for (unsigned i_sample = 0; i_sample != nof_metric_samples; ++i_sample) {
+          float port_power = port_num[i_sample];
+          if (port_power > strongest[i_sample]) {
+            second_strongest[i_sample]            = strongest[i_sample];
+            strongest[i_sample]                   = port_power;
+            metric_port_strongest_index[i_sample] = i_port;
+          } else if (port_power > second_strongest[i_sample]) {
+            second_strongest[i_sample] = port_power;
+          }
         }
       }
     }
@@ -348,6 +433,19 @@ prach_detection_result prach_detector_generic_impl::detect(const prach_buffer& i
         }
         float preamble_power   = window_metric_global_num[delay] / static_cast<float>(power_normalization);
         info.preamble_power_dB = convert_power_to_dB(preamble_power);
+
+        if (config.port_attribution.enabled) {
+          span<const float> window_metric_port_strongest = metric_port_strongest.get_view({i_window});
+          span<const float> window_metric_port_second    = metric_port_second_strongest.get_view({i_window});
+          unsigned          flat_sample_index            = i_window * win_width + delay;
+          info.port_attribution =
+              detail::classify_prach_rx_port_attribution(true,
+                                                         config.nof_rx_ports,
+                                                         metric_port_strongest_index[flat_sample_index],
+                                                         window_metric_port_strongest[delay],
+                                                         window_metric_port_second[delay],
+                                                         config.port_attribution.unique_margin_dB);
+        }
       }
     }
   }

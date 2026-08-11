@@ -40,6 +40,14 @@ class prach_detector
 public:
   /// Configuration for PRACH detection.
   struct configuration {
+    /// Configuration of the optional receive-port attribution.
+    struct rx_port_attribution_configuration {
+      /// Enables per-preamble receive-port attribution. Disabled by default.
+      bool enabled = false;
+      /// Minimum strongest-to-second-strongest power margin for a unique attribution, in dB.
+      float unique_margin_dB = 6.0F;
+    };
+
     /// Root sequence index. Possibles values are {0, ..., 837} for long preambles and {0, ..., 137} for short
     /// preambles.
     unsigned root_sequence_index;
@@ -60,6 +68,8 @@ public:
     unsigned nof_rx_ports;
     /// Slot and numerology, for logging.
     slot_point slot;
+    /// Optional receive-port attribution parameters.
+    rx_port_attribution_configuration port_attribution;
   };
 
   /// Default destructor.

@@ -25,11 +25,36 @@
 #include "srsran/adt/static_vector.h"
 #include "srsran/ran/phy_time_unit.h"
 #include "srsran/ran/prach/prach_constants.h"
+#include <cstdint>
+#include <limits>
 
 namespace srsran {
 
 /// Describes a PRACH detection result.
 struct prach_detection_result {
+  /// Describes whether a detected preamble can be attributed to one receive port.
+  enum class rx_port_attribution_status : uint8_t {
+    /// Port attribution was not requested or the per-port measurements are not usable.
+    unavailable,
+    /// The strongest receive port exceeds the second strongest port by the configured margin.
+    unique,
+    /// More than one receive port has a plausible measurement for the detected preamble.
+    ambiguous
+  };
+
+  /// Describes the optional receive-port attribution of a detected preamble.
+  struct rx_port_attribution {
+    /// Invalid receive-port index used when the attribution is unavailable.
+    static constexpr unsigned invalid_port_index = std::numeric_limits<unsigned>::max();
+
+    /// Attribution classification.
+    rx_port_attribution_status status = rx_port_attribution_status::unavailable;
+    /// Zero-based index of the strongest port in the detector input.
+    unsigned strongest_port_index = invalid_port_index;
+    /// Power difference between the strongest and second strongest ports, in dB.
+    float strongest_to_second_margin_dB = 0.0F;
+  };
+
   /// Describes the detection of a single preamble.
   struct preamble_indication {
     /// Index of the detected preamble. Possible values are {0, ..., 63}.
@@ -40,6 +65,8 @@ struct prach_detection_result {
     float detection_metric;
     /// Preamble received power in normalized dB units.
     float preamble_power_dB;
+    /// Optional attribution to the strongest receive port. Unavailable by default.
+    rx_port_attribution port_attribution;
   };
 
   /// Average RSSI value in normalized dB units.
