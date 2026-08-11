@@ -5,6 +5,7 @@
 #include "srsran/f1ap/du/f1ap_du.h"
 #include "srsran/f1ap/du/f1ap_du_positioning_handler.h"
 #include "srsran/f1ap/ntn_access_calendar.h"
+#include "srsran/f1ap/ntn_initial_ul_position_query.h"
 #include "srsran/mac/mac_cell_manager.h"
 #include "srsran/ran/du_types.h"
 #include "srsran/support/async/async_task.h"
@@ -69,6 +70,10 @@ public:
   /// \brief Handle an NTN resource audit query requested by the CU via F1AP.
   virtual async_task<f1ap_ntn_resource_audit_result>
   handle_ntn_resource_audit_request(const f1ap_ntn_resource_audit_request& request) = 0;
+
+  /// \brief Consume one exact Initial UL position observation captured by this DU connection.
+  virtual async_task<f1ap_ntn_initial_ul_position_result>
+  handle_ntn_initial_ul_position_query(const f1ap_ntn_initial_ul_position_query& request) = 0;
 
   /// \brief Handle an NTN SIB19 broadcast payload update requested by the CU via F1AP.
   virtual async_task<f1ap_ntn_sib19_broadcast_result>

@@ -71,6 +71,9 @@ void ue_creation_procedure::operator()(coro_context<async_task<void>>& ctx)
     CORO_AWAIT(clear_ue());
     CORO_EARLY_RETURN();
   }
+  if (f1ap_resp.f1ap_ue_id != gnb_du_ue_f1ap_id_t::invalid) {
+    ue_ctx->f1ap_ue_id = f1ap_resp.f1ap_ue_id;
+  }
 
   // > Initiate creation of RLC SRB0.
   create_rlc_srbs();
@@ -88,6 +91,20 @@ void ue_creation_procedure::operator()(coro_context<async_task<void>>& ctx)
 
   // > Assign C-RNTI allocated by MAC.
   ue_mng.update_crnti(req.ue_index, mac_resp.allocated_crnti);
+
+  // Preserve the optional receive record only after the UE has authoritative F1 and MAC identities.
+  if (req.ntn_initial_ul_position.has_value()) {
+    const mac_ntn_initial_ul_position_record& observation = *req.ntn_initial_ul_position;
+    const du_cell_config&                     cell_cfg     = du_params.ran.cells[req.pcell_index];
+    const bool identity_matches = observation.cell_index == ue_ctx->pcell_index &&
+                                  observation.c_rnti == mac_resp.allocated_crnti &&
+                                  observation.nci == ue_ctx->nr_cgi.nci && observation.pci == cell_cfg.pci &&
+                                  observation.rnti_generation != 0;
+    if (!identity_matches ||
+        !ue_mng.store_ntn_initial_ul_position(ue_ctx->f1ap_ue_id, observation, req.initial_ul_received_at)) {
+      proc_logger.log_proc_warning("Initial UL position observation was not stored");
+    }
+  }
 
   // > Start Initial UL RRC Message Transfer by signalling MAC to notify CCCH to upper layers.
   if (not req.ul_ccch_msg.empty()) {

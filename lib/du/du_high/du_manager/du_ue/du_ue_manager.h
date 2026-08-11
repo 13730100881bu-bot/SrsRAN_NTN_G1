@@ -25,6 +25,7 @@
 #include "du_ue.h"
 #include "du_ue_controller_impl.h"
 #include "du_ue_manager_repository.h"
+#include "du_ntn_initial_ul_position_store.h"
 #include "srsran/adt/slotted_array.h"
 #include "srsran/du/du_high/du_manager/du_manager.h"
 #include "srsran/du/du_high/du_manager/du_manager_params.h"
@@ -76,6 +77,32 @@ public:
 
   const auto& get_du_ues() const { return ue_db; }
 
+  /// Consume one exact, connection-bound Initial UL observation query.
+  f1ap_ntn_initial_ul_position_result
+  handle_ntn_initial_ul_position_query(const f1ap_ntn_initial_ul_position_query& request);
+
+  void invalidate_ntn_initial_ul_positions() { ntn_initial_ul_positions.invalidate_all(); }
+  void invalidate_ntn_initial_ul_positions(du_cell_index_t cell_index)
+  {
+    ntn_initial_ul_positions.invalidate_cell(cell_index);
+  }
+  void invalidate_ntn_initial_ul_positions(du_cell_index_t cell_index, const std::vector<rnti_t>& rntis)
+  {
+    ntn_initial_ul_positions.invalidate_rntis(cell_index, rntis);
+  }
+  void invalidate_ntn_initial_ul_position(gnb_du_ue_f1ap_id_t f1ap_ue_id)
+  {
+    ntn_initial_ul_positions.erase(f1ap_ue_id);
+  }
+  void retain_ntn_initial_ul_position_plan(uint64_t schedule_version, const std::string& calendar_hash)
+  {
+    ntn_initial_ul_positions.retain_plan(schedule_version, calendar_hash);
+  }
+  void erase_ntn_initial_ul_position_plan(uint64_t schedule_version, const std::string& calendar_hash)
+  {
+    ntn_initial_ul_positions.erase_plan(schedule_version, calendar_hash);
+  }
+
   /// \brief Schedule an asynchronous task to be executed in the UE control loop.
   void schedule_async_task(du_ue_index_t ue_index, async_task<void> task) override
   {
@@ -87,6 +114,9 @@ public:
 private:
   expected<du_ue*, std::string> add_ue(const du_ue_context& ue_ctx, ue_ran_resource_configurator ue_ran_res) override;
   void                          update_crnti(du_ue_index_t ue_index, rnti_t crnti) override;
+  bool store_ntn_initial_ul_position(gnb_du_ue_f1ap_id_t                       f1ap_ue_id,
+                                     const mac_ntn_initial_ul_position_record& observation,
+                                     std::chrono::steady_clock::time_point     received_at) override;
   du_ue*                        find_rnti(rnti_t rnti) override;
   du_ue*                        find_f1ap_ue_id(gnb_du_ue_f1ap_id_t f1ap_ue_id) override;
   void                          remove_ue(du_ue_index_t ue_index) override;
@@ -101,6 +131,8 @@ private:
   // Mapping of ue_index and rnti to UEs.
   slotted_id_table<du_ue_index_t, du_ue_controller_impl, MAX_NOF_DU_UES> ue_db;
   std::unordered_map<rnti_t, du_ue_index_t>                              rnti_to_ue_index;
+
+  du_ntn_initial_ul_position_store ntn_initial_ul_positions;
 
   // task event loops indexed by ue_index
   slotted_array<fifo_async_task_scheduler, MAX_NOF_DU_UES> ue_ctrl_loop;

@@ -23,7 +23,9 @@
 #pragma once
 
 #include "du_ue.h"
+#include "srsran/mac/mac_ntn_initial_ul_position.h"
 #include "srsran/gtpu/gtpu_teid_pool.h"
+#include <chrono>
 
 namespace srsran {
 namespace srs_du {
@@ -43,6 +45,12 @@ public:
 
   /// \brief Update the CRNTI of an existing UE context.
   virtual void update_crnti(du_ue_index_t ue_index, rnti_t crnti) = 0;
+
+  /// Save an optional Initial UL position observation after both F1AP and MAC have created the UE.
+  virtual bool store_ntn_initial_ul_position(
+      gnb_du_ue_f1ap_id_t                       f1ap_ue_id,
+      const mac_ntn_initial_ul_position_record& observation,
+      std::chrono::steady_clock::time_point     received_at) = 0;
 
   /// \brief Find UE context based on DU UE index.
   virtual du_ue*       find_ue(du_ue_index_t ue_index)       = 0;

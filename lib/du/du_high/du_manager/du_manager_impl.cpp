@@ -136,6 +136,8 @@ void du_manager_impl::handle_ul_ccch_indication(const ul_ccch_indication_message
 
 void du_manager_impl::handle_f1c_connection_loss()
 {
+  // Records are bound to one F1 connection and must never survive a reconnect with reused UE identifiers.
+  ue_mng.invalidate_ntn_initial_ul_positions();
   schedule_async_task(launch_async<f1c_disconnection_handling_procedure>(proc_ctxt));
 }
 
@@ -250,6 +252,17 @@ du_manager_impl::handle_ntn_rnti_lease_pool_update_request(const f1ap_ntn_rnti_l
   result.reject_reason    = mac_result.reason;
   result.accepted_leases  = mac_result.accepted_leases;
   result.rejected_leases  = mac_result.rejected_leases;
+  if (result.accepted) {
+    // Replacing or clearing a namespace invalidates every pending observation for the cell. Retiring leases only
+    // invalidates observations for those exact RNTIs. A successful add leaves unrelated, generation-bound
+    // observations intact while their bounded private-F1 query is in flight.
+    if (request.operation == f1ap_ntn_rnti_lease_pool_operation::replace ||
+        request.operation == f1ap_ntn_rnti_lease_pool_operation::clear) {
+      ue_mng.invalidate_ntn_initial_ul_positions(request.cell_index);
+    } else if (request.operation == f1ap_ntn_rnti_lease_pool_operation::retire) {
+      ue_mng.invalidate_ntn_initial_ul_positions(request.cell_index, result.accepted_leases);
+    }
+  }
   return launch_result(std::move(result));
 }
 
@@ -372,6 +385,58 @@ du_manager_impl::handle_ntn_resource_audit_request(const f1ap_ntn_resource_audit
   return launch_result(std::move(result));
 }
 
+async_task<f1ap_ntn_initial_ul_position_result>
+du_manager_impl::handle_ntn_initial_ul_position_query(const f1ap_ntn_initial_ul_position_query& request)
+{
+  auto launch_result = [](f1ap_ntn_initial_ul_position_result result) {
+    return launch_async(
+        [result = std::move(result)](coro_context<async_task<f1ap_ntn_initial_ul_position_result>>& ctx) mutable {
+          CORO_BEGIN(ctx);
+          CORO_RETURN(result);
+        });
+  };
+  auto reject = [&request](const char* reason) {
+    f1ap_ntn_initial_ul_position_result result;
+    result.query_generation         = request.query_generation;
+    result.nonce                    = request.nonce;
+    result.connection_token         = request.connection_token;
+    result.gnb_du_id                = request.gnb_du_id;
+    result.cell_cgi                 = request.cell_cgi;
+    result.cell_index               = request.cell_index;
+    result.pci                      = request.pci;
+    result.gnb_du_ue_f1ap_id        = request.gnb_du_ue_f1ap_id;
+    result.c_rnti                   = request.c_rnti;
+    result.expected_rnti_generation = request.expected_rnti_generation;
+    result.accepted                 = false;
+    result.authority                = f1ap_ntn_initial_ul_position_authority::none;
+    result.reason                   = reason;
+    return result;
+  };
+
+  if (request.gnb_du_id != params.ran.gnb_du_id) {
+    return launch_result(reject("gnb_du_id_mismatch"));
+  }
+  if (!cell_mng.has_cell(request.cell_index)) {
+    return launch_result(reject("unknown_cell"));
+  }
+  const du_cell_config& cell_cfg = cell_mng.get_cell_cfg(request.cell_index);
+  if (cell_cfg.nr_cgi != request.cell_cgi || cell_cfg.pci != request.pci) {
+    return launch_result(reject("cell_identity_mismatch"));
+  }
+
+  const du_ue_index_t ue_index = params.f1ap.ue_ids.get_ue_index(request.gnb_du_ue_f1ap_id);
+  const du_ue*        ue       = is_du_ue_index_valid(ue_index) ? ue_mng.find_ue(ue_index) : nullptr;
+  if (ue == nullptr) {
+    return launch_result(reject("unknown_f1_ue"));
+  }
+  if (ue->f1ap_ue_id != request.gnb_du_ue_f1ap_id || ue->pcell_index != request.cell_index ||
+      ue->nr_cgi != request.cell_cgi || ue->rnti != request.c_rnti) {
+    return launch_result(reject("ue_identity_mismatch"));
+  }
+
+  return launch_result(ue_mng.handle_ntn_initial_ul_position_query(request));
+}
+
 async_task<f1ap_ntn_sib19_broadcast_result>
 du_manager_impl::handle_ntn_sib19_broadcast_update_request(const f1ap_ntn_sib19_broadcast_update& request)
 {
@@ -483,6 +548,9 @@ du_manager_impl::handle_ntn_access_calendar_update_request(const f1ap_ntn_access
   result.calendar_hash       = request.calendar_hash;
 
   mac_ntn_access_calendar_update mac_request;
+  mac_request.satellite_id        = request.satellite_id;
+  mac_request.catalog_version     = request.catalog_version;
+  mac_request.source_content_hash = request.source_content_hash;
   switch (request.operation) {
     case f1ap_ntn_access_calendar_operation::prepare:
       mac_request.operation = mac_ntn_access_calendar_operation::prepare;
@@ -639,6 +707,11 @@ du_manager_impl::handle_ntn_access_calendar_update_request(const f1ap_ntn_access
       target_report.first_unmatched.emplace(std::move(unmatched));
     }
   }
+  if (result.status == f1ap_ntn_access_calendar_result_status::applied) {
+    ue_mng.retain_ntn_initial_ul_position_plan(request.schedule_version, request.calendar_hash);
+  } else if (result.status == f1ap_ntn_access_calendar_result_status::cleared) {
+    ue_mng.erase_ntn_initial_ul_position_plan(request.schedule_version, request.calendar_hash);
+  }
   return launch_result(std::move(result));
 }
 
@@ -656,6 +729,10 @@ du_manager_impl::handle_ue_context_update(const f1ap_ue_context_update_request& 
 
 async_task<void> du_manager_impl::handle_ue_delete_request(const f1ap_ue_delete_request& request)
 {
+  const du_ue* ue = ue_mng.find_ue(request.ue_index);
+  if (ue != nullptr) {
+    ue_mng.invalidate_ntn_initial_ul_position(ue->f1ap_ue_id);
+  }
   return ue_mng.handle_ue_delete_request(request);
 }
 

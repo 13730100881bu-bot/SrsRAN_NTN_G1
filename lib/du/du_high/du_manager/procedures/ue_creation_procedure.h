@@ -43,6 +43,10 @@ struct du_ue_creation_request {
   /// \brief If present, it represents the slot at which the UL-CCCH message was received in the PUSCH. Absent, when
   /// the UE is created by command from upper layers.
   std::optional<slot_point> slot_rx;
+  /// Optional NTN receive record captured with the UL-CCCH message.
+  std::optional<mac_ntn_initial_ul_position_record> ntn_initial_ul_position;
+  /// DU receipt time used for the bounded one-second record lifetime.
+  std::chrono::steady_clock::time_point initial_ul_received_at{};
 };
 
 /// \brief Handles the creation of a UE and respective bearers in the DU UE manager, MAC, F1.

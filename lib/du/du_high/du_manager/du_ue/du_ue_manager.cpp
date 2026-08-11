@@ -70,12 +70,12 @@ void du_ue_manager::handle_ue_create_request(const ul_ccch_indication_message& m
     return;
   }
 
-  // Enqueue UE creation procedure
-  ue_ctrl_loop[ue_idx_candidate].schedule<ue_creation_procedure>(
-      du_ue_creation_request{ue_idx_candidate, msg.cell_index, msg.tc_rnti, msg.subpdu.copy(), msg.slot_rx},
-      *this,
-      cfg,
-      cell_res_alloc);
+  // Enqueue UE creation procedure. The lifetime starts when the DU accepts the UL-CCCH, not after UE setup completes.
+  du_ue_creation_request request{
+      ue_idx_candidate, msg.cell_index, msg.tc_rnti, msg.subpdu.copy(), msg.slot_rx};
+  request.ntn_initial_ul_position = msg.ntn_initial_ul_position;
+  request.initial_ul_received_at  = std::chrono::steady_clock::now();
+  ue_ctrl_loop[ue_idx_candidate].schedule<ue_creation_procedure>(request, *this, cfg, cell_res_alloc);
 }
 
 async_task<f1ap_ue_context_creation_response>
@@ -268,12 +268,26 @@ void du_ue_manager::remove_ue(du_ue_index_t ue_index)
   ue_ctrl_loop[ue_index].schedule([this, ue_index](coro_context<async_task<void>>& ctx) {
     CORO_BEGIN(ctx);
     srsran_assert(ue_db.contains(ue_index), "ue={}: Remove UE called for inexistent UE", fmt::underlying(ue_index));
+    ntn_initial_ul_positions.erase(ue_db[ue_index].f1ap_ue_id);
     rnti_to_ue_index.erase(ue_db[ue_index].rnti);
     ue_db.erase(ue_index);
     ue_ctrl_loop[ue_index].clear_pending_tasks();
     logger.debug("ue={}: Freeing UE context", fmt::underlying(ue_index));
     CORO_RETURN();
   });
+}
+
+bool du_ue_manager::store_ntn_initial_ul_position(gnb_du_ue_f1ap_id_t                       f1ap_ue_id,
+                                                  const mac_ntn_initial_ul_position_record& observation,
+                                                  std::chrono::steady_clock::time_point     received_at)
+{
+  return ntn_initial_ul_positions.store(f1ap_ue_id, observation, received_at);
+}
+
+f1ap_ntn_initial_ul_position_result
+du_ue_manager::handle_ntn_initial_ul_position_query(const f1ap_ntn_initial_ul_position_query& request)
+{
+  return ntn_initial_ul_positions.query(request, std::chrono::steady_clock::now());
 }
 
 void du_ue_manager::update_crnti(du_ue_index_t ue_index, rnti_t crnti)

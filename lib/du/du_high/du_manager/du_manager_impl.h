@@ -66,6 +66,8 @@ public:
   handle_ntn_rnti_lease_pool_update_request(const f1ap_ntn_rnti_lease_pool_update& request) override;
   async_task<f1ap_ntn_resource_audit_result>
   handle_ntn_resource_audit_request(const f1ap_ntn_resource_audit_request& request) override;
+  async_task<f1ap_ntn_initial_ul_position_result>
+  handle_ntn_initial_ul_position_query(const f1ap_ntn_initial_ul_position_query& request) override;
   async_task<f1ap_ntn_sib19_broadcast_result>
   handle_ntn_sib19_broadcast_update_request(const f1ap_ntn_sib19_broadcast_update& request) override;
   async_task<f1ap_ntn_access_calendar_result>
