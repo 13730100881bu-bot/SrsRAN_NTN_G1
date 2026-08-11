@@ -82,6 +82,12 @@ public:
   }
   void         remove_ue(du_ue_index_t ue_index) override { ues.erase(ue_index); }
   void         update_crnti(du_ue_index_t ue_index, rnti_t rnti) override {}
+  bool store_ntn_initial_ul_position(gnb_du_ue_f1ap_id_t,
+                                     const mac_ntn_initial_ul_position_record&,
+                                     std::chrono::steady_clock::time_point) override
+  {
+    return false;
+  }
   du_ue*       find_ue(du_ue_index_t ue_index) override { return ues.contains(ue_index) ? &ues[ue_index] : nullptr; }
   const du_ue* find_ue(du_ue_index_t ue_index) const override
   {

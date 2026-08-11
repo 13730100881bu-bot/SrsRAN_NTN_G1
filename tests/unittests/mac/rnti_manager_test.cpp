@@ -22,6 +22,7 @@
 
 #include "lib/mac/rnti_manager.h"
 #include <chrono>
+#include <limits>
 #include <gtest/gtest.h>
 
 using namespace srsran;
@@ -392,6 +393,115 @@ TEST(rnti_manager_test, allocate_for_cell_atomically_selects_enabled_ntn_pool_or
   clear.generation_id = update.generation_id;
   ASSERT_TRUE(rnti_db.apply_ntn_rnti_lease_pool_update(clear, now).accepted);
   EXPECT_EQ(rnti_db.allocate_for_cell(cell, now), to_rnti(0x4602));
+}
+
+TEST(rnti_manager_test, allocate_for_cell_with_generation_returns_the_authoritative_ntn_lease_generation)
+{
+  rnti_manager          rnti_db;
+  const du_cell_index_t cell = to_du_cell_index(0);
+  const auto            now  = rnti_manager::ntn_lease_time_point{};
+
+  mac_ntn_rnti_lease_pool_update update;
+  update.cell_index    = cell;
+  update.operation     = mac_ntn_rnti_lease_pool_operation::add;
+  update.generation_id = 105;
+  update.expiry_ms     = 1000;
+  update.leases        = {to_rnti(0x4701)};
+  ASSERT_TRUE(rnti_db.apply_ntn_rnti_lease_pool_update(update, now).accepted);
+
+  const rnti_allocation_result allocation = rnti_db.allocate_for_cell_with_generation(cell, now);
+  EXPECT_EQ(allocation.rnti, update.leases.front());
+  EXPECT_EQ(allocation.generation, update.generation_id);
+  EXPECT_NE(allocation.generation, 0U);
+}
+
+TEST(rnti_manager_test, allocate_for_cell_with_generation_returns_an_empty_result_when_the_ntn_pool_is_empty)
+{
+  rnti_manager          rnti_db;
+  const du_cell_index_t cell = to_du_cell_index(0);
+  const auto            now  = rnti_manager::ntn_lease_time_point{};
+
+  rnti_db.set_ntn_rnti_lease_mode(cell, true);
+  const rnti_allocation_result allocation = rnti_db.allocate_for_cell_with_generation(cell, now);
+
+  EXPECT_EQ(allocation.rnti, rnti_t::INVALID_RNTI);
+  EXPECT_EQ(allocation.generation, 0U);
+}
+
+TEST(rnti_manager_test, allocate_for_cell_with_generation_reports_a_newer_generation_after_safe_rnti_reuse)
+{
+  rnti_manager          rnti_db;
+  const du_cell_index_t cell  = to_du_cell_index(0);
+  const auto            now   = rnti_manager::ntn_lease_time_point{};
+  const rnti_t          lease = to_rnti(0x4701);
+
+  mac_ntn_rnti_lease_pool_update add;
+  add.cell_index    = cell;
+  add.operation     = mac_ntn_rnti_lease_pool_operation::add;
+  add.generation_id = 110;
+  add.expiry_ms     = 100;
+  add.leases        = {lease};
+  ASSERT_TRUE(rnti_db.apply_ntn_rnti_lease_pool_update(add, now).accepted);
+
+  const rnti_allocation_result first = rnti_db.allocate_for_cell_with_generation(cell, now);
+  ASSERT_EQ(first.rnti, lease);
+  ASSERT_EQ(first.generation, add.generation_id);
+
+  mac_ntn_rnti_lease_pool_update retire = add;
+  retire.operation                      = mac_ntn_rnti_lease_pool_operation::retire;
+  retire.expiry_ms                      = 0;
+  ASSERT_TRUE(rnti_db.apply_ntn_rnti_lease_pool_update(retire, now + std::chrono::milliseconds{100}).accepted);
+
+  mac_ntn_rnti_lease_pool_update reuse = add;
+  reuse.generation_id                  = add.generation_id + 1;
+  reuse.expiry_ms                      = 1000;
+  ASSERT_TRUE(rnti_db.apply_ntn_rnti_lease_pool_update(reuse, now + std::chrono::milliseconds{101}).accepted);
+
+  const rnti_allocation_result second =
+      rnti_db.allocate_for_cell_with_generation(cell, now + std::chrono::milliseconds{101});
+  EXPECT_EQ(second.rnti, lease);
+  EXPECT_GT(second.generation, first.generation);
+  EXPECT_EQ(second.generation, reuse.generation_id);
+}
+
+TEST(rnti_manager_test, allocate_for_cell_with_generation_fails_closed_when_generation_is_exhausted)
+{
+  rnti_manager          rnti_db;
+  const du_cell_index_t cell = to_du_cell_index(0);
+  const auto            now  = rnti_manager::ntn_lease_time_point{};
+
+  mac_ntn_rnti_lease_pool_update update;
+  update.cell_index    = cell;
+  update.operation     = mac_ntn_rnti_lease_pool_operation::add;
+  update.generation_id = std::numeric_limits<uint32_t>::max();
+  update.expiry_ms     = 1000;
+  update.leases        = {to_rnti(0x4701)};
+  ASSERT_TRUE(rnti_db.apply_ntn_rnti_lease_pool_update(update, now).accepted);
+
+  const rnti_allocation_result allocation = rnti_db.allocate_for_cell_with_generation(cell, now);
+  EXPECT_EQ(allocation.rnti, rnti_t::INVALID_RNTI);
+  EXPECT_EQ(allocation.generation, 0U);
+  EXPECT_EQ(rnti_db.allocate_for_cell(cell, now), rnti_t::INVALID_RNTI);
+
+  const mac_ntn_rnti_lease_pool_snapshot snapshot = rnti_db.get_ntn_rnti_lease_pool_snapshot(cell, now);
+  ASSERT_EQ(snapshot.leases.size(), 1U);
+  EXPECT_EQ(snapshot.leases.front().state, "pending");
+}
+
+TEST(rnti_manager_test, generation_aware_api_preserves_the_default_terrestrial_allocation_sequence)
+{
+  rnti_manager          legacy_path;
+  rnti_manager          generation_aware_path;
+  const du_cell_index_t cell = to_du_cell_index(0);
+  const auto            now  = rnti_manager::ntn_lease_time_point{};
+
+  EXPECT_EQ(legacy_path.allocate_for_cell(cell, now), to_rnti(0x4601));
+  const rnti_allocation_result first = generation_aware_path.allocate_for_cell_with_generation(cell, now);
+  EXPECT_EQ(first.rnti, to_rnti(0x4601));
+  EXPECT_EQ(first.generation, 0U);
+
+  EXPECT_EQ(legacy_path.allocate_for_cell(cell, now), to_rnti(0x4602));
+  EXPECT_EQ(generation_aware_path.allocate_for_cell(cell, now), to_rnti(0x4602));
 }
 
 TEST(rnti_manager_test, when_ntn_lease_pool_is_empty_then_allocate_ntn_lease_does_not_fallback_to_local_allocator)

@@ -23,13 +23,19 @@
 #pragma once
 
 #include "srsran/phy/upper/upper_phy_rx_results_notifier.h"
+#include <optional>
 
 namespace srsran {
 
 class upper_phy_rx_results_notifier_spy : public upper_phy_rx_results_notifier
 {
 public:
-  void on_new_prach_results(const ul_prach_results& result) override { prach_results_notified = true; }
+  void on_new_prach_results(const ul_prach_results& result) override
+  {
+    prach_results_notified = true;
+    ++prach_results_count;
+    last_prach_context     = result.context;
+  }
 
   void on_new_pusch_results_control(const ul_pusch_results_control& result) override
   {
@@ -43,6 +49,10 @@ public:
 
   bool has_prach_result_been_notified() const { return prach_results_notified; }
 
+  unsigned get_prach_results_count() const { return prach_results_count; }
+
+  const std::optional<prach_buffer_context>& get_last_prach_context() const { return last_prach_context; }
+
   bool has_pusch_uci_result_been_notified() const { return pusch_uci_results_notified; }
 
   bool has_pusch_data_result_been_notified() const { return pusch_data_results_notified; }
@@ -54,6 +64,8 @@ public:
   void clear()
   {
     prach_results_notified      = false;
+    prach_results_count         = 0;
+    last_prach_context.reset();
     pusch_data_results_notified = false;
     pusch_uci_results_notified  = false;
     pucch_results_notified      = false;
@@ -61,11 +73,13 @@ public:
   }
 
 private:
-  bool prach_results_notified      = false;
-  bool pusch_data_results_notified = false;
-  bool pusch_uci_results_notified  = false;
-  bool pucch_results_notified      = false;
-  bool srs_results_notified        = false;
+  bool                                prach_results_notified = false;
+  unsigned                            prach_results_count    = 0;
+  std::optional<prach_buffer_context> last_prach_context;
+  bool                                pusch_data_results_notified = false;
+  bool                                pusch_uci_results_notified  = false;
+  bool                                pucch_results_notified      = false;
+  bool                                srs_results_notified        = false;
 };
 
 } // namespace srsran

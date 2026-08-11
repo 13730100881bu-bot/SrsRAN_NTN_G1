@@ -146,6 +146,22 @@ static f1ap_ntn_resource_audit_request make_authoritative_ntn_resource_audit_req
   return request;
 }
 
+static f1ap_ntn_initial_ul_position_query make_initial_ul_position_query(const du_cell_config& cell)
+{
+  f1ap_ntn_initial_ul_position_query query;
+  query.query_generation         = 1;
+  query.nonce                    = 0x1234;
+  query.connection_token         = 0x5678;
+  query.gnb_du_id                = int_to_gnb_du_id(1);
+  query.cell_cgi                 = cell.nr_cgi;
+  query.cell_index               = to_du_cell_index(0);
+  query.pci                      = cell.pci;
+  query.gnb_du_ue_f1ap_id        = int_to_gnb_du_ue_f1ap_id(1);
+  query.c_rnti                   = to_rnti(0x4701);
+  query.expected_rnti_generation = 3;
+  return query;
+}
+
 class du_manager_ntn_rnti_lease_test : public du_manager_procedure_tester, public ::testing::Test
 {};
 
@@ -164,6 +180,35 @@ TEST_F(du_manager_ntn_rnti_lease_test, when_lease_pool_target_is_valid_then_gene
   EXPECT_EQ(mac_request.generation_id, request.generation_id);
   EXPECT_EQ(mac_request.expiry_ms, request.expiry_ms);
   EXPECT_EQ(mac_request.leases, request.leases);
+}
+
+TEST_F(du_manager_ntn_rnti_lease_test, initial_ul_position_query_rejects_wrong_du_before_ue_lookup)
+{
+  auto request      = make_initial_ul_position_query(cell_cfgs[0]);
+  request.gnb_du_id = int_to_gnb_du_id(2);
+
+  async_task<f1ap_ntn_initial_ul_position_result> procedure =
+      du_mng->handle_ntn_initial_ul_position_query(request);
+  lazy_task_launcher<f1ap_ntn_initial_ul_position_result> task(procedure);
+
+  ASSERT_TRUE(task.ready());
+  EXPECT_FALSE(task.get().accepted);
+  EXPECT_EQ(task.get().reason, "gnb_du_id_mismatch");
+  EXPECT_EQ(task.get().nonce, request.nonce);
+  EXPECT_EQ(task.get().observation_id, 0U);
+}
+
+TEST_F(du_manager_ntn_rnti_lease_test, initial_ul_position_query_requires_current_f1_ue_identity)
+{
+  const auto request = make_initial_ul_position_query(cell_cfgs[0]);
+
+  async_task<f1ap_ntn_initial_ul_position_result> procedure =
+      du_mng->handle_ntn_initial_ul_position_query(request);
+  lazy_task_launcher<f1ap_ntn_initial_ul_position_result> task(procedure);
+
+  ASSERT_TRUE(task.ready());
+  EXPECT_FALSE(task.get().accepted);
+  EXPECT_EQ(task.get().reason, "unknown_f1_ue");
 }
 
 TEST_F(du_manager_ntn_rnti_lease_test, when_lease_pool_stable_identity_mismatches_then_mac_is_not_updated)

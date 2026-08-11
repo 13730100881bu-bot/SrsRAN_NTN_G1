@@ -29,3 +29,11 @@ target_link_libraries(fapi_to_phy_fastpath_translator_test PRIVATE srsran_fapi_t
                                                                    srsran_fapi_message_builder_test_helpers
                                                                    srsran_upper_phy_support gtest gtest_main)
 gtest_discover_tests(fapi_to_phy_fastpath_translator_test)
+
+add_executable(phy_to_fapi_results_event_fastpath_translator_test
+        phy_to_fapi_results_event_fastpath_translator_test.cpp)
+target_include_directories(phy_to_fapi_results_event_fastpath_translator_test
+        PRIVATE ${CMAKE_SOURCE_DIR}/lib/fapi_adaptor/phy/p7)
+target_link_libraries(phy_to_fapi_results_event_fastpath_translator_test
+        PRIVATE srsran_phy_to_fapi_p7_fastpath_translator srslog gtest gtest_main)
+gtest_discover_tests(phy_to_fapi_results_event_fastpath_translator_test)

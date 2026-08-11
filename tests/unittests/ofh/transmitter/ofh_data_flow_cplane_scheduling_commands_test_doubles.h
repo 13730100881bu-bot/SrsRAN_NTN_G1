@@ -39,6 +39,7 @@ public:
     data_direction    direction = data_direction::downlink;
     slot_point        slot;
     filter_index_type filter_type;
+    std::optional<prach_beam_context> beam_context;
   };
 
   operation_controller& get_operation_controller() override { return *this; }
@@ -52,6 +53,7 @@ public:
     info.eaxc                                             = context.eaxc;
     info.direction                                        = context.direction;
     info.filter_type                                      = context.filter_type;
+    info.beam_context.reset();
   }
 
   void enqueue_section_type_3_prach_message(const struct data_flow_cplane_scheduling_prach_context& context) override
@@ -61,6 +63,7 @@ public:
     info.eaxc                                             = context.eaxc;
     info.direction                                        = data_direction::uplink;
     info.filter_type                                      = context.filter_type;
+    info.beam_context                                     = context.beam_context;
   }
 
   data_flow_message_encoding_metrics_collector* get_metrics_collector() override { return nullptr; }

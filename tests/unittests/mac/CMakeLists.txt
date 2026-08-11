@@ -40,6 +40,7 @@ add_executable(mac_test
         mac_metrics_test.cpp
         mac_config_helpers_test.cpp
         mac_ntn_access_calendar_manager_test.cpp
+        mac_ntn_initial_ul_position_manager_test.cpp
         slot_point_time_mapper_test.cpp
 )
 target_link_libraries(mac_test

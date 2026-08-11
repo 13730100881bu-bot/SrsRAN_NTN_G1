@@ -19,3 +19,8 @@
 #
 
 add_subdirectory(metrics)
+
+add_executable(du_high_unit_config_test du_high_unit_config_test.cpp)
+target_include_directories(du_high_unit_config_test PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(du_high_unit_config_test srsran_du_high_unit_helpers gtest gtest_main)
+gtest_discover_tests(du_high_unit_config_test PROPERTIES "LABELS;du_high_app_unit")

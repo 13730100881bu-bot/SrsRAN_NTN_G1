@@ -25,15 +25,203 @@
 #include "srsran/asn1/f1ap/f1ap_pdu_contents.h"
 #include "srsran/f1ap/cu_cp/f1ap_cu_resource_coordination.h"
 #include "srsran/f1ap/ntn_access_calendar.h"
+#include "srsran/f1ap/ntn_initial_ul_position_query.h"
 #include "srsran/f1ap/ntn_rnti_lease_pool.h"
 #include "srsran/support/async/async_test_utils.h"
 #include "fmt/format.h"
 #include <array>
+#include <functional>
 #include <gtest/gtest.h>
 #include <limits>
+#include <utility>
+#include <vector>
 
 using namespace srsran;
 using namespace srsran::srs_cu_cp;
+
+static f1ap_ntn_initial_ul_position_query make_initial_ul_position_query()
+{
+  f1ap_ntn_initial_ul_position_query query;
+  query.query_generation         = 7;
+  query.nonce                    = 0x1020304050607080ULL;
+  query.connection_token         = 0x8877665544332211ULL;
+  query.gnb_du_id                = int_to_gnb_du_id(0x123);
+  query.cell_cgi                 =
+      nr_cell_global_id_t{plmn_identity::test_value(), nr_cell_identity::create(0x12345).value()};
+  query.cell_index               = to_du_cell_index(1);
+  query.pci                      = pci_t{17};
+  query.gnb_du_ue_f1ap_id        = int_to_gnb_du_ue_f1ap_id(51);
+  query.c_rnti                   = to_rnti(0x4701);
+  query.expected_rnti_generation = 105;
+  return query;
+}
+
+static f1ap_ntn_initial_ul_position_result
+make_initial_ul_position_result(const f1ap_ntn_initial_ul_position_query& query = make_initial_ul_position_query())
+{
+  f1ap_ntn_initial_ul_position_result result;
+  result.query_generation         = query.query_generation;
+  result.nonce                    = query.nonce;
+  result.connection_token         = query.connection_token;
+  result.gnb_du_id                = query.gnb_du_id;
+  result.cell_cgi                 = query.cell_cgi;
+  result.cell_index               = query.cell_index;
+  result.pci                      = query.pci;
+  result.gnb_du_ue_f1ap_id        = query.gnb_du_ue_f1ap_id;
+  result.c_rnti                   = query.c_rnti;
+  result.expected_rnti_generation = query.expected_rnti_generation;
+  result.observation_id           = 0xabcdef0123456789ULL;
+  result.accepted                 = true;
+  result.authority                = f1ap_ntn_initial_ul_position_authority::ofh_beam_id_verified;
+  result.reason                   = "accepted";
+  result.schedule_version         = 41;
+  result.calendar_hash            = "calendar-sha256";
+  result.mapping_version          = 9;
+  result.mapping_hash             = "mapping-sha256";
+  result.position_id              = "G000123";
+  result.logical_port             = 3;
+  result.physical_port            = 7;
+  result.eaxc                     = 5;
+  result.beam_id                  = 0x1234;
+  result.calendar_cycle_index     = 2;
+  result.occasion_offset_us       = 5000;
+  result.confidence_margin_db     = 8.5F;
+  return result;
+}
+
+TEST(f1ap_ntn_initial_ul_position_container_test, valid_query_round_trips_the_complete_target_identity)
+{
+  const f1ap_ntn_initial_ul_position_query query   = make_initial_ul_position_query();
+  const byte_buffer                       encoded = encode_f1ap_ntn_initial_ul_position_query(query);
+
+  ASSERT_GT(encoded.length(), f1ap_ntn_initial_ul_position_detail::query_magic.size());
+  ASSERT_LE(encoded.length(), f1ap_ntn_initial_ul_position_detail::max_container_size);
+  for (size_t i = 0; i != f1ap_ntn_initial_ul_position_detail::query_magic.size(); ++i) {
+    EXPECT_EQ(encoded[i], f1ap_ntn_initial_ul_position_detail::query_magic[i]);
+  }
+  const auto decoded = decode_f1ap_ntn_initial_ul_position_query(encoded);
+  ASSERT_TRUE(decoded.has_value());
+  EXPECT_EQ(decoded->query_generation, query.query_generation);
+  EXPECT_EQ(decoded->nonce, query.nonce);
+  EXPECT_EQ(decoded->connection_token, query.connection_token);
+  EXPECT_EQ(decoded->gnb_du_id, query.gnb_du_id);
+  EXPECT_EQ(decoded->cell_cgi, query.cell_cgi);
+  EXPECT_EQ(decoded->cell_index, query.cell_index);
+  EXPECT_EQ(decoded->pci, query.pci);
+  EXPECT_EQ(decoded->gnb_du_ue_f1ap_id, query.gnb_du_ue_f1ap_id);
+  EXPECT_EQ(decoded->c_rnti, query.c_rnti);
+  EXPECT_EQ(decoded->expected_rnti_generation, query.expected_rnti_generation);
+}
+
+TEST(f1ap_ntn_initial_ul_position_container_test, query_encoder_rejects_invalid_generations_and_target_ids)
+{
+  const auto expect_rejected = [](const f1ap_ntn_initial_ul_position_query& query) {
+    EXPECT_EQ(encode_f1ap_ntn_initial_ul_position_query(query).length(), 0U);
+  };
+
+  auto query             = make_initial_ul_position_query();
+  query.query_generation = 0;
+  expect_rejected(query);
+  query.query_generation = std::numeric_limits<uint32_t>::max();
+  expect_rejected(query);
+
+  query       = make_initial_ul_position_query();
+  query.nonce = 0;
+  expect_rejected(query);
+  query                  = make_initial_ul_position_query();
+  query.connection_token = 0;
+  expect_rejected(query);
+  query           = make_initial_ul_position_query();
+  query.gnb_du_id = gnb_du_id_t::invalid;
+  expect_rejected(query);
+  query            = make_initial_ul_position_query();
+  query.cell_index = INVALID_DU_CELL_INDEX;
+  expect_rejected(query);
+  query     = make_initial_ul_position_query();
+  query.pci = INVALID_PCI;
+  expect_rejected(query);
+  query                       = make_initial_ul_position_query();
+  query.gnb_du_ue_f1ap_id     = gnb_du_ue_f1ap_id_t::invalid;
+  expect_rejected(query);
+  query        = make_initial_ul_position_query();
+  query.c_rnti = rnti_t::INVALID_RNTI;
+  expect_rejected(query);
+  query                          = make_initial_ul_position_query();
+  query.expected_rnti_generation = std::numeric_limits<uint32_t>::max();
+  expect_rejected(query);
+}
+
+TEST(f1ap_ntn_initial_ul_position_container_test, query_decoder_rejects_corruption_truncation_and_trailing_data)
+{
+  const auto query = make_initial_ul_position_query();
+
+  byte_buffer bad_magic = encode_f1ap_ntn_initial_ul_position_query(query);
+  bad_magic[0]           = 'X';
+  EXPECT_FALSE(decode_f1ap_ntn_initial_ul_position_query(bad_magic).has_value());
+
+  byte_buffer zero_generation = encode_f1ap_ntn_initial_ul_position_query(query);
+  for (size_t i = 8; i != 12; ++i) {
+    zero_generation[i] = 0;
+  }
+  EXPECT_FALSE(decode_f1ap_ntn_initial_ul_position_query(zero_generation).has_value());
+
+  // Fixed V1 layout: cell index starts at byte 47 and C-RNTI starts at byte 59.
+  byte_buffer invalid_cell = encode_f1ap_ntn_initial_ul_position_query(query);
+  invalid_cell[47]         = 0xff;
+  invalid_cell[48]         = 0xff;
+  EXPECT_FALSE(decode_f1ap_ntn_initial_ul_position_query(invalid_cell).has_value());
+
+  byte_buffer invalid_rnti = encode_f1ap_ntn_initial_ul_position_query(query);
+  invalid_rnti[59]         = 0;
+  invalid_rnti[60]         = 0;
+  EXPECT_FALSE(decode_f1ap_ntn_initial_ul_position_query(invalid_rnti).has_value());
+
+  byte_buffer truncated = encode_f1ap_ntn_initial_ul_position_query(query);
+  truncated.trim_tail(1);
+  EXPECT_FALSE(decode_f1ap_ntn_initial_ul_position_query(truncated).has_value());
+
+  byte_buffer trailing = encode_f1ap_ntn_initial_ul_position_query(query);
+  ASSERT_TRUE(trailing.append(0));
+  EXPECT_FALSE(decode_f1ap_ntn_initial_ul_position_query(trailing).has_value());
+
+  std::vector<uint8_t> oversized(f1ap_ntn_initial_ul_position_detail::max_container_size + 1U, 0);
+  const byte_buffer oversized_container =
+      byte_buffer::create(span<const uint8_t>(oversized.data(), oversized.size())).value();
+  EXPECT_FALSE(decode_f1ap_ntn_initial_ul_position_query(oversized_container).has_value());
+}
+
+TEST(f1ap_ntn_initial_ul_position_container_test, valid_result_round_trips_target_and_receive_identity)
+{
+  const auto result  = make_initial_ul_position_result();
+  const auto encoded = encode_f1ap_ntn_initial_ul_position_result(result);
+  const auto decoded = decode_f1ap_ntn_initial_ul_position_result(encoded);
+
+  ASSERT_TRUE(decoded.has_value());
+  EXPECT_EQ(decoded->query_generation, result.query_generation);
+  EXPECT_EQ(decoded->nonce, result.nonce);
+  EXPECT_EQ(decoded->connection_token, result.connection_token);
+  EXPECT_EQ(decoded->gnb_du_id, result.gnb_du_id);
+  EXPECT_EQ(decoded->cell_cgi, result.cell_cgi);
+  EXPECT_EQ(decoded->cell_index, result.cell_index);
+  EXPECT_EQ(decoded->pci, result.pci);
+  EXPECT_EQ(decoded->gnb_du_ue_f1ap_id, result.gnb_du_ue_f1ap_id);
+  EXPECT_EQ(decoded->c_rnti, result.c_rnti);
+  EXPECT_EQ(decoded->expected_rnti_generation, result.expected_rnti_generation);
+  EXPECT_EQ(decoded->observation_id, result.observation_id);
+  EXPECT_EQ(decoded->authority, result.authority);
+  EXPECT_EQ(decoded->schedule_version, result.schedule_version);
+  EXPECT_EQ(decoded->calendar_hash, result.calendar_hash);
+  EXPECT_EQ(decoded->mapping_version, result.mapping_version);
+  EXPECT_EQ(decoded->mapping_hash, result.mapping_hash);
+  EXPECT_EQ(decoded->position_id, result.position_id);
+  EXPECT_EQ(decoded->logical_port, result.logical_port);
+  EXPECT_EQ(decoded->physical_port, result.physical_port);
+  EXPECT_EQ(decoded->eaxc, result.eaxc);
+  EXPECT_EQ(decoded->beam_id, result.beam_id);
+  EXPECT_EQ(decoded->calendar_cycle_index, result.calendar_cycle_index);
+  EXPECT_EQ(decoded->occasion_offset_us, result.occasion_offset_us);
+  EXPECT_FLOAT_EQ(decoded->confidence_margin_db, result.confidence_margin_db);
+}
 
 static f1ap_ntn_rnti_lease_pool_update make_lease_update()
 {
@@ -910,8 +1098,21 @@ class f1ap_cu_gnbdu_resource_coordination_test : public f1ap_cu_test
 protected:
   void start_procedure(const f1ap_gnb_du_resource_coordination_request& req)
   {
+    task_launcher.reset();
     task = f1ap->handle_gnb_du_resource_coordination_request(req);
     task_launcher.emplace(task);
+  }
+
+  void complete_procedure(byte_buffer ack_container)
+  {
+    const auto& asn1_req =
+        f1ap_pdu_notifier.last_f1ap_msg.pdu.init_msg().value.gnb_du_res_coordination_request();
+    f1ap_message response;
+    response.pdu.set_successful_outcome().load_info_obj(ASN1_F1AP_ID_GNB_DU_RES_COORDINATION);
+    auto& asn1_resp           = response.pdu.successful_outcome().value.gnb_du_res_coordination_resp();
+    asn1_resp->transaction_id = asn1_req->transaction_id;
+    asn1_resp->eutra_nr_cell_res_coordination_req_ack_container = std::move(ack_container);
+    f1ap->handle_message(response);
   }
 
   async_task<f1ap_gnb_du_resource_coordination_response>                        task;
@@ -954,6 +1155,165 @@ TEST_F(f1ap_cu_gnbdu_resource_coordination_test, access_calendar_request_uses_pr
   ASSERT_EQ(decoded->cells.size(), 2U);
   EXPECT_EQ(decoded->cells[0].nci, request.ntn_access_calendar_update->cells[0].nci);
   EXPECT_FALSE(task.ready());
+}
+
+TEST_F(f1ap_cu_gnbdu_resource_coordination_test, initial_ul_position_query_has_container_priority)
+{
+  f1ap_gnb_du_resource_coordination_request request;
+  request.ntn_initial_ul_position_query = make_initial_ul_position_query();
+  request.ntn_access_calendar_update     = make_access_calendar_update();
+  request.ntn_rnti_lease_update          = make_lease_update();
+
+  start_procedure(request);
+
+  const auto& asn1_req =
+      f1ap_pdu_notifier.last_f1ap_msg.pdu.init_msg().value.gnb_du_res_coordination_request();
+  const auto decoded =
+      decode_f1ap_ntn_initial_ul_position_query(asn1_req->eutra_nr_cell_res_coordination_req_container);
+  ASSERT_TRUE(decoded.has_value());
+  EXPECT_EQ(decoded->query_generation, request.ntn_initial_ul_position_query->query_generation);
+  EXPECT_EQ(decoded->nonce, request.ntn_initial_ul_position_query->nonce);
+  EXPECT_EQ(decoded->connection_token, request.ntn_initial_ul_position_query->connection_token);
+  EXPECT_EQ(decoded->cell_cgi, request.ntn_initial_ul_position_query->cell_cgi);
+  EXPECT_FALSE(decode_f1ap_ntn_access_calendar_update(asn1_req->eutra_nr_cell_res_coordination_req_container)
+                   .has_value());
+}
+
+TEST_F(f1ap_cu_gnbdu_resource_coordination_test, exact_initial_ul_position_result_completes_procedure)
+{
+  f1ap_gnb_du_resource_coordination_request request;
+  request.ntn_initial_ul_position_query = make_initial_ul_position_query();
+  start_procedure(request);
+
+  const auto result = make_initial_ul_position_result(*request.ntn_initial_ul_position_query);
+  complete_procedure(encode_f1ap_ntn_initial_ul_position_result(result));
+
+  ASSERT_TRUE(task.ready());
+  const auto& response = task.get();
+  ASSERT_TRUE(response.initial_ul_position_result.has_value());
+  EXPECT_TRUE(response.success);
+  EXPECT_TRUE(response.failure_reason.empty());
+  EXPECT_TRUE(response.initial_ul_position_result->accepted);
+  EXPECT_EQ(response.initial_ul_position_result->query_generation, result.query_generation);
+  EXPECT_EQ(response.initial_ul_position_result->position_id, result.position_id);
+}
+
+TEST_F(f1ap_cu_gnbdu_resource_coordination_test, initial_ul_position_query_defaults_to_a_bounded_response_timeout)
+{
+  f1ap_gnb_du_resource_coordination_request request;
+  request.ntn_initial_ul_position_query = make_initial_ul_position_query();
+  start_procedure(request);
+
+  for (unsigned elapsed_ms = 0; elapsed_ms != 50; ++elapsed_ms) {
+    ASSERT_FALSE(task.ready());
+    tick();
+  }
+
+  ASSERT_TRUE(task.ready());
+  EXPECT_FALSE(task.get().success);
+  EXPECT_EQ(task.get().failure_reason, "response_timeout");
+}
+
+TEST_F(f1ap_cu_gnbdu_resource_coordination_test, initial_ul_position_query_honors_a_positive_request_timeout)
+{
+  f1ap_gnb_du_resource_coordination_request request;
+  request.ntn_initial_ul_position_query = make_initial_ul_position_query();
+  request.response_timeout              = std::chrono::milliseconds{3};
+  start_procedure(request);
+
+  for (unsigned elapsed_ms = 0; elapsed_ms != 3; ++elapsed_ms) {
+    ASSERT_FALSE(task.ready());
+    tick();
+  }
+
+  ASSERT_TRUE(task.ready());
+  EXPECT_EQ(task.get().failure_reason, "response_timeout");
+}
+
+TEST_F(f1ap_cu_gnbdu_resource_coordination_test, initial_ul_query_does_not_accept_another_container_type)
+{
+  f1ap_gnb_du_resource_coordination_request request;
+  request.ntn_initial_ul_position_query = make_initial_ul_position_query();
+  start_procedure(request);
+
+  f1ap_ntn_rnti_lease_pool_result unrelated_result;
+  unrelated_result.generation_id   = 11;
+  unrelated_result.accepted        = true;
+  unrelated_result.accepted_leases = {to_rnti(0x4701)};
+  unrelated_result.reject_reason   = "accepted";
+  complete_procedure(encode_f1ap_ntn_rnti_lease_pool_result(unrelated_result));
+
+  ASSERT_TRUE(task.ready());
+  EXPECT_FALSE(task.get().success);
+  EXPECT_EQ(task.get().failure_reason, "invalid_response");
+  EXPECT_FALSE(task.get().initial_ul_position_result.has_value());
+  EXPECT_FALSE(task.get().result.has_value());
+}
+
+TEST_F(f1ap_cu_gnbdu_resource_coordination_test, rejected_initial_ul_position_result_is_preserved)
+{
+  f1ap_gnb_du_resource_coordination_request request;
+  request.ntn_initial_ul_position_query = make_initial_ul_position_query();
+  start_procedure(request);
+
+  auto result             = make_initial_ul_position_result(*request.ntn_initial_ul_position_query);
+  result.accepted         = false;
+  result.authority        = f1ap_ntn_initial_ul_position_authority::none;
+  result.reason           = "observation_missing";
+  result.observation_id   = 0;
+  result.schedule_version = 0;
+  result.calendar_hash.clear();
+  result.mapping_version = 0;
+  result.mapping_hash.clear();
+  result.position_id.clear();
+  result.logical_port         = 0;
+  result.physical_port        = 0;
+  result.eaxc.reset();
+  result.beam_id.reset();
+  result.calendar_cycle_index = 0;
+  result.occasion_offset_us   = 0;
+  result.confidence_margin_db = 0.0F;
+  complete_procedure(encode_f1ap_ntn_initial_ul_position_result(result));
+
+  ASSERT_TRUE(task.ready());
+  ASSERT_TRUE(task.get().initial_ul_position_result.has_value());
+  EXPECT_FALSE(task.get().success);
+  EXPECT_TRUE(task.get().failure_reason.empty());
+  EXPECT_FALSE(task.get().initial_ul_position_result->accepted);
+  EXPECT_EQ(task.get().initial_ul_position_result->observation_id, 0U);
+  EXPECT_EQ(task.get().initial_ul_position_result->reason, "observation_missing");
+}
+
+TEST_F(f1ap_cu_gnbdu_resource_coordination_test, any_initial_ul_query_identity_mismatch_is_rejected)
+{
+  using mutator = std::function<void(f1ap_ntn_initial_ul_position_result&)>;
+  const std::vector<std::pair<const char*, mutator>> mismatches = {
+      {"query_generation", [](auto& value) { ++value.query_generation; }},
+      {"nonce", [](auto& value) { ++value.nonce; }},
+      {"connection_token", [](auto& value) { ++value.connection_token; }},
+      {"gnb_du_id", [](auto& value) { value.gnb_du_id = int_to_gnb_du_id(0x124); }},
+      {"cell_cgi", [](auto& value) { value.cell_cgi.nci = nr_cell_identity::create(0x12346).value(); }},
+      {"cell_index", [](auto& value) { value.cell_index = to_du_cell_index(0); }},
+      {"pci", [](auto& value) { value.pci = pci_t{18}; }},
+      {"gnb_du_ue_f1ap_id", [](auto& value) { value.gnb_du_ue_f1ap_id = int_to_gnb_du_ue_f1ap_id(52); }},
+      {"c_rnti", [](auto& value) { value.c_rnti = to_rnti(0x4702); }},
+      {"rnti_generation", [](auto& value) { ++value.expected_rnti_generation; }}};
+
+  for (const auto& [name, mutate] : mismatches) {
+    SCOPED_TRACE(name);
+    f1ap_gnb_du_resource_coordination_request request;
+    request.ntn_initial_ul_position_query = make_initial_ul_position_query();
+    start_procedure(request);
+
+    auto result = make_initial_ul_position_result(*request.ntn_initial_ul_position_query);
+    mutate(result);
+    complete_procedure(encode_f1ap_ntn_initial_ul_position_result(result));
+
+    ASSERT_TRUE(task.ready());
+    EXPECT_FALSE(task.get().success);
+    EXPECT_EQ(task.get().failure_reason, "response_identity_mismatch");
+    EXPECT_FALSE(task.get().initial_ul_position_result.has_value());
+  }
 }
 
 TEST_F(f1ap_cu_gnbdu_resource_coordination_test, rejected_access_calendar_ack_is_preserved_as_optional_result)

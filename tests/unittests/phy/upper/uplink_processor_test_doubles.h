@@ -51,6 +51,8 @@ public:
 
   bool is_process_prach_method_called() const { return has_process_prach_method_called; }
 
+  const prach_buffer_context& get_last_prach_context() const { return last_prach_context; }
+
   unsigned get_on_rx_symbol_count() const { return on_rx_symbol_count; }
 
   unsigned get_last_end_symbol_index() const { return last_end_symbol_index; }
@@ -77,6 +79,7 @@ private:
   void process_prach(shared_prach_buffer buffer, const prach_buffer_context& context) override
   {
     has_process_prach_method_called = true;
+    last_prach_context              = context;
   }
 
   void discard_slot() override {}
@@ -86,6 +89,7 @@ private:
   bool     has_add_pucch_pdu_method_called = false;
   bool     has_add_srs_pdu_method_called   = false;
   bool     has_process_prach_method_called = false;
+  prach_buffer_context last_prach_context;
   unsigned last_end_symbol_index           = std::numeric_limits<unsigned>::max();
   unsigned on_rx_symbol_count              = 0;
 };

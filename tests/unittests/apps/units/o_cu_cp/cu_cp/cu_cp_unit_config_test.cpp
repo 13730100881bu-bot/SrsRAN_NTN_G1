@@ -262,6 +262,9 @@ TEST(cu_cp_unit_config, default_terrestrial_config_keeps_ntn_disabled)
   ASSERT_EQ(cu_cp_cfg.mobility.onboard_position_plan.initial_ul_position_validation,
             srs_cu_cp::ntn_initial_ul_position_validation_mode::disabled);
   ASSERT_EQ(cfg.mobility_config.ntn_onboard_position_plan.initial_ul_position_validation, "disabled");
+  ASSERT_EQ(cu_cp_cfg.mobility.onboard_position_plan.initial_ul_position_query_timeout,
+            std::chrono::milliseconds{50});
+  ASSERT_EQ(cfg.mobility_config.ntn_onboard_position_plan.initial_ul_position_query_timeout_ms, 50U);
   ASSERT_FALSE(cu_cp_cfg.mobility.onboard_position_plan.initial_ul_position_provider);
   ASSERT_FALSE(cu_cp_cfg.mobility.onboard_position_plan.require_signed_plan);
   ASSERT_TRUE(cu_cp_cfg.mobility.onboard_position_plan.trusted_signing_keys.empty());
@@ -291,6 +294,7 @@ TEST(cu_cp_unit_config, onboard_position_plan_is_an_independent_opt_in_profile)
   cfg.mobility_config.ntn_onboard_position_plan.du_prepare_guard_ms = 250;
   cfg.mobility_config.ntn_onboard_position_plan.du_prepare_horizon_ms = 3000;
   cfg.mobility_config.ntn_onboard_position_plan.du_apply_timeout_ms = 200;
+  cfg.mobility_config.ntn_onboard_position_plan.initial_ul_position_query_timeout_ms = 75;
   cfg.mobility_config.ntn_onboard_position_plan.cell_ncis        = {0x123450001ULL, 0x123450002ULL};
   cfg.mobility_config.ntn_onboard_position_plan.cell_pcis        = {101, 101};
   cfg.mobility_config.ntn_onboard_position_plan.max_l1_positions_per_cell       = 128;
@@ -312,6 +316,8 @@ TEST(cu_cp_unit_config, onboard_position_plan_is_an_independent_opt_in_profile)
   EXPECT_TRUE(cu_cp_cfg.mobility.onboard_position_plan.du_execution_enabled);
   EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.initial_ul_position_validation,
             srs_cu_cp::ntn_initial_ul_position_validation_mode::audit);
+  EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.initial_ul_position_query_timeout,
+            std::chrono::milliseconds{75});
   EXPECT_TRUE(cu_cp_cfg.mobility.onboard_position_plan.require_signed_plan);
   ASSERT_EQ(cu_cp_cfg.mobility.onboard_position_plan.trusted_signing_keys.size(), 2U);
   EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.trusted_signing_keys[0].key_id, "planning-key-2026-01");
@@ -350,6 +356,7 @@ TEST(cu_cp_unit_config, onboard_position_plan_is_an_independent_opt_in_profile)
   EXPECT_EQ(cu_cp_cfg.mobility.onboard_position_plan.activation_alignment, std::chrono::milliseconds{640});
   EXPECT_EQ(yaml_plan["expected_catalog_id"].as<std::string>(), "global-land-l1-v1");
   EXPECT_EQ(yaml_plan["initial_ul_position_validation"].as<std::string>(), "audit");
+  EXPECT_EQ(yaml_plan["initial_ul_position_query_timeout_ms"].as<unsigned>(), 75U);
   EXPECT_EQ(yaml_plan["state_file"].as<std::string>(), "ntn-onboard-position-plan-state.json");
   EXPECT_TRUE(yaml_plan["require_signed_plan"].as<bool>());
   EXPECT_EQ(yaml_plan["version_anchor_file"].as<std::string>(),
@@ -368,6 +375,24 @@ TEST(cu_cp_unit_config, onboard_position_plan_is_an_independent_opt_in_profile)
             "sha256:195786f4161e3b0fad6faa0605144948a7401c067a014bde684c1b29a8087d63");
   EXPECT_EQ(yaml_plan["max_digital_ports_per_cell"].as<unsigned>(), 64U);
   EXPECT_EQ(yaml_plan["max_digital_ports_per_satellite"].as<unsigned>(), 128U);
+}
+
+TEST(cu_cp_unit_config, initial_ul_position_query_timeout_is_bounded)
+{
+  cu_cp_unit_config cfg;
+  auto&             timeout_ms = cfg.mobility_config.ntn_onboard_position_plan.initial_ul_position_query_timeout_ms;
+
+  timeout_ms = 9;
+  EXPECT_FALSE(validate_cu_cp_unit_config(cfg));
+
+  timeout_ms = 10;
+  EXPECT_TRUE(validate_cu_cp_unit_config(cfg));
+
+  timeout_ms = 200;
+  EXPECT_TRUE(validate_cu_cp_unit_config(cfg));
+
+  timeout_ms = 201;
+  EXPECT_FALSE(validate_cu_cp_unit_config(cfg));
 }
 
 TEST(cu_cp_unit_config, initial_ul_position_validation_requires_executing_onboard_plan)

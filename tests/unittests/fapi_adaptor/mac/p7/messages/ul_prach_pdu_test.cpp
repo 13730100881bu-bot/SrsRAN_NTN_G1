@@ -30,8 +30,15 @@ using namespace unittests;
 
 TEST(mac_fapi_ul_prach_pdu_conversor_test, valid_prach_pdu_should_pass)
 {
-  const prach_occasion_info& mac_pdu = build_valid_prach_occassion();
-  fapi::ul_prach_pdu         fapi_pdu;
+  prach_occasion_info mac_pdu                  = build_valid_prach_occassion();
+  mac_pdu.handle                               = 0x12345678U;
+  mac_pdu.enable_rx_port_attribution           = true;
+  mac_pdu.rx_port_attribution_unique_margin_dB = 8.5F;
+  mac_pdu.calendar_position_valid              = true;
+  mac_pdu.calendar_schedule_version            = 41U;
+  mac_pdu.calendar_cycle_index                 = 160U;
+  mac_pdu.occasion_offset_us                   = 5000U;
+  fapi::ul_prach_pdu fapi_pdu;
 
   convert_prach_mac_to_fapi(fapi_pdu, mac_pdu);
 
@@ -45,6 +52,29 @@ TEST(mac_fapi_ul_prach_pdu_conversor_test, valid_prach_pdu_should_pass)
   ASSERT_EQ(0, fapi_pdu.maintenance_v3.prach_res_config_index);
   ASSERT_EQ(mac_pdu.start_preamble_index, fapi_pdu.maintenance_v3.start_preamble_index);
   ASSERT_EQ(mac_pdu.nof_preamble_indexes, fapi_pdu.maintenance_v3.num_preamble_indices);
+  ASSERT_EQ(mac_pdu.handle, fapi_pdu.maintenance_v3.handle);
+  ASSERT_EQ(mac_pdu.enable_rx_port_attribution, fapi_pdu.enable_rx_port_attribution);
+  ASSERT_FLOAT_EQ(mac_pdu.rx_port_attribution_unique_margin_dB, fapi_pdu.rx_port_attribution_unique_margin_dB);
+  ASSERT_EQ(mac_pdu.calendar_position_valid, fapi_pdu.calendar_position_valid);
+  ASSERT_EQ(mac_pdu.calendar_schedule_version, fapi_pdu.calendar_schedule_version);
+  ASSERT_EQ(mac_pdu.calendar_cycle_index, fapi_pdu.calendar_cycle_index);
+  ASSERT_EQ(mac_pdu.occasion_offset_us, fapi_pdu.occasion_offset_us);
   ASSERT_EQ(static_cast<unsigned>(fapi::prach_config_scope_type::phy_context),
             static_cast<unsigned>(fapi_pdu.maintenance_v3.prach_config_scope));
+}
+
+TEST(mac_fapi_ul_prach_pdu_conversor_test, default_port_attribution_request_remains_disabled)
+{
+  const prach_occasion_info mac_pdu = build_valid_prach_occassion();
+  fapi::ul_prach_pdu        fapi_pdu;
+
+  convert_prach_mac_to_fapi(fapi_pdu, mac_pdu);
+
+  EXPECT_EQ(0U, fapi_pdu.maintenance_v3.handle);
+  EXPECT_FALSE(fapi_pdu.enable_rx_port_attribution);
+  EXPECT_FLOAT_EQ(6.0F, fapi_pdu.rx_port_attribution_unique_margin_dB);
+  EXPECT_FALSE(fapi_pdu.calendar_position_valid);
+  EXPECT_EQ(fapi_pdu.calendar_schedule_version, 0U);
+  EXPECT_EQ(fapi_pdu.calendar_cycle_index, 0U);
+  EXPECT_EQ(fapi_pdu.occasion_offset_us, 0U);
 }

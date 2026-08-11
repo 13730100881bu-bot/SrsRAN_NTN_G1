@@ -392,6 +392,7 @@ TEST_F(data_flow_cplane_scheduling_commands_impl_fixture, calling_enqueue_sectio
   ASSERT_EQ(cplane_params.cpLength, 0);
   ASSERT_EQ(cplane_params.fft_size, cplane_fft_size::fft_4096);
   ASSERT_EQ(cplane_params.time_offset, context.time_offset);
+  ASSERT_FALSE(cplane_params.section_fields.beam_id.has_value());
 }
 
 TEST_F(data_flow_cplane_scheduling_commands_impl_fixture,
@@ -428,4 +429,56 @@ TEST_F(data_flow_cplane_scheduling_commands_impl_fixture,
 
     ASSERT_TRUE(i < ctxt.start_symbol + ctxt.nof_symbols);
   }
+
+  auto exact_context = prach_cplane_context_repo->get_prach(context.slot, context.eaxc);
+  ASSERT_TRUE(exact_context.has_value());
+  EXPECT_FALSE(exact_context->beam_context.has_value());
+}
+
+TEST_F(data_flow_cplane_scheduling_commands_impl_fixture, type_3_beam_and_calendar_context_is_serialized_and_retained)
+{
+  data_flow_cplane_scheduling_prach_context context = {{0, 0, 1},
+                                                       2,
+                                                       filter_index_type::ul_prach_preamble_1p25khz,
+                                                       0,
+                                                       1,
+                                                       srsran::subcarrier_spacing::kHz30,
+                                                       srsran::prach_subcarrier_spacing::kHz1_25,
+                                                       0,
+                                                       72,
+                                                       3};
+  context.beam_context = prach_beam_context{0x1234, 7, "G000123", 41, "calendar-sha256", 9, "mapping-sha256"};
+
+  data_flow.enqueue_section_type_3_prach_message(context);
+
+  ASSERT_TRUE(cplane_builder->has_build_prach_mixed_numerology_message_function_been_called());
+  const auto& cplane_params = cplane_builder->get_type3_param();
+  ASSERT_TRUE(cplane_params.section_fields.beam_id.has_value());
+  EXPECT_EQ(*cplane_params.section_fields.beam_id, 0x1234);
+
+  auto exact_context = prach_cplane_context_repo->get_prach(context.slot, context.eaxc);
+  ASSERT_TRUE(exact_context.has_value());
+  ASSERT_TRUE(exact_context->beam_context.has_value());
+  EXPECT_TRUE(*exact_context->beam_context == *context.beam_context);
+}
+
+TEST_F(data_flow_cplane_scheduling_commands_impl_fixture, conflicting_type_3_mapping_is_not_available_to_receiver)
+{
+  data_flow_cplane_scheduling_prach_context context = {{0, 0, 1},
+                                                       2,
+                                                       filter_index_type::ul_prach_preamble_1p25khz,
+                                                       0,
+                                                       1,
+                                                       srsran::subcarrier_spacing::kHz30,
+                                                       srsran::prach_subcarrier_spacing::kHz1_25,
+                                                       0,
+                                                       72,
+                                                       3};
+  context.beam_context = prach_beam_context{0x1234, 7, "G000123", 41, "calendar-a", 9, "mapping-sha256"};
+  data_flow.enqueue_section_type_3_prach_message(context);
+
+  context.beam_context->position_id = "G000124";
+  data_flow.enqueue_section_type_3_prach_message(context);
+
+  EXPECT_FALSE(prach_cplane_context_repo->get_prach(context.slot, context.eaxc).has_value());
 }

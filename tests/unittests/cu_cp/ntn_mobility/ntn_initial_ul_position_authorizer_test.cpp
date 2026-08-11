@@ -209,6 +209,7 @@ protected:
     request.key = {observation.du_index,
                    observation.du_cell_index,
                    observation.c_rnti,
+                   observation.rnti_lease_generation,
                    observation.du_connection_generation};
     request.ue_index                = observation.ue_index;
     request.du_cell_index           = observation.du_cell_index;
@@ -252,7 +253,7 @@ TEST(ntn_initial_ul_position_store, reports_missing_expired_ambiguous_replayed_a
 {
   ntn_initial_ul_position_observation_store store;
   const ntn_initial_ul_position_observation_key key{
-      uint_to_du_index(4), uint_to_du_cell_index(0), to_rnti(0x4601), 9};
+      uint_to_du_index(4), uint_to_du_cell_index(0), to_rnti(0x4601), 0, 9};
 
   EXPECT_EQ(store.take(key, steady_at_ms(0)).status,
             ntn_initial_ul_position_take_status::missing);
@@ -313,6 +314,7 @@ TEST(ntn_initial_ul_position_store, rejects_invalid_observations_and_keys_withou
   EXPECT_EQ(store.take({du_index_t::invalid,
                         valid.du_cell_index,
                         valid.c_rnti,
+                        valid.rnti_lease_generation,
                         valid.du_connection_generation},
                        steady_at_ms(10))
                 .status,
@@ -320,6 +322,7 @@ TEST(ntn_initial_ul_position_store, rejects_invalid_observations_and_keys_withou
   EXPECT_EQ(store.take({valid.du_index,
                         du_cell_index_t::invalid,
                         valid.c_rnti,
+                        valid.rnti_lease_generation,
                         valid.du_connection_generation},
                        steady_at_ms(10))
                 .status,
@@ -327,11 +330,16 @@ TEST(ntn_initial_ul_position_store, rejects_invalid_observations_and_keys_withou
   EXPECT_EQ(store.take({valid.du_index,
                         valid.du_cell_index,
                         rnti_t::INVALID_RNTI,
+                        valid.rnti_lease_generation,
                         valid.du_connection_generation},
                        steady_at_ms(10))
                 .status,
             ntn_initial_ul_position_take_status::missing);
-  EXPECT_EQ(store.take({valid.du_index, valid.du_cell_index, valid.c_rnti, valid.du_connection_generation},
+  EXPECT_EQ(store.take({valid.du_index,
+                        valid.du_cell_index,
+                        valid.c_rnti,
+                        valid.rnti_lease_generation,
+                        valid.du_connection_generation},
                        steady_at_ms(10))
                 .status,
             ntn_initial_ul_position_take_status::found);
@@ -349,6 +357,33 @@ TEST(ntn_initial_ul_position_store, source_snapshot_excludes_expired_pending_obs
   EXPECT_TRUE(snapshot.ready);
   EXPECT_EQ(snapshot.authority, "trusted_du_observer");
   EXPECT_EQ(snapshot.pending, 0U);
+  EXPECT_FALSE(snapshot.live_device_backend_ready);
+  EXPECT_EQ(snapshot.live_device_backend, "none");
+}
+
+TEST(ntn_initial_ul_position_store, reports_live_device_readiness_separately_from_provider_availability)
+{
+  ntn_initial_ul_position_observation_store store("device_provider", true, true);
+  ntn_initial_ul_position_observation       observation = make_store_observation();
+  observation.authority = ntn_initial_ul_position_observation_authority::sdr_rx_port_verified;
+  observation.rnti_lease_generation = 7;
+  observation.physical_rx_port_id   = 3;
+  observation.mapping_version       = 9;
+  observation.mapping_hash          = "rx-mapping-sha256";
+  ASSERT_EQ(store.record(observation), ntn_initial_ul_position_record_status::stored);
+
+  const ntn_initial_ul_position_source_snapshot ready = store.source_snapshot();
+  EXPECT_TRUE(ready.ready);
+  EXPECT_TRUE(ready.rnti_generation_authoritative);
+  EXPECT_TRUE(ready.device_verification_capable);
+  EXPECT_TRUE(ready.live_device_backend_ready);
+  EXPECT_EQ(ready.live_device_backend, "sdr_zmq");
+
+  store.invalidate_all();
+  const ntn_initial_ul_position_source_snapshot no_backend = store.source_snapshot();
+  EXPECT_TRUE(no_backend.ready);
+  EXPECT_FALSE(no_backend.live_device_backend_ready);
+  EXPECT_EQ(no_backend.live_device_backend, "none");
 }
 
 TEST(ntn_initial_ul_position_store, enforces_the_1024_record_limit_and_rejects_duplicate_event_ids)
@@ -373,7 +408,13 @@ TEST(ntn_initial_ul_position_store, supports_generation_zero_and_provider_invali
   ASSERT_EQ(store.record(first, steady_at_ms(0)), ntn_initial_ul_position_record_status::stored);
   EXPECT_TRUE(store.is_ready());
   EXPECT_EQ(store.authority(), "trusted_du_observer");
-  EXPECT_EQ(store.take({first.du_index, first.du_cell_index, first.c_rnti, 0}, steady_at_ms(10)).status,
+  EXPECT_EQ(store.take({first.du_index,
+                        first.du_cell_index,
+                        first.c_rnti,
+                        first.rnti_lease_generation,
+                        0},
+                       steady_at_ms(10))
+                .status,
             ntn_initial_ul_position_take_status::found);
 
   ntn_initial_ul_position_observation second = make_store_observation(2);
@@ -398,6 +439,7 @@ TEST(ntn_initial_ul_position_store, requires_the_complete_du_cell_rnti_and_gener
   EXPECT_EQ(store.take({uint_to_du_index(5),
                         observation.du_cell_index,
                         observation.c_rnti,
+                        observation.rnti_lease_generation,
                         observation.du_connection_generation},
                        steady_at_ms(10))
                 .status,
@@ -405,6 +447,7 @@ TEST(ntn_initial_ul_position_store, requires_the_complete_du_cell_rnti_and_gener
   EXPECT_EQ(store.take({observation.du_index,
                         uint_to_du_cell_index(1),
                         observation.c_rnti,
+                        observation.rnti_lease_generation,
                         observation.du_connection_generation},
                        steady_at_ms(10))
                 .status,
@@ -412,6 +455,7 @@ TEST(ntn_initial_ul_position_store, requires_the_complete_du_cell_rnti_and_gener
   EXPECT_EQ(store.take({observation.du_index,
                         observation.du_cell_index,
                         to_rnti(0x4602),
+                        observation.rnti_lease_generation,
                         observation.du_connection_generation},
                        steady_at_ms(10))
                 .status,
@@ -419,6 +463,7 @@ TEST(ntn_initial_ul_position_store, requires_the_complete_du_cell_rnti_and_gener
   EXPECT_EQ(store.take({observation.du_index,
                         observation.du_cell_index,
                         observation.c_rnti,
+                        observation.rnti_lease_generation,
                         observation.du_connection_generation + 1},
                        steady_at_ms(10))
                 .status,
@@ -426,6 +471,7 @@ TEST(ntn_initial_ul_position_store, requires_the_complete_du_cell_rnti_and_gener
   EXPECT_EQ(store.take({observation.du_index,
                         observation.du_cell_index,
                         observation.c_rnti,
+                        observation.rnti_lease_generation,
                         observation.du_connection_generation},
                        steady_at_ms(10))
                 .status,
@@ -454,6 +500,29 @@ TEST(ntn_initial_ul_position_store, accepts_concurrent_records_without_exceeding
   EXPECT_EQ(store.pending_count(), 256U);
 }
 
+TEST(ntn_initial_ul_position_store, scopes_replay_identifiers_to_one_du_connection)
+{
+  ntn_initial_ul_position_observation_store store;
+  ntn_initial_ul_position_observation       first = make_store_observation(1);
+  ntn_initial_ul_position_observation       second = first;
+  second.du_index                                  = uint_to_du_index(5);
+  second.du_connection_generation                  = 3;
+
+  ASSERT_EQ(store.record(first, steady_at_ms(0)), ntn_initial_ul_position_record_status::stored);
+  ASSERT_EQ(store.record(second, steady_at_ms(0)), ntn_initial_ul_position_record_status::stored);
+  EXPECT_EQ(store.pending_count(), 2U);
+
+  const ntn_initial_ul_position_observation_key first_key{
+      first.du_index, first.du_cell_index, first.c_rnti, first.rnti_lease_generation, first.du_connection_generation};
+  const ntn_initial_ul_position_observation_key second_key{second.du_index,
+                                                            second.du_cell_index,
+                                                            second.c_rnti,
+                                                            second.rnti_lease_generation,
+                                                            second.du_connection_generation};
+  EXPECT_EQ(store.take(first_key, steady_at_ms(10)).status, ntn_initial_ul_position_take_status::found);
+  EXPECT_EQ(store.take(second_key, steady_at_ms(10)).status, ntn_initial_ul_position_take_status::found);
+}
+
 TEST_F(ntn_initial_ul_position_authorizer_test, authorizes_one_exact_observation_only_once)
 {
   ASSERT_EQ(store.record(make_observation(), steady_at_ms(0)), ntn_initial_ul_position_record_status::stored);
@@ -466,7 +535,91 @@ TEST_F(ntn_initial_ul_position_authorizer_test, authorizes_one_exact_observation
   EXPECT_EQ(first.plan_audit.decision, ntn_initial_access_plan_decision::accept);
 
   EXPECT_EQ(authorizer.authorize(request).status,
-            ntn_initial_ul_position_authorization_status::replayed_observation);
+             ntn_initial_ul_position_authorization_status::replayed_observation);
+}
+
+TEST_F(ntn_initial_ul_position_authorizer_test, strict_admission_requires_a_device_verified_receive_source)
+{
+  ntn_initial_ul_position_observation injected = make_observation(1);
+  ASSERT_EQ(store.record(injected, steady_at_ms(0)), ntn_initial_ul_position_record_status::stored);
+  auto strict_request                    = make_request();
+  strict_request.require_device_verified = true;
+  EXPECT_EQ(authorizer.authorize(strict_request).status,
+            ntn_initial_ul_position_authorization_status::receive_port_unavailable);
+
+  ntn_initial_ul_position_observation device = make_observation(2);
+  device.authority                           = ntn_initial_ul_position_observation_authority::sdr_rx_port_verified;
+  device.rnti_lease_generation               = 1;
+  device.physical_rx_port_id                 = 3;
+  device.mapping_version                     = 7;
+  device.mapping_hash                        = "rx-mapping-sha256";
+  ASSERT_EQ(store.record(device, steady_at_ms(20)), ntn_initial_ul_position_record_status::stored);
+  strict_request.key.rnti_lease_generation = device.rnti_lease_generation;
+  strict_request.observation_now           = steady_at_ms(30);
+  EXPECT_EQ(authorizer.authorize(strict_request).status,
+            ntn_initial_ul_position_authorization_status::authorized);
+}
+
+TEST_F(ntn_initial_ul_position_authorizer_test, enforces_receive_authority_identity_boundaries)
+{
+  auto expect_source_unavailable = [&](ntn_initial_ul_position_observation observation) {
+    fixed_initial_ul_position_provider provider{{ntn_initial_ul_position_take_status::found, std::move(observation)}};
+    ntn_initial_ul_position_authorizer provider_authorizer{provider, controller};
+    auto                               request = make_request();
+    request.key.rnti_lease_generation         = 1;
+    request.require_device_verified            = true;
+    EXPECT_EQ(provider_authorizer.authorize(request).status,
+              ntn_initial_ul_position_authorization_status::source_unavailable);
+  };
+
+  ntn_initial_ul_position_observation invalid_sdr = make_observation(10);
+  invalid_sdr.authority                           = ntn_initial_ul_position_observation_authority::sdr_rx_port_verified;
+  invalid_sdr.rnti_lease_generation               = 1;
+  invalid_sdr.physical_rx_port_id                 = 255;
+  invalid_sdr.mapping_version                     = 7;
+  invalid_sdr.mapping_hash                        = "rx-mapping-sha256";
+  expect_source_unavailable(invalid_sdr);
+
+  ntn_initial_ul_position_observation invalid_ofh = make_observation(11);
+  invalid_ofh.authority                           = ntn_initial_ul_position_observation_authority::ofh_beam_id_verified;
+  invalid_ofh.rnti_lease_generation               = 1;
+  invalid_ofh.physical_rx_port_id                 = 254;
+  invalid_ofh.ofh_prach_eaxc                      = 32;
+  invalid_ofh.ofh_beam_id                         = 1;
+  invalid_ofh.mapping_version                     = 7;
+  invalid_ofh.mapping_hash                        = "rx-mapping-sha256";
+  expect_source_unavailable(invalid_ofh);
+
+  ntn_initial_ul_position_observation invalid_software = make_observation(12);
+  invalid_software.authority              = ntn_initial_ul_position_observation_authority::software_attributed;
+  invalid_software.rnti_lease_generation = 1;
+  invalid_software.mapping_version        = 7;
+  invalid_software.mapping_hash           = "self-asserted-mapping";
+  expect_source_unavailable(invalid_software);
+
+  ntn_initial_ul_position_observation valid_ofh = make_observation(13);
+  valid_ofh.authority                           = ntn_initial_ul_position_observation_authority::ofh_beam_id_verified;
+  valid_ofh.rnti_lease_generation               = 1;
+  valid_ofh.physical_rx_port_id                 = 254;
+  valid_ofh.ofh_prach_eaxc                      = 31;
+  valid_ofh.ofh_beam_id                         = 0x7fff;
+  valid_ofh.mapping_version                     = 7;
+  valid_ofh.mapping_hash                        = "rx-mapping-sha256";
+  fixed_initial_ul_position_provider valid_provider{{ntn_initial_ul_position_take_status::found, valid_ofh}};
+  ntn_initial_ul_position_authorizer valid_authorizer{valid_provider, controller};
+  auto                               strict_request = make_request();
+  strict_request.key.rnti_lease_generation         = 1;
+  strict_request.require_device_verified            = true;
+  EXPECT_EQ(valid_authorizer.authorize(strict_request).status,
+            ntn_initial_ul_position_authorization_status::authorized);
+}
+
+TEST_F(ntn_initial_ul_position_authorizer_test, audit_admission_can_record_an_injected_observation)
+{
+  ASSERT_EQ(store.record(make_observation(), steady_at_ms(0)), ntn_initial_ul_position_record_status::stored);
+  ntn_initial_ul_position_authorization_request request = make_request();
+  request.require_device_verified                        = false;
+  EXPECT_EQ(authorizer.authorize(request).status, ntn_initial_ul_position_authorization_status::authorized);
 }
 
 TEST_F(ntn_initial_ul_position_authorizer_test, rejects_provider_results_that_violate_the_take_contract)

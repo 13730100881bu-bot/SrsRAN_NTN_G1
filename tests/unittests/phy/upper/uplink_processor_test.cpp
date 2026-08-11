@@ -45,7 +45,7 @@ public:
     pucch_executor(1),
     pusch_executor(1),
     srs_executor(1),
-    prach_executor(1),
+    prach_executor(2),
     grid_reader_spy(max_nof_layers, max_nof_symbols, max_nof_prb),
     grid_writer_spy(max_nof_layers, max_nof_symbols, max_nof_prb),
     grid_spy(nullptr)
@@ -168,8 +168,27 @@ TEST_F(UplinkProcessorFixture, prach_normal_workflow)
 
   auto prach_buffer_pool = create_spy_prach_buffer_pool();
 
+  prach_buffer_context context{};
+  context.enable_rx_port_attribution           = true;
+  context.rx_port_attribution_unique_margin_dB = 8.5F;
+  context.ports                                 = {3};
+  auto verified_contexts = std::make_shared<verified_prach_rx_context_list>();
+  verified_prach_rx_context verified;
+  verified.authority          = prach_rx_context_authority::ofh_beam_id_verified;
+  verified.buffer_port        = 0;
+  verified.logical_port_id    = 7;
+  verified.ofh_prach_eaxc     = 5;
+  verified.ofh_beam_id        = 0x1234;
+  verified.position_id        = "G000123";
+  verified.schedule_version   = 41;
+  verified.calendar_hash      = "calendar-sha256";
+  verified.mapping_generation = 9;
+  verified.mapping_hash       = "mapping-sha256";
+  verified_contexts->push_back(verified);
+  context.verified_rx_contexts = verified_contexts;
+
   // Request PRACH processing.
-  ul_processor->get_slot_processor(slot).process_prach(prach_buffer_pool->get(), {});
+  ul_processor->get_slot_processor(slot).process_prach(prach_buffer_pool->get(), context);
 
   // Create asynchronous task - it will block until all tasks are completed.
   std::atomic<bool> stop_thread_started = false;
@@ -189,6 +208,11 @@ TEST_F(UplinkProcessorFixture, prach_normal_workflow)
   // Check the detector has been called and the result notified.
   ASSERT_TRUE(prach_spy->has_detect_method_been_called());
   ASSERT_TRUE(results_notifier.has_prach_result_been_notified());
+  ASSERT_TRUE(results_notifier.get_last_prach_context().has_value());
+  ASSERT_EQ(results_notifier.get_last_prach_context()->verified_rx_contexts.get(), verified_contexts.get());
+  ASSERT_TRUE(prach_spy->get_last_configuration().has_value());
+  EXPECT_TRUE(prach_spy->get_last_configuration()->port_attribution.enabled);
+  EXPECT_FLOAT_EQ(8.5F, prach_spy->get_last_configuration()->port_attribution.unique_margin_dB);
 
   // Synchronize stopping thread.
   stop_thread.join();
@@ -220,6 +244,41 @@ TEST_F(UplinkProcessorFixture, prach_fail_defer_workflow)
   // Assert tap handles were not invoked.
   ASSERT_EQ(tap_spy->get_handle_ul_symbol_count(), 0);
   ASSERT_EQ(tap_spy->get_handle_quiet_grid_count(), 0);
+}
+
+TEST_F(UplinkProcessorFixture, prach_provenance_context_is_released_when_executor_rejects_the_task)
+{
+  ul_processor->get_pdu_slot_repository(slot);
+  prach_executor.stop();
+
+  auto                 prach_buffer_pool = create_spy_prach_buffer_pool();
+  prach_buffer_context context{};
+  context.handle                                 = 1;
+  context.enable_rx_port_attribution             = true;
+  context.rx_port_attribution_unique_margin_dB = 6.0F;
+
+  ul_processor->get_slot_processor(slot).process_prach(prach_buffer_pool->get(), context);
+
+  // Rejection must balance the PRACH FSM even when the extended context took the shared-provenance path.
+  ul_processor->stop();
+  EXPECT_FALSE(prach_spy->has_detect_method_been_called());
+  EXPECT_FALSE(results_notifier.has_prach_result_been_notified());
+}
+
+TEST_F(UplinkProcessorFixture, consecutive_terrestrial_prach_requests_are_not_limited_by_ntn_context_storage)
+{
+  ul_processor->get_pdu_slot_repository(slot);
+  auto first_buffer_pool  = create_spy_prach_buffer_pool();
+  auto second_buffer_pool = create_spy_prach_buffer_pool();
+
+  // Both contexts use the legacy/default path: no handle, calendar identity or receive-provenance sidecar.
+  ul_processor->get_slot_processor(slot).process_prach(first_buffer_pool->get(), {});
+  ul_processor->get_slot_processor(slot).process_prach(second_buffer_pool->get(), {});
+
+  ASSERT_TRUE(prach_executor.run_pending_tasks());
+  ul_processor->stop();
+  EXPECT_EQ(prach_spy->get_detect_method_call_count(), 2U);
+  EXPECT_EQ(results_notifier.get_prach_results_count(), 2U);
 }
 
 TEST_F(UplinkProcessorFixture, prach_request_after_stop)

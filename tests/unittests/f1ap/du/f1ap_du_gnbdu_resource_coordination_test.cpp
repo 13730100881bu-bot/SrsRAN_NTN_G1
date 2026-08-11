@@ -24,14 +24,251 @@
 #include "srsran/asn1/f1ap/common.h"
 #include "srsran/asn1/f1ap/f1ap_pdu_contents.h"
 #include "srsran/f1ap/ntn_access_calendar.h"
+#include "srsran/f1ap/ntn_initial_ul_position_query.h"
 #include "srsran/f1ap/ntn_rnti_lease_pool.h"
 #include <array>
 #include <gtest/gtest.h>
+#include <limits>
 #include <vector>
 
 using namespace srsran;
 using namespace srsran::srs_du;
 using namespace srsran::srs_cu_cp;
+
+static f1ap_ntn_initial_ul_position_query make_du_initial_ul_position_query()
+{
+  f1ap_ntn_initial_ul_position_query query;
+  query.query_generation         = 7;
+  query.nonce                    = 0x1020304050607080ULL;
+  query.connection_token         = 0x8877665544332211ULL;
+  query.gnb_du_id                = int_to_gnb_du_id(0x123);
+  query.cell_cgi                 =
+      nr_cell_global_id_t{plmn_identity::test_value(), nr_cell_identity::create(0x12345).value()};
+  query.cell_index               = to_du_cell_index(1);
+  query.pci                      = pci_t{17};
+  query.gnb_du_ue_f1ap_id        = int_to_gnb_du_ue_f1ap_id(51);
+  query.c_rnti                   = to_rnti(0x4701);
+  query.expected_rnti_generation = 105;
+  return query;
+}
+
+static f1ap_ntn_initial_ul_position_result make_initial_ul_position_result()
+{
+  const auto query = make_du_initial_ul_position_query();
+
+  f1ap_ntn_initial_ul_position_result result;
+  result.query_generation         = query.query_generation;
+  result.nonce                    = query.nonce;
+  result.connection_token         = query.connection_token;
+  result.gnb_du_id                = query.gnb_du_id;
+  result.cell_cgi                 = query.cell_cgi;
+  result.cell_index               = query.cell_index;
+  result.pci                      = query.pci;
+  result.gnb_du_ue_f1ap_id        = query.gnb_du_ue_f1ap_id;
+  result.c_rnti                   = query.c_rnti;
+  result.expected_rnti_generation = query.expected_rnti_generation;
+  result.accepted                 = true;
+  result.observation_id           = 0x12345678ULL;
+  result.authority                = f1ap_ntn_initial_ul_position_authority::ofh_beam_id_verified;
+  result.reason                   = "accepted";
+  result.schedule_version         = 21;
+  result.calendar_hash            = std::string(64, 'a');
+  result.mapping_version          = 3;
+  result.mapping_hash             = std::string(64, 'b');
+  result.position_id              = "G000123";
+  result.logical_port             = 4;
+  result.physical_port            = 2;
+  result.eaxc                     = 3;
+  result.beam_id                  = 0x1234;
+  result.calendar_cycle_index     = 22;
+  result.occasion_offset_us       = 40000;
+  result.confidence_margin_db     = 6.25F;
+  return result;
+}
+
+TEST(f1ap_ntn_initial_ul_position_container_test, valid_result_round_trips_identity_and_verified_port_context)
+{
+  const f1ap_ntn_initial_ul_position_result result  = make_initial_ul_position_result();
+  const byte_buffer                        encoded = encode_f1ap_ntn_initial_ul_position_result(result);
+
+  ASSERT_GT(encoded.length(), f1ap_ntn_initial_ul_position_detail::result_magic.size());
+  ASSERT_LE(encoded.length(), f1ap_ntn_initial_ul_position_detail::max_container_size);
+  for (size_t i = 0; i != f1ap_ntn_initial_ul_position_detail::result_magic.size(); ++i) {
+    EXPECT_EQ(encoded[i], f1ap_ntn_initial_ul_position_detail::result_magic[i]);
+  }
+  const auto decoded = decode_f1ap_ntn_initial_ul_position_result(encoded);
+  ASSERT_TRUE(decoded.has_value());
+  EXPECT_EQ(decoded->query_generation, result.query_generation);
+  EXPECT_EQ(decoded->nonce, result.nonce);
+  EXPECT_EQ(decoded->connection_token, result.connection_token);
+  EXPECT_EQ(decoded->gnb_du_id, result.gnb_du_id);
+  EXPECT_EQ(decoded->cell_cgi, result.cell_cgi);
+  EXPECT_EQ(decoded->cell_index, result.cell_index);
+  EXPECT_EQ(decoded->pci, result.pci);
+  EXPECT_EQ(decoded->gnb_du_ue_f1ap_id, result.gnb_du_ue_f1ap_id);
+  EXPECT_EQ(decoded->c_rnti, result.c_rnti);
+  EXPECT_EQ(decoded->expected_rnti_generation, result.expected_rnti_generation);
+  EXPECT_EQ(decoded->observation_id, result.observation_id);
+  EXPECT_TRUE(decoded->accepted);
+  EXPECT_EQ(decoded->authority, result.authority);
+  EXPECT_EQ(decoded->reason, result.reason);
+  EXPECT_EQ(decoded->schedule_version, result.schedule_version);
+  EXPECT_EQ(decoded->calendar_hash, result.calendar_hash);
+  EXPECT_EQ(decoded->mapping_version, result.mapping_version);
+  EXPECT_EQ(decoded->mapping_hash, result.mapping_hash);
+  EXPECT_EQ(decoded->position_id, result.position_id);
+  EXPECT_EQ(decoded->logical_port, result.logical_port);
+  EXPECT_EQ(decoded->physical_port, result.physical_port);
+  EXPECT_EQ(decoded->eaxc, result.eaxc);
+  EXPECT_EQ(decoded->beam_id, result.beam_id);
+  EXPECT_EQ(decoded->calendar_cycle_index, result.calendar_cycle_index);
+  EXPECT_EQ(decoded->occasion_offset_us, result.occasion_offset_us);
+  EXPECT_FLOAT_EQ(decoded->confidence_margin_db, result.confidence_margin_db);
+}
+
+TEST(f1ap_ntn_initial_ul_position_container_test, result_authorities_and_explicit_rejection_round_trip)
+{
+  auto software      = make_initial_ul_position_result();
+  software.authority = f1ap_ntn_initial_ul_position_authority::software_attributed;
+  software.physical_port = f1ap_ntn_initial_ul_position_detail::unavailable_physical_port_id;
+  software.mapping_version = 0;
+  software.mapping_hash.clear();
+  software.eaxc.reset();
+  software.beam_id.reset();
+  const auto decoded_software =
+      decode_f1ap_ntn_initial_ul_position_result(encode_f1ap_ntn_initial_ul_position_result(software));
+  ASSERT_TRUE(decoded_software.has_value());
+  EXPECT_EQ(decoded_software->authority, f1ap_ntn_initial_ul_position_authority::software_attributed);
+
+  auto sdr      = software;
+  sdr.authority = f1ap_ntn_initial_ul_position_authority::sdr_rx_port_verified;
+  sdr.physical_port  = 2;
+  sdr.mapping_version = 7;
+  sdr.mapping_hash    = "mapping-hash";
+  const auto decoded_sdr =
+      decode_f1ap_ntn_initial_ul_position_result(encode_f1ap_ntn_initial_ul_position_result(sdr));
+  ASSERT_TRUE(decoded_sdr.has_value());
+  EXPECT_EQ(decoded_sdr->authority, f1ap_ntn_initial_ul_position_authority::sdr_rx_port_verified);
+
+  EXPECT_EQ(decoded_software->physical_port,
+            f1ap_ntn_initial_ul_position_detail::unavailable_physical_port_id);
+
+  auto rejected              = make_initial_ul_position_result();
+  rejected.accepted          = false;
+  rejected.observation_id    = 0;
+  rejected.authority         = f1ap_ntn_initial_ul_position_authority::none;
+  rejected.reason            = "observation_missing";
+  rejected.schedule_version = 0;
+  rejected.calendar_hash.clear();
+  rejected.mapping_version = 0;
+  rejected.mapping_hash.clear();
+  rejected.position_id.clear();
+  rejected.logical_port = 0;
+  rejected.physical_port = 0;
+  rejected.eaxc.reset();
+  rejected.beam_id.reset();
+  rejected.calendar_cycle_index = 0;
+  rejected.occasion_offset_us   = 0;
+  rejected.confidence_margin_db = 0.0F;
+  const auto decoded_rejection =
+      decode_f1ap_ntn_initial_ul_position_result(encode_f1ap_ntn_initial_ul_position_result(rejected));
+  ASSERT_TRUE(decoded_rejection.has_value());
+  EXPECT_FALSE(decoded_rejection->accepted);
+  EXPECT_EQ(decoded_rejection->authority, f1ap_ntn_initial_ul_position_authority::none);
+  EXPECT_EQ(decoded_rejection->reason, rejected.reason);
+}
+
+TEST(f1ap_ntn_initial_ul_position_container_test, result_encoder_rejects_invalid_authority_fields_and_bounds)
+{
+  const auto expect_rejected = [](const f1ap_ntn_initial_ul_position_result& result) {
+    EXPECT_EQ(encode_f1ap_ntn_initial_ul_position_result(result).length(), 0U);
+  };
+
+  auto result      = make_initial_ul_position_result();
+  result.authority = f1ap_ntn_initial_ul_position_authority::invalid;
+  expect_rejected(result);
+  result           = make_initial_ul_position_result();
+  result.beam_id   = f1ap_ntn_initial_ul_position_detail::max_beam_id + 1U;
+  expect_rejected(result);
+  result      = make_initial_ul_position_result();
+  result.eaxc = f1ap_ntn_initial_ul_position_detail::max_eaxc_id + 1U;
+  expect_rejected(result);
+  result              = make_initial_ul_position_result();
+  result.beam_id.reset();
+  expect_rejected(result);
+  result           = make_initial_ul_position_result();
+  result.authority = f1ap_ntn_initial_ul_position_authority::sdr_rx_port_verified;
+  expect_rejected(result);
+  result        = make_initial_ul_position_result();
+  result.reason = std::string(f1ap_ntn_initial_ul_position_detail::max_reason_length + 1U, 'x');
+  expect_rejected(result);
+  result               = make_initial_ul_position_result();
+  result.calendar_hash = std::string(f1ap_ntn_initial_ul_position_detail::max_hash_length + 1U, 'x');
+  expect_rejected(result);
+  result             = make_initial_ul_position_result();
+  result.position_id = "not-a-position";
+  expect_rejected(result);
+  result              = make_initial_ul_position_result();
+  result.logical_port = f1ap_ntn_initial_ul_position_detail::max_port_id + 1U;
+  expect_rejected(result);
+  result               = make_initial_ul_position_result();
+  result.physical_port = f1ap_ntn_initial_ul_position_detail::max_physical_port_id + 1U;
+  expect_rejected(result);
+  result               = make_initial_ul_position_result();
+  result.physical_port = f1ap_ntn_initial_ul_position_detail::unavailable_physical_port_id;
+  expect_rejected(result);
+  result                  = make_initial_ul_position_result();
+  result.authority        = f1ap_ntn_initial_ul_position_authority::software_attributed;
+  result.eaxc.reset();
+  result.beam_id.reset();
+  result.mapping_version = 0;
+  result.mapping_hash.clear();
+  expect_rejected(result);
+  result.physical_port = f1ap_ntn_initial_ul_position_detail::unavailable_physical_port_id;
+  result.mapping_version = 7;
+  result.mapping_hash    = "mapping-hash";
+  expect_rejected(result);
+  result                  = make_initial_ul_position_result();
+  result.schedule_version = std::numeric_limits<uint64_t>::max();
+  expect_rejected(result);
+}
+
+TEST(f1ap_ntn_initial_ul_position_container_test, result_decoder_rejects_invalid_wire_values_and_framing)
+{
+  const auto result = make_initial_ul_position_result();
+
+  byte_buffer invalid_accepted = encode_f1ap_ntn_initial_ul_position_result(result);
+  invalid_accepted[73]         = 2;
+  EXPECT_FALSE(decode_f1ap_ntn_initial_ul_position_result(invalid_accepted).has_value());
+
+  byte_buffer invalid_authority = encode_f1ap_ntn_initial_ul_position_result(result);
+  invalid_authority[74]         = 4;
+  EXPECT_FALSE(decode_f1ap_ntn_initial_ul_position_result(invalid_authority).has_value());
+
+  byte_buffer zero_generation = encode_f1ap_ntn_initial_ul_position_result(result);
+  for (size_t i = 8; i != 12; ++i) {
+    zero_generation[i] = 0;
+  }
+  EXPECT_FALSE(decode_f1ap_ntn_initial_ul_position_result(zero_generation).has_value());
+
+  byte_buffer invalid_cell = encode_f1ap_ntn_initial_ul_position_result(result);
+  invalid_cell[47]         = 0xff;
+  invalid_cell[48]         = 0xff;
+  EXPECT_FALSE(decode_f1ap_ntn_initial_ul_position_result(invalid_cell).has_value());
+
+  byte_buffer invalid_beam = encode_f1ap_ntn_initial_ul_position_result(result);
+  const size_t beam_offset = invalid_beam.length() - 16U;
+  invalid_beam[beam_offset] = 0x80;
+  EXPECT_FALSE(decode_f1ap_ntn_initial_ul_position_result(invalid_beam).has_value());
+
+  byte_buffer truncated = encode_f1ap_ntn_initial_ul_position_result(result);
+  truncated.trim_tail(1);
+  EXPECT_FALSE(decode_f1ap_ntn_initial_ul_position_result(truncated).has_value());
+
+  byte_buffer trailing = encode_f1ap_ntn_initial_ul_position_result(result);
+  ASSERT_TRUE(trailing.append(0));
+  EXPECT_FALSE(decode_f1ap_ntn_initial_ul_position_result(trailing).has_value());
+}
 
 static f1ap_ntn_rnti_lease_pool_update make_lease_update()
 {
@@ -250,6 +487,18 @@ static f1ap_message make_resource_coordination_request(uint16_t transaction_id,
 }
 
 static f1ap_message make_resource_coordination_request(uint16_t transaction_id,
+                                                       const f1ap_ntn_initial_ul_position_query& query)
+{
+  f1ap_message msg;
+  msg.pdu.set_init_msg().load_info_obj(ASN1_F1AP_ID_GNB_DU_RES_COORDINATION);
+  auto& req = msg.pdu.init_msg().value.gnb_du_res_coordination_request();
+  req->transaction_id = transaction_id;
+  req->request_type.value = asn1::f1ap::request_type_opts::execution;
+  req->eutra_nr_cell_res_coordination_req_container = encode_f1ap_ntn_initial_ul_position_query(query);
+  return msg;
+}
+
+static f1ap_message make_resource_coordination_request(uint16_t transaction_id,
                                                        const f1ap_ntn_sib19_broadcast_update& update)
 {
   f1ap_message msg;
@@ -312,6 +561,54 @@ TEST_F(f1ap_du_gnbdu_resource_coordination_test, valid_update_is_forwarded_to_du
   ASSERT_TRUE(decoded.has_value());
   EXPECT_TRUE(decoded->accepted);
   EXPECT_EQ(decoded->accepted_leases, update.leases);
+}
+
+TEST_F(f1ap_du_gnbdu_resource_coordination_test, initial_ul_position_query_is_forwarded_and_exact_result_is_acked)
+{
+  const auto query = make_du_initial_ul_position_query();
+  f1ap_du_cfg_handler.next_ntn_initial_ul_position_result = make_initial_ul_position_result();
+
+  f1ap->handle_message(make_resource_coordination_request(21, query));
+
+  ASSERT_TRUE(f1ap_du_cfg_handler.last_ntn_initial_ul_position_query.has_value());
+  const auto& forwarded = *f1ap_du_cfg_handler.last_ntn_initial_ul_position_query;
+  EXPECT_EQ(forwarded.query_generation, query.query_generation);
+  EXPECT_EQ(forwarded.nonce, query.nonce);
+  EXPECT_EQ(forwarded.connection_token, query.connection_token);
+  EXPECT_EQ(forwarded.gnb_du_id, query.gnb_du_id);
+  EXPECT_EQ(forwarded.cell_cgi, query.cell_cgi);
+  EXPECT_EQ(forwarded.gnb_du_ue_f1ap_id, query.gnb_du_ue_f1ap_id);
+  EXPECT_EQ(forwarded.expected_rnti_generation, query.expected_rnti_generation);
+
+  ASSERT_TRUE(f1c_gw.tx_pdus_sent());
+  const auto& asn1_resp = f1c_gw.last_tx_pdu().pdu.successful_outcome().value.gnb_du_res_coordination_resp();
+  EXPECT_EQ(asn1_resp->transaction_id, 21);
+  const auto decoded =
+      decode_f1ap_ntn_initial_ul_position_result(asn1_resp->eutra_nr_cell_res_coordination_req_ack_container);
+  ASSERT_TRUE(decoded.has_value());
+  EXPECT_TRUE(decoded->accepted);
+  EXPECT_EQ(decoded->observation_id, make_initial_ul_position_result().observation_id);
+  EXPECT_EQ(decoded->authority, f1ap_ntn_initial_ul_position_authority::ofh_beam_id_verified);
+  EXPECT_EQ(decoded->calendar_cycle_index, 22U);
+  EXPECT_EQ(decoded->occasion_offset_us, 40000U);
+}
+
+TEST_F(f1ap_du_gnbdu_resource_coordination_test, malformed_initial_ul_query_does_not_fall_through_to_other_handlers)
+{
+  f1ap_message msg = make_resource_coordination_request(22, make_du_initial_ul_position_query());
+  auto& container =
+      msg.pdu.init_msg().value.gnb_du_res_coordination_request()->eutra_nr_cell_res_coordination_req_container;
+  container.trim_tail(1);
+
+  f1ap->handle_message(msg);
+
+  EXPECT_FALSE(f1ap_du_cfg_handler.last_ntn_initial_ul_position_query.has_value());
+  EXPECT_FALSE(f1ap_du_cfg_handler.last_ntn_access_calendar_update.has_value());
+  EXPECT_FALSE(f1ap_du_cfg_handler.last_ntn_resource_audit_request.has_value());
+  EXPECT_FALSE(f1ap_du_cfg_handler.last_ntn_rnti_lease_pool_update.has_value());
+  ASSERT_TRUE(f1c_gw.tx_pdus_sent());
+  const auto& asn1_resp = f1c_gw.last_tx_pdu().pdu.successful_outcome().value.gnb_du_res_coordination_resp();
+  EXPECT_TRUE(asn1_resp->eutra_nr_cell_res_coordination_req_ack_container.empty());
 }
 
 TEST_F(f1ap_du_gnbdu_resource_coordination_test, retire_v2_is_forwarded_to_du_configurator_and_acked)

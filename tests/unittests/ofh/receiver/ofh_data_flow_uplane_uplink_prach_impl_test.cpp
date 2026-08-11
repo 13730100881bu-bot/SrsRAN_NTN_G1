@@ -113,7 +113,7 @@ public:
     context.nof_symbols  = nof_symbols;
 
     // Fill the contexts
-    ul_cplane_context_repo_ptr->add(slot, eaxc, context);
+    ul_cplane_context_repo_ptr->add_prach(slot, eaxc, context, std::nullopt);
     prach_context_repo->add(buffer_context, buffer.clone(), srslog::fetch_basic_logger("TEST"), std::nullopt);
     prach_context_repo->process_pending_contexts();
   }
@@ -186,6 +186,80 @@ TEST_P(data_flow_uplane_uplink_prach_impl_fixture, valid_message_containing_all_
 
   ASSERT_FALSE(notifier->has_new_uplink_symbol_function_been_called());
   ASSERT_TRUE(notifier->has_new_prach_function_been_called());
+  ASSERT_FALSE(notifier->has_new_verified_prach_function_been_called());
+}
+
+TEST_P(data_flow_uplane_uplink_prach_impl_fixture, matched_eaxc_emits_verified_beam_and_calendar_context)
+{
+  if (!is_cplane_enabled) {
+    GTEST_SKIP() << "Exact eAxC association requires PRACH Control-Plane validation";
+  }
+
+  slot_point verified_slot = slot + 1;
+  prach_context_repo->clear();
+  prach_buffer_context verified_buffer_context = buffer_context;
+  verified_buffer_context.slot                  = verified_slot;
+  prach_context_repo->add(
+      verified_buffer_context, buffer.clone(), srslog::fetch_basic_logger("TEST"), std::nullopt);
+  prach_context_repo->process_pending_contexts();
+
+  ul_cplane_context radio_context;
+  radio_context.filter_index = filter_index_type::ul_prach_preamble_1p25khz;
+  radio_context.start_symbol = 0;
+  radio_context.prb_start    = 0;
+  radio_context.nof_prb      = 273;
+  radio_context.nof_symbols  = nof_symbols;
+  prach_beam_context beam_context{0x1234, 7, "G000123", 41, "calendar-sha256", 9, "mapping-sha256"};
+  ASSERT_TRUE(ul_cplane_context_repo_ptr->add_prach(verified_slot, eaxc, radio_context, beam_context));
+
+  for (unsigned i = 0; i != nof_symbols; ++i) {
+    auto deco_results             = build_valid_decoder_results();
+    deco_results.params.slot      = verified_slot;
+    deco_results.params.symbol_id = i;
+    uplane_decoder->set_results(deco_results);
+    data_flow.decode_type1_message(eaxc, {});
+  }
+
+  ASSERT_TRUE(notifier->has_new_prach_function_been_called());
+  ASSERT_TRUE(notifier->has_new_verified_prach_function_been_called());
+  auto contexts = notifier->get_last_verified_contexts();
+  ASSERT_EQ(contexts.size(), 1);
+  EXPECT_EQ(contexts.front().eaxc, eaxc);
+  EXPECT_EQ(contexts.front().buffer_port, 0);
+  EXPECT_TRUE(contexts.front().context == beam_context);
+  EXPECT_EQ(contexts.front().context.mapping_hash, "mapping-sha256");
+}
+
+TEST_P(data_flow_uplane_uplink_prach_impl_fixture, invalid_beam_context_is_not_accepted_as_verified)
+{
+  if (!is_cplane_enabled) {
+    GTEST_SKIP() << "Exact eAxC association requires PRACH Control-Plane validation";
+  }
+
+  slot_point invalid_slot = slot + 1;
+  prach_context_repo->clear();
+  prach_buffer_context invalid_buffer_context = buffer_context;
+  invalid_buffer_context.slot                  = invalid_slot;
+  prach_context_repo->add(
+      invalid_buffer_context, buffer.clone(), srslog::fetch_basic_logger("TEST"), std::nullopt);
+  prach_context_repo->process_pending_contexts();
+
+  ul_cplane_context radio_context;
+  radio_context.filter_index = filter_index_type::ul_prach_preamble_1p25khz;
+  radio_context.start_symbol = 0;
+  radio_context.prb_start    = 0;
+  radio_context.nof_prb      = 273;
+  radio_context.nof_symbols  = nof_symbols;
+  prach_beam_context invalid_context{0x1234, 7, "", 41, "calendar-sha256", 9, "mapping-sha256"};
+  ASSERT_TRUE(ul_cplane_context_repo_ptr->add_prach(invalid_slot, eaxc, radio_context, invalid_context));
+
+  auto deco_results        = build_valid_decoder_results();
+  deco_results.params.slot = invalid_slot;
+  uplane_decoder->set_results(deco_results);
+  data_flow.decode_type1_message(eaxc, {});
+
+  EXPECT_FALSE(notifier->has_new_prach_function_been_called());
+  EXPECT_FALSE(notifier->has_new_verified_prach_function_been_called());
 }
 
 TEST_P(data_flow_uplane_uplink_prach_impl_fixture, invalid_filter_index_does_not_write_buffer)

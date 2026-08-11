@@ -146,6 +146,7 @@ public:
   on_ue_rrc_context_creation_request(const ue_rrc_context_creation_request& msg) override
   {
     logger.info("Received {}", __FUNCTION__);
+    initial_ul_event_order.emplace_back("rrc_context_creation");
     last_ue_creation_msg.ue_index               = msg.ue_index;
     last_ue_creation_msg.cgi                    = msg.cgi;
     last_ue_creation_msg.du_to_cu_rrc_container = msg.du_to_cu_rrc_container.copy();
@@ -163,6 +164,28 @@ public:
     }
 
     return response;
+  }
+
+  std::optional<f1ap_initial_ul_position_query_plan>
+  on_initial_ul_position_query_required(const f1ap_initial_ul_position_query_context& context) override
+  {
+    ++initial_ul_position_query_requests;
+    initial_ul_event_order.emplace_back("position_query_required");
+    last_initial_ul_position_query_context.emplace(context);
+    return next_initial_ul_position_query_plan;
+  }
+
+  void on_initial_ul_position_query_complete(
+      const f1ap_initial_ul_position_query_context&       context,
+      const f1ap_initial_ul_position_query_plan&          plan,
+      const f1ap_gnb_du_resource_coordination_response& response) override
+  {
+    ++initial_ul_position_query_completions;
+    initial_ul_event_order.emplace_back("position_query_complete");
+    last_initial_ul_position_query_context.emplace(context);
+    last_initial_ul_position_query_plan.emplace(plan);
+    last_initial_ul_position_query_failure = response.failure_reason;
+    last_initial_ul_position_query_had_result = response.initial_ul_position_result.has_value();
   }
 
   ue_index_t on_new_cu_cp_ue_required()
@@ -197,6 +220,15 @@ public:
 
   srs_cu_cp::du_setup_request last_f1_setup_request_msg;
   srs_cu_cp::du_setup_result  next_du_setup_resp;
+
+  std::optional<f1ap_initial_ul_position_query_plan>    next_initial_ul_position_query_plan;
+  std::optional<f1ap_initial_ul_position_query_context> last_initial_ul_position_query_context;
+  std::optional<f1ap_initial_ul_position_query_plan>    last_initial_ul_position_query_plan;
+  unsigned                                              initial_ul_position_query_requests    = 0;
+  unsigned                                              initial_ul_position_query_completions = 0;
+  bool                                                  last_initial_ul_position_query_had_result = false;
+  std::string                                           last_initial_ul_position_query_failure;
+  std::vector<std::string>                              initial_ul_event_order;
 
   srs_cu_cp::ue_rrc_context_creation_request           last_ue_creation_msg;
   std::optional<srs_cu_cp::ue_index_t>                 last_created_ue_index;

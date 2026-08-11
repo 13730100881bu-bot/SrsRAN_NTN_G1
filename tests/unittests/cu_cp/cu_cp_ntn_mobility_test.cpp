@@ -2085,6 +2085,63 @@ std::optional<unsigned> reconcile_persisted_onboard_mapping(cu_cp_test_environme
   return du_idx;
 }
 
+cu_cp_test_env_params
+make_private_f1_initial_ul_test_params(const persisted_recovery_calendar_test_data& data)
+{
+  cu_cp_test_env_params params;
+  params.ntn_onboard_position_plan                        = data.source;
+  params.ntn_recovered_calendar_intents_per_cell          = data.recovered_intents;
+  params.ntn_recovered_calendar_preflight_reports         = data.recovered_preflight;
+  params.ntn_location_mobility                            = make_single_cell_rnti_retirement_ntn_mobility_config();
+  params.ntn_resource_audit_rnti_snapshot_complete        = true;
+  params.ntn_resource_audit_ue_slot_snapshot_complete     = true;
+  return params;
+}
+
+std::optional<uint32_t> install_private_f1_initial_ul_rnti_generation(cu_cp_test_environment& env,
+                                                                       unsigned                du_idx,
+                                                                       rnti_t                  c_rnti)
+{
+  cu_cp_ntn_command_handler& ntn_handler = env.get_cu_cp().get_command_handler().get_ntn_command_handler();
+  if (!complete_current_ntn_resource_audit(env, ntn_handler, du_idx)) {
+    ADD_FAILURE() << "Failed to complete the authoritative RNTI audit before Initial UL";
+    return std::nullopt;
+  }
+  if (!ntn_handler.handle_ntn_satellite_state_update(make_ecef(0.0, 0.0, 500000.0))) {
+    ADD_FAILURE() << "Failed to activate the NTN access beam before Initial UL";
+    return std::nullopt;
+  }
+
+  f1ap_message pool_pdu;
+  if (!env.wait_for_f1ap_tx_pdu_without_auto_response(du_idx, pool_pdu, std::chrono::milliseconds{1000})) {
+    ADD_FAILURE() << "Timed out waiting for the authoritative RNTI lease pool";
+    return std::nullopt;
+  }
+  const std::optional<f1ap_ntn_rnti_lease_pool_update> pool_update = decode_test_ntn_rnti_lease_update(pool_pdu);
+  if (!pool_update.has_value() || pool_update->operation != f1ap_ntn_rnti_lease_pool_operation::add ||
+      pool_update->generation_id == 0 ||
+      std::find(pool_update->leases.begin(), pool_update->leases.end(), c_rnti) == pool_update->leases.end()) {
+    ADD_FAILURE() << "Initial UL C-RNTI is missing from the authoritative lease pool";
+    return std::nullopt;
+  }
+
+  const uint32_t generation = pool_update->generation_id;
+  env.respond_to_f1ap_resource_coordination_request(du_idx, pool_pdu);
+  if (!env.tick_until(std::chrono::milliseconds{1000}, [&]() {
+        const ntn_beam_service_resource_snapshot snapshot =
+            ntn_handler.get_current_ntn_beam_service_resource_snapshot();
+        return std::any_of(snapshot.rnti_leases.begin(), snapshot.rnti_leases.end(), [&](const ntn_rnti_lease& lease) {
+          return lease.du_index == uint_to_du_index(du_idx) && lease.rnti == c_rnti &&
+                 lease.generation_id == generation && lease.distribution_state == "applied_by_du";
+        });
+      })) {
+    ADD_FAILURE() << "Authoritative Initial UL C-RNTI lease was not applied by the DU";
+    return std::nullopt;
+  }
+  env.drain_f1ap_resource_coordination_requests(du_idx);
+  return generation;
+}
+
 std::optional<connected_ngap_ntn_ue>
 connect_onboard_ngap_ue(cu_cp_test_environment&           env,
                         unsigned                          du_idx,
@@ -2268,6 +2325,48 @@ make_recovered_initial_ul_position_observation(const persisted_recovery_calendar
   return observation;
 }
 
+f1ap_ntn_initial_ul_position_result make_recovered_initial_ul_position_query_result(
+    const persisted_recovery_calendar_test_data& data,
+    f1ap_ntn_initial_ul_position_authority        authority,
+    uint64_t                                      observation_id = 1)
+{
+  const ntn_initial_ul_position_observation observation =
+      make_recovered_initial_ul_position_observation(data, 0, to_rnti(0x4601), observation_id);
+  constexpr int64_t cycle_duration_us = 640000;
+  const int64_t elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                                 observation.occasion_time - data.plan.activation_epoch)
+                                 .count();
+  srsran_assert(elapsed_us >= 0, "Initial UL test observation predates activation");
+
+  f1ap_ntn_initial_ul_position_result result;
+  result.observation_id       = observation_id;
+  result.accepted             = true;
+  result.authority            = authority;
+  result.reason               = "accepted";
+  result.cell_cgi             = nr_cell_global_id_t{plmn_identity::test_value(), observation.nci};
+  result.pci                  = observation.pci;
+  result.schedule_version     = observation.schedule_version;
+  result.calendar_hash        = observation.calendar_hash;
+  result.position_id          = observation.position_id;
+  result.logical_port         = observation.ul_beam_port_id;
+  result.calendar_cycle_index = static_cast<uint64_t>(elapsed_us / cycle_duration_us);
+  result.occasion_offset_us   = static_cast<uint32_t>(elapsed_us % cycle_duration_us);
+  result.confidence_margin_db = 8.0F;
+  if (authority == f1ap_ntn_initial_ul_position_authority::sdr_rx_port_verified ||
+      authority == f1ap_ntn_initial_ul_position_authority::ofh_beam_id_verified) {
+    result.mapping_version = 7;
+    result.mapping_hash    = "rx-mapping-sha256";
+    result.physical_port   = 3;
+  } else {
+    result.physical_port = f1ap_ntn_initial_ul_position_detail::unavailable_physical_port_id;
+  }
+  if (authority == f1ap_ntn_initial_ul_position_authority::ofh_beam_id_verified) {
+    result.eaxc    = 5;
+    result.beam_id = 0x1234;
+  }
+  return result;
+}
+
 void expect_onboard_initial_ul_rejected(cu_cp_test_environment& env,
                                         unsigned                du_idx,
                                         gnb_du_ue_f1ap_id_t     du_ue_id,
@@ -2310,12 +2409,12 @@ TEST(cu_cp_ntn_mobility_test, default_cu_cp_rejects_ntn_satellite_state_updates)
   EXPECT_EQ(position_status.initial_access_position_rejected, 0U);
 }
 
-TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_strict_exact_match_allows_setup)
+TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_audit_accepts_injected_observation_without_trusting_it)
 {
   auto                      data = make_persisted_recovery_calendar_test_data(90, 100);
   temporary_plan_file_guard guard{data.plan_path};
   auto provider = std::make_shared<ntn_initial_ul_position_observation_store>("trusted_du_observer");
-  data.source.initial_ul_position_validation = ntn_initial_ul_position_validation_mode::strict;
+  data.source.initial_ul_position_validation = ntn_initial_ul_position_validation_mode::audit;
   data.source.initial_ul_position_provider   = provider;
 
   cu_cp_test_env_params params;
@@ -2339,31 +2438,270 @@ TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_strict_exact_match_all
                           .get_ntn_command_handler()
                           .get_current_ntn_runtime_status()
                           .onboard_position_plan;
-  EXPECT_EQ(status.initial_access_position_mode, "strict");
-  EXPECT_EQ(status.initial_access_position_source_state, "ready");
+  EXPECT_EQ(status.initial_access_position_mode, "audit");
+  EXPECT_EQ(status.initial_access_position_source_state, "provider_ready");
   EXPECT_EQ(status.initial_access_position_source_authority, "trusted_du_observer");
   EXPECT_EQ(status.initial_access_position_pending, 0U);
-  EXPECT_EQ(status.initial_access_position_active_contexts, 1U);
+  EXPECT_EQ(status.initial_access_position_active_contexts, 0U);
   EXPECT_EQ(status.initial_access_position_accepted, 1U);
   EXPECT_EQ(status.initial_access_position_rejected, 0U);
+  EXPECT_EQ(status.initial_access_position_audited, 1U);
   EXPECT_EQ(status.initial_access_position_last_reason, "authorized");
+  EXPECT_FALSE(status.initial_access_strict_available);
+}
+
+TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_strict_private_f1_device_result_allows_setup)
+{
+  auto                      data = make_persisted_recovery_calendar_test_data(110, 120);
+  temporary_plan_file_guard guard{data.plan_path};
+  data.source.initial_ul_position_validation = ntn_initial_ul_position_validation_mode::strict;
+  data.source.initial_ul_position_provider.reset();
+
+  cu_cp_test_env_params params = make_private_f1_initial_ul_test_params(data);
+  cu_cp_test_environment env{std::move(params)};
+  const auto du_idx = reconcile_persisted_onboard_mapping(env, data, int_to_gnb_du_id(0x7a));
+  ASSERT_TRUE(du_idx.has_value());
+  ASSERT_TRUE(install_private_f1_initial_ul_rnti_generation(env, *du_idx, to_rnti(0x4601)).has_value());
+  ASSERT_TRUE(connect_cu_up_for_ue_admission(env));
+
+  const f1ap_ntn_initial_ul_position_result query_result = make_recovered_initial_ul_position_query_result(
+      data, f1ap_ntn_initial_ul_position_authority::sdr_rx_port_verified);
+  env.set_ntn_initial_ul_position_result(query_result);
+  ASSERT_TRUE(env.connect_new_ue(*du_idx,
+                                 int_to_gnb_du_ue_f1ap_id(0),
+                                 to_rnti(0x4601),
+                                 plmn_identity::test_value(),
+                                 {},
+                                 query_result.cell_cgi.nci));
+
+  const auto status = env.get_cu_cp()
+                          .get_command_handler()
+                          .get_ntn_command_handler()
+                          .get_current_ntn_runtime_status()
+                          .onboard_position_plan;
+  EXPECT_EQ(status.initial_access_position_source_state, "query_interface_ready");
+  EXPECT_EQ(status.initial_access_position_source_authority, "private_f1_receive_source");
+  EXPECT_EQ(status.initial_access_position_accepted, 1U);
+  EXPECT_EQ(status.initial_access_position_rejected, 0U);
+  EXPECT_EQ(status.initial_access_position_active_contexts, 1U);
+  EXPECT_EQ(status.initial_access_sdr_records, 1U);
+  // A device result authorizes this cell only. The other onboard cell remains unconfirmed and must not inherit the
+  // first cell's backend readiness through the DU-level summary.
+  const auto verified_cell = std::find_if(status.cells.begin(), status.cells.end(), [&](const auto& cell) {
+    return cell.nci == query_result.cell_cgi.nci;
+  });
+  ASSERT_NE(verified_cell, status.cells.end());
+  EXPECT_EQ(verified_cell->initial_access_rx_state, "ready");
+  EXPECT_EQ(verified_cell->initial_access_rx_backend, "sdr_zmq");
+  EXPECT_TRUE(verified_cell->initial_access_strict_available);
+  const auto unverified_cell = std::find_if(status.cells.begin(), status.cells.end(), [&](const auto& cell) {
+    return cell.nci != query_result.cell_cgi.nci;
+  });
+  ASSERT_NE(unverified_cell, status.cells.end());
+  EXPECT_EQ(unverified_cell->initial_access_rx_state, "awaiting_rx_backend");
+  EXPECT_FALSE(unverified_cell->initial_access_strict_available);
+  EXPECT_EQ(status.initial_access_rx_beam_state, "awaiting_rx_backend");
+  EXPECT_EQ(status.initial_access_rx_backend, "mixed");
+  EXPECT_FALSE(status.initial_access_strict_available);
+}
+
+TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_audit_private_f1_timeout_continues_setup)
+{
+  auto                      data = make_persisted_recovery_calendar_test_data(111, 121);
+  temporary_plan_file_guard guard{data.plan_path};
+  data.source.initial_ul_position_validation = ntn_initial_ul_position_validation_mode::audit;
+  data.source.initial_ul_position_query_timeout = std::chrono::milliseconds{10};
+  data.source.initial_ul_position_provider.reset();
+
+  cu_cp_test_env_params params = make_private_f1_initial_ul_test_params(data);
+  params.ntn_initial_ul_position_drop_responses = true;
+  cu_cp_test_environment env{std::move(params)};
+  const auto du_idx = reconcile_persisted_onboard_mapping(env, data, int_to_gnb_du_id(0x7b));
+  ASSERT_TRUE(du_idx.has_value());
+  ASSERT_TRUE(install_private_f1_initial_ul_rnti_generation(env, *du_idx, to_rnti(0x4601)).has_value());
+  ASSERT_TRUE(connect_cu_up_for_ue_admission(env));
+
+  ASSERT_TRUE(env.connect_new_ue(*du_idx,
+                                 int_to_gnb_du_ue_f1ap_id(0),
+                                 to_rnti(0x4601),
+                                 plmn_identity::test_value(),
+                                 {},
+                                 data.plan.onboard_cells[0].nci));
+
+  const auto status = env.get_cu_cp()
+                          .get_command_handler()
+                          .get_ntn_command_handler()
+                          .get_current_ntn_runtime_status()
+                          .onboard_position_plan;
+  EXPECT_EQ(status.initial_access_position_audited, 1U);
+  EXPECT_EQ(status.initial_access_position_rejected, 0U);
+  EXPECT_EQ(status.initial_access_position_active_contexts, 0U);
+  EXPECT_EQ(status.initial_access_query_timeouts, 1U);
+  EXPECT_EQ(status.initial_access_rx_last_reason, "observation_query_timeout");
+}
+
+TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_strict_private_f1_timeout_rejects_before_ownership)
+{
+  auto                      data = make_persisted_recovery_calendar_test_data(112, 122);
+  temporary_plan_file_guard guard{data.plan_path};
+  data.source.initial_ul_position_validation = ntn_initial_ul_position_validation_mode::strict;
+  data.source.initial_ul_position_query_timeout = std::chrono::milliseconds{10};
+  data.source.initial_ul_position_provider.reset();
+
+  cu_cp_test_env_params params = make_private_f1_initial_ul_test_params(data);
+  params.ntn_initial_ul_position_drop_responses = true;
+  cu_cp_test_environment env{std::move(params)};
+  const auto du_idx = reconcile_persisted_onboard_mapping(env, data, int_to_gnb_du_id(0x7c));
+  ASSERT_TRUE(du_idx.has_value());
+  ASSERT_TRUE(install_private_f1_initial_ul_rnti_generation(env, *du_idx, to_rnti(0x4601)).has_value());
+
+  expect_onboard_initial_ul_rejected(env,
+                                     *du_idx,
+                                     int_to_gnb_du_ue_f1ap_id(0),
+                                     to_rnti(0x4601),
+                                     data.plan.onboard_cells[0].nci);
+  ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{1000}, [&env]() {
+    return env.get_cu_cp().get_metrics_handler().request_metrics_report().ues.empty();
+  }));
+  const auto status = env.get_cu_cp()
+                          .get_command_handler()
+                          .get_ntn_command_handler()
+                          .get_current_ntn_runtime_status()
+                          .onboard_position_plan;
+  EXPECT_EQ(status.initial_access_position_accepted, 0U);
+  EXPECT_EQ(status.initial_access_position_rejected, 1U);
+  EXPECT_EQ(status.initial_access_position_active_contexts, 0U);
+  EXPECT_EQ(status.initial_access_query_timeouts, 1U);
+}
+
+TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_strict_software_result_rejects_before_ownership)
+{
+  auto                      data = make_persisted_recovery_calendar_test_data(113, 123);
+  temporary_plan_file_guard guard{data.plan_path};
+  data.source.initial_ul_position_validation = ntn_initial_ul_position_validation_mode::strict;
+  data.source.initial_ul_position_provider.reset();
+
+  cu_cp_test_env_params params = make_private_f1_initial_ul_test_params(data);
+  cu_cp_test_environment env{std::move(params)};
+  const auto du_idx = reconcile_persisted_onboard_mapping(env, data, int_to_gnb_du_id(0x7d));
+  ASSERT_TRUE(du_idx.has_value());
+  ASSERT_TRUE(install_private_f1_initial_ul_rnti_generation(env, *du_idx, to_rnti(0x4601)).has_value());
+
+  const f1ap_ntn_initial_ul_position_result query_result = make_recovered_initial_ul_position_query_result(
+      data, f1ap_ntn_initial_ul_position_authority::software_attributed);
+  env.set_ntn_initial_ul_position_result(query_result);
+  expect_onboard_initial_ul_rejected(env,
+                                     *du_idx,
+                                     int_to_gnb_du_ue_f1ap_id(0),
+                                     to_rnti(0x4601),
+                                     query_result.cell_cgi.nci);
+  ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{1000}, [&env]() {
+    return env.get_cu_cp().get_metrics_handler().request_metrics_report().ues.empty();
+  }));
+
+  const auto status = env.get_cu_cp()
+                          .get_command_handler()
+                          .get_ntn_command_handler()
+                          .get_current_ntn_runtime_status()
+                          .onboard_position_plan;
+  EXPECT_EQ(status.initial_access_software_records, 1U);
+  EXPECT_EQ(status.initial_access_position_accepted, 0U);
+  EXPECT_EQ(status.initial_access_position_rejected, 1U);
+  EXPECT_EQ(status.initial_access_position_active_contexts, 0U);
+  EXPECT_EQ(status.initial_access_position_last_reason, "receive_port_unavailable");
+  EXPECT_EQ(status.initial_access_rx_beam_state, "awaiting_rx_backend");
+  EXPECT_EQ(status.initial_access_rx_backend, "software");
+  EXPECT_FALSE(status.initial_access_strict_available);
+}
+
+TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_audit_accepts_software_result_without_physical_port)
+{
+  auto                      data = make_persisted_recovery_calendar_test_data(116, 126);
+  temporary_plan_file_guard guard{data.plan_path};
+  data.source.initial_ul_position_validation = ntn_initial_ul_position_validation_mode::audit;
+  data.source.initial_ul_position_provider.reset();
+
+  cu_cp_test_env_params params = make_private_f1_initial_ul_test_params(data);
+  cu_cp_test_environment env{std::move(params)};
+  const auto du_idx = reconcile_persisted_onboard_mapping(env, data, int_to_gnb_du_id(0x7e));
+  ASSERT_TRUE(du_idx.has_value());
+  ASSERT_TRUE(install_private_f1_initial_ul_rnti_generation(env, *du_idx, to_rnti(0x4601)).has_value());
+  ASSERT_TRUE(connect_cu_up_for_ue_admission(env));
+
+  const f1ap_ntn_initial_ul_position_result query_result = make_recovered_initial_ul_position_query_result(
+      data, f1ap_ntn_initial_ul_position_authority::software_attributed);
+  ASSERT_EQ(query_result.physical_port, f1ap_ntn_initial_ul_position_detail::unavailable_physical_port_id);
+  env.set_ntn_initial_ul_position_result(query_result);
+  ASSERT_TRUE(env.connect_new_ue(*du_idx,
+                                 int_to_gnb_du_ue_f1ap_id(0),
+                                 to_rnti(0x4601),
+                                 plmn_identity::test_value(),
+                                 {},
+                                 query_result.cell_cgi.nci));
+
+  const auto status = env.get_cu_cp()
+                          .get_command_handler()
+                          .get_ntn_command_handler()
+                          .get_current_ntn_runtime_status()
+                          .onboard_position_plan;
+  EXPECT_EQ(status.initial_access_position_audited, 1U);
+  EXPECT_EQ(status.initial_access_position_accepted, 1U);
+  EXPECT_EQ(status.initial_access_position_rejected, 0U);
+  EXPECT_EQ(status.initial_access_software_records, 1U);
+  EXPECT_EQ(status.initial_access_position_last_reason, "authorized");
+}
+
+TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_strict_rnti_generation_rejection_blocks_ownership)
+{
+  auto                      data = make_persisted_recovery_calendar_test_data(114, 124);
+  temporary_plan_file_guard guard{data.plan_path};
+  data.source.initial_ul_position_validation = ntn_initial_ul_position_validation_mode::strict;
+  data.source.initial_ul_position_provider.reset();
+
+  cu_cp_test_env_params params = make_private_f1_initial_ul_test_params(data);
+  cu_cp_test_environment env{std::move(params)};
+  const auto du_idx = reconcile_persisted_onboard_mapping(env, data, int_to_gnb_du_id(0x7e));
+  ASSERT_TRUE(du_idx.has_value());
+  ASSERT_TRUE(install_private_f1_initial_ul_rnti_generation(env, *du_idx, to_rnti(0x4601)).has_value());
+
+  f1ap_ntn_initial_ul_position_result rejected;
+  rejected.accepted  = false;
+  rejected.authority = f1ap_ntn_initial_ul_position_authority::none;
+  rejected.reason    = "rnti_generation_mismatch";
+  env.set_ntn_initial_ul_position_result(rejected);
+  expect_onboard_initial_ul_rejected(env,
+                                     *du_idx,
+                                     int_to_gnb_du_ue_f1ap_id(0),
+                                     to_rnti(0x4601),
+                                     data.plan.onboard_cells[0].nci);
+  ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{1000}, [&env]() {
+    return env.get_cu_cp().get_metrics_handler().request_metrics_report().ues.empty();
+  }));
+
+  const auto status = env.get_cu_cp()
+                          .get_command_handler()
+                          .get_ntn_command_handler()
+                          .get_current_ntn_runtime_status()
+                          .onboard_position_plan;
+  EXPECT_EQ(status.initial_access_generation_mismatches, 1U);
+  EXPECT_EQ(status.initial_access_rx_last_reason, "rnti_generation_mismatch");
+  EXPECT_EQ(status.initial_access_position_accepted, 0U);
+  EXPECT_EQ(status.initial_access_position_rejected, 1U);
+  EXPECT_EQ(status.initial_access_position_active_contexts, 0U);
 }
 
 TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_strict_missing_observation_rejects_setup)
 {
   auto                      data = make_persisted_recovery_calendar_test_data(91, 101);
   temporary_plan_file_guard guard{data.plan_path};
-  auto provider = std::make_shared<ntn_initial_ul_position_observation_store>("trusted_du_observer");
   data.source.initial_ul_position_validation = ntn_initial_ul_position_validation_mode::strict;
-  data.source.initial_ul_position_provider   = provider;
+  data.source.initial_ul_position_provider.reset();
 
-  cu_cp_test_env_params params;
-  params.ntn_onboard_position_plan                = data.source;
-  params.ntn_recovered_calendar_intents_per_cell  = data.recovered_intents;
-  params.ntn_recovered_calendar_preflight_reports = data.recovered_preflight;
+  cu_cp_test_env_params params = make_private_f1_initial_ul_test_params(data);
   cu_cp_test_environment env{std::move(params)};
   const auto             du_idx = reconcile_persisted_onboard_mapping(env, data, int_to_gnb_du_id(0x71));
   ASSERT_TRUE(du_idx.has_value());
+  ASSERT_TRUE(install_private_f1_initial_ul_rnti_generation(env, *du_idx, to_rnti(0x4601)).has_value());
 
   expect_onboard_initial_ul_rejected(env,
                                      *du_idx,
@@ -2385,17 +2723,14 @@ TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_strict_empty_assignmen
 {
   auto                      data = make_persisted_recovery_calendar_test_data(98, 108, 0);
   temporary_plan_file_guard guard{data.plan_path};
-  auto provider = std::make_shared<ntn_initial_ul_position_observation_store>("trusted_du_observer");
   data.source.initial_ul_position_validation = ntn_initial_ul_position_validation_mode::strict;
-  data.source.initial_ul_position_provider   = provider;
+  data.source.initial_ul_position_provider.reset();
 
-  cu_cp_test_env_params params;
-  params.ntn_onboard_position_plan                = data.source;
-  params.ntn_recovered_calendar_intents_per_cell  = data.recovered_intents;
-  params.ntn_recovered_calendar_preflight_reports = data.recovered_preflight;
+  cu_cp_test_env_params params = make_private_f1_initial_ul_test_params(data);
   cu_cp_test_environment env{std::move(params)};
   const auto             du_idx = reconcile_persisted_onboard_mapping(env, data, int_to_gnb_du_id(0x77));
   ASSERT_TRUE(du_idx.has_value());
+  ASSERT_TRUE(install_private_f1_initial_ul_rnti_generation(env, *du_idx, to_rnti(0x4601)).has_value());
 
   const auto ready_status = env.get_cu_cp()
                                 .get_command_handler()
@@ -2404,30 +2739,42 @@ TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_strict_empty_assignmen
                                 .onboard_position_plan;
   ASSERT_EQ(ready_status.runtime_mapping_stage, "ready");
   ASSERT_EQ(ready_status.runtime_mapped_l1_positions, 0U);
+  EXPECT_FALSE(ready_status.initial_access_strict_available);
+  ASSERT_EQ(ready_status.cells.size(), 2U);
+  for (const auto& cell : ready_status.cells) {
+    EXPECT_EQ(cell.initial_access_rx_state, "non_participating");
+    EXPECT_EQ(cell.initial_access_rx_last_reason, "no_owned_positions");
+    EXPECT_FALSE(cell.initial_access_strict_available);
+  }
 
-  const rnti_t c_rnti = to_rnti(0x4601);
-  ntn_initial_ul_position_observation observation;
-  observation.observation_id           = 1;
-  observation.du_index                 = uint_to_du_index(*du_idx);
-  observation.du_cell_index            = uint_to_du_cell_index(0);
-  observation.c_rnti                   = c_rnti;
-  observation.du_connection_generation = 0;
-  observation.satellite_id             = data.plan.satellite_id;
-  observation.catalog_version          = data.plan.catalog_version;
-  observation.schedule_version         = data.plan.schedule_version;
-  observation.source_content_hash      = data.plan.content_hash;
-  observation.calendar_hash            = ready_status.runtime_mapping_calendar_hash;
-  observation.nci                      = data.plan.onboard_cells[0].nci;
-  observation.pci                      = data.plan.onboard_cells[0].pci;
-  observation.position_id              = data.plan.visible_l1_positions.front().position_id;
-  observation.occasion_time            = std::chrono::system_clock::now();
-  observation.ul_beam_port_id           = 0;
-  ASSERT_EQ(provider->record(observation), ntn_initial_ul_position_record_status::stored);
+  constexpr int64_t cycle_duration_us = 640000;
+  const int64_t elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                                 std::chrono::system_clock::now() - data.plan.activation_epoch)
+                                 .count();
+  ASSERT_GE(elapsed_us, 0);
+  f1ap_ntn_initial_ul_position_result query_result;
+  query_result.observation_id       = 1;
+  query_result.accepted             = true;
+  query_result.authority            = f1ap_ntn_initial_ul_position_authority::sdr_rx_port_verified;
+  query_result.reason               = "accepted";
+  query_result.cell_cgi             = {plmn_identity::test_value(), data.plan.onboard_cells[0].nci};
+  query_result.pci                  = data.plan.onboard_cells[0].pci;
+  query_result.schedule_version     = data.plan.schedule_version;
+  query_result.calendar_hash        = ready_status.runtime_mapping_calendar_hash;
+  query_result.position_id          = data.plan.visible_l1_positions.front().position_id;
+  query_result.logical_port         = 0;
+  query_result.physical_port        = 3;
+  query_result.calendar_cycle_index = static_cast<uint64_t>(elapsed_us / cycle_duration_us);
+  query_result.occasion_offset_us   = static_cast<uint32_t>(elapsed_us % cycle_duration_us);
+  query_result.mapping_version      = 7;
+  query_result.mapping_hash         = "rx-mapping-sha256";
+  query_result.confidence_margin_db = 8.0F;
+  env.set_ntn_initial_ul_position_result(query_result);
 
   expect_onboard_initial_ul_rejected(env,
                                      *du_idx,
                                      int_to_gnb_du_ue_f1ap_id(0),
-                                     c_rnti,
+                                     to_rnti(0x4601),
                                      data.plan.onboard_cells[0].nci);
 
   const auto status = env.get_cu_cp()
@@ -2480,23 +2827,21 @@ TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_strict_wrong_port_reje
 {
   auto                      data = make_persisted_recovery_calendar_test_data(93, 103);
   temporary_plan_file_guard guard{data.plan_path};
-  auto provider = std::make_shared<ntn_initial_ul_position_observation_store>("trusted_du_observer");
   data.source.initial_ul_position_validation = ntn_initial_ul_position_validation_mode::strict;
-  data.source.initial_ul_position_provider   = provider;
+  data.source.initial_ul_position_provider.reset();
 
-  cu_cp_test_env_params params;
-  params.ntn_onboard_position_plan                = data.source;
-  params.ntn_recovered_calendar_intents_per_cell  = data.recovered_intents;
-  params.ntn_recovered_calendar_preflight_reports = data.recovered_preflight;
+  cu_cp_test_env_params params = make_private_f1_initial_ul_test_params(data);
   cu_cp_test_environment env{std::move(params)};
   const auto             du_idx = reconcile_persisted_onboard_mapping(env, data, int_to_gnb_du_id(0x73));
   ASSERT_TRUE(du_idx.has_value());
+  ASSERT_TRUE(install_private_f1_initial_ul_rnti_generation(env, *du_idx, to_rnti(0x4601)).has_value());
 
-  const rnti_t c_rnti = to_rnti(0x4601);
-  const auto   observation = make_recovered_initial_ul_position_observation(data, *du_idx, c_rnti, 1, true);
-  ASSERT_EQ(provider->record(observation), ntn_initial_ul_position_record_status::stored);
+  f1ap_ntn_initial_ul_position_result query_result = make_recovered_initial_ul_position_query_result(
+      data, f1ap_ntn_initial_ul_position_authority::sdr_rx_port_verified);
+  ++query_result.logical_port;
+  env.set_ntn_initial_ul_position_result(query_result);
   expect_onboard_initial_ul_rejected(
-      env, *du_idx, int_to_gnb_du_ue_f1ap_id(0), c_rnti, observation.nci);
+      env, *du_idx, int_to_gnb_du_ue_f1ap_id(0), to_rnti(0x4601), query_result.cell_cgi.nci);
 
   const auto status = env.get_cu_cp()
                           .get_command_handler()
@@ -2509,7 +2854,7 @@ TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_strict_wrong_port_reje
   EXPECT_EQ(status.initial_access_position_last_reason, "resource_port_mismatch");
 }
 
-TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_strict_without_provider_fails_startup)
+TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_strict_without_injected_provider_uses_private_f1_source)
 {
   auto                      data = make_persisted_recovery_calendar_test_data(94, 104);
   temporary_plan_file_guard guard{data.plan_path};
@@ -2522,14 +2867,17 @@ TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_strict_without_provide
   params.ntn_recovered_calendar_preflight_reports = data.recovered_preflight;
   cu_cp_test_environment env{std::move(params)};
 
-  EXPECT_FALSE(env.get_cu_cp().start());
+  env.run_ng_setup();
   const auto status = env.get_cu_cp()
                           .get_command_handler()
                           .get_ntn_command_handler()
                           .get_current_ntn_runtime_status()
                           .onboard_position_plan;
   EXPECT_EQ(status.initial_access_position_mode, "strict");
-  EXPECT_EQ(status.initial_access_position_source_state, "unavailable");
+  EXPECT_EQ(status.initial_access_position_source_state, "query_interface_ready");
+  EXPECT_EQ(status.initial_access_position_source_authority, "private_f1_receive_source");
+  EXPECT_EQ(status.initial_access_rx_beam_state, "awaiting_calendar");
+  EXPECT_FALSE(status.initial_access_strict_available);
 }
 
 TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_strict_unready_provider_fails_startup)
@@ -2554,9 +2902,35 @@ TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_strict_unready_provide
                           .get_current_ntn_runtime_status()
                           .onboard_position_plan;
   EXPECT_EQ(status.initial_access_position_mode, "strict");
-  EXPECT_EQ(status.initial_access_position_source_state, "unavailable");
+  EXPECT_EQ(status.initial_access_position_source_state, "provider_unavailable");
   EXPECT_EQ(status.initial_access_position_source_authority, "trusted_du_observer");
   EXPECT_EQ(status.initial_access_position_pending, 0U);
+}
+
+TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_strict_injected_only_provider_fails_startup)
+{
+  auto                      data = make_persisted_recovery_calendar_test_data(115, 125);
+  temporary_plan_file_guard guard{data.plan_path};
+  data.source.initial_ul_position_validation = ntn_initial_ul_position_validation_mode::strict;
+  data.source.initial_ul_position_provider =
+      std::make_shared<ntn_initial_ul_position_observation_store>("injected_only_provider");
+
+  cu_cp_test_env_params params;
+  params.ntn_onboard_position_plan                = data.source;
+  params.ntn_recovered_calendar_intents_per_cell  = data.recovered_intents;
+  params.ntn_recovered_calendar_preflight_reports = data.recovered_preflight;
+  cu_cp_test_environment env{std::move(params)};
+
+  EXPECT_FALSE(env.get_cu_cp().start());
+  const auto status = env.get_cu_cp()
+                          .get_command_handler()
+                          .get_ntn_command_handler()
+                          .get_current_ntn_runtime_status()
+                          .onboard_position_plan;
+  EXPECT_EQ(status.initial_access_position_source_state, "provider_ready");
+  EXPECT_EQ(status.initial_access_position_source_authority, "injected_only_provider");
+  EXPECT_EQ(status.initial_access_rx_beam_state, "awaiting_calendar");
+  EXPECT_FALSE(status.initial_access_strict_available);
 }
 
 TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_audit_requires_onboard_execution)
@@ -2580,39 +2954,44 @@ TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_audit_requires_onboard
                           .get_current_ntn_runtime_status()
                           .onboard_position_plan;
   EXPECT_EQ(status.initial_access_position_mode, "audit");
-  EXPECT_EQ(status.initial_access_position_source_state, "ready");
+  EXPECT_EQ(status.initial_access_position_source_state, "provider_ready");
 }
 
-TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_du_disconnect_clears_pending_and_active_contexts)
+TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_du_disconnect_clears_device_context_and_readiness)
 {
   auto                      data = make_persisted_recovery_calendar_test_data(95, 105);
   temporary_plan_file_guard guard{data.plan_path};
-  auto provider = std::make_shared<ntn_initial_ul_position_observation_store>("trusted_du_observer");
   data.source.initial_ul_position_validation = ntn_initial_ul_position_validation_mode::strict;
-  data.source.initial_ul_position_provider   = provider;
+  data.source.initial_ul_position_provider.reset();
 
-  cu_cp_test_env_params params;
-  params.ntn_onboard_position_plan                = data.source;
-  params.ntn_recovered_calendar_intents_per_cell  = data.recovered_intents;
-  params.ntn_recovered_calendar_preflight_reports = data.recovered_preflight;
+  cu_cp_test_env_params params = make_private_f1_initial_ul_test_params(data);
   cu_cp_test_environment env{std::move(params)};
   const auto             du_idx = reconcile_persisted_onboard_mapping(env, data, int_to_gnb_du_id(0x74));
   ASSERT_TRUE(du_idx.has_value());
+  ASSERT_TRUE(install_private_f1_initial_ul_rnti_generation(env, *du_idx, to_rnti(0x4601)).has_value());
   ASSERT_TRUE(connect_cu_up_for_ue_admission(env));
 
-  const rnti_t first_rnti = to_rnti(0x4601);
-  const auto first_observation = make_recovered_initial_ul_position_observation(data, *du_idx, first_rnti, 1);
-  ASSERT_EQ(provider->record(first_observation), ntn_initial_ul_position_record_status::stored);
+  const f1ap_ntn_initial_ul_position_result query_result = make_recovered_initial_ul_position_query_result(
+      data, f1ap_ntn_initial_ul_position_authority::sdr_rx_port_verified);
+  env.set_ntn_initial_ul_position_result(query_result);
   ASSERT_TRUE(env.connect_new_ue(*du_idx,
                                  int_to_gnb_du_ue_f1ap_id(0),
-                                 first_rnti,
+                                 to_rnti(0x4601),
                                  plmn_identity::test_value(),
                                  {},
-                                 first_observation.nci));
-  const auto second_observation =
-      make_recovered_initial_ul_position_observation(data, *du_idx, to_rnti(0x4602), 2);
-  ASSERT_EQ(provider->record(second_observation), ntn_initial_ul_position_record_status::stored);
-  ASSERT_EQ(provider->pending_count(), 1U);
+                                 query_result.cell_cgi.nci));
+  const auto connected_status = env.get_cu_cp()
+                                    .get_command_handler()
+                                    .get_ntn_command_handler()
+                                    .get_current_ntn_runtime_status()
+                                    .onboard_position_plan;
+  const auto connected_cell =
+      std::find_if(connected_status.cells.begin(), connected_status.cells.end(), [&](const auto& cell) {
+        return cell.nci == query_result.cell_cgi.nci;
+      });
+  ASSERT_NE(connected_cell, connected_status.cells.end());
+  ASSERT_TRUE(connected_cell->initial_access_strict_available);
+  ASSERT_FALSE(connected_status.initial_access_strict_available);
 
   ASSERT_TRUE(env.drop_du_connection(*du_idx));
   ASSERT_TRUE(env.tick_until(std::chrono::milliseconds{1000}, [&]() {
@@ -2621,7 +3000,9 @@ TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_du_disconnect_clears_p
                             .get_ntn_command_handler()
                             .get_current_ntn_runtime_status()
                             .onboard_position_plan;
-    return status.initial_access_position_active_contexts == 0U && provider->pending_count() == 0U;
+    return status.initial_access_position_active_contexts == 0U &&
+           status.initial_access_position_pending == 0U && !status.initial_access_strict_available &&
+           status.initial_access_rx_beam_state == "awaiting_calendar";
   }));
 }
 
@@ -2629,25 +3010,23 @@ TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_initial_context_setup_
 {
   auto                      data = make_persisted_recovery_calendar_test_data(96, 106);
   temporary_plan_file_guard guard{data.plan_path};
-  auto provider = std::make_shared<ntn_initial_ul_position_observation_store>("trusted_du_observer");
   data.source.initial_ul_position_validation = ntn_initial_ul_position_validation_mode::strict;
-  data.source.initial_ul_position_provider   = provider;
+  data.source.initial_ul_position_provider.reset();
 
-  cu_cp_test_env_params params;
-  params.ntn_onboard_position_plan                = data.source;
-  params.ntn_recovered_calendar_intents_per_cell  = data.recovered_intents;
-  params.ntn_recovered_calendar_preflight_reports = data.recovered_preflight;
+  cu_cp_test_env_params params = make_private_f1_initial_ul_test_params(data);
   cu_cp_test_environment env{std::move(params)};
   const auto             du_idx = reconcile_persisted_onboard_mapping(env, data, int_to_gnb_du_id(0x75));
   ASSERT_TRUE(du_idx.has_value());
+  ASSERT_TRUE(install_private_f1_initial_ul_rnti_generation(env, *du_idx, to_rnti(0x4601)).has_value());
   ASSERT_TRUE(connect_cu_up_for_ue_admission(env));
 
   const gnb_du_ue_f1ap_id_t du_ue_id = int_to_gnb_du_ue_f1ap_id(0);
   const rnti_t               c_rnti   = to_rnti(0x4601);
-  const auto observation = make_recovered_initial_ul_position_observation(data, *du_idx, c_rnti, 1);
-  ASSERT_EQ(provider->record(observation), ntn_initial_ul_position_record_status::stored);
+  const f1ap_ntn_initial_ul_position_result query_result = make_recovered_initial_ul_position_query_result(
+      data, f1ap_ntn_initial_ul_position_authority::sdr_rx_port_verified);
+  env.set_ntn_initial_ul_position_result(query_result);
   ASSERT_TRUE(env.connect_new_ue(
-      *du_idx, du_ue_id, c_rnti, plmn_identity::test_value(), {}, observation.nci));
+      *du_idx, du_ue_id, c_rnti, plmn_identity::test_value(), {}, query_result.cell_cgi.nci));
   ASSERT_EQ(env.get_cu_cp()
                 .get_command_handler()
                 .get_ntn_command_handler()
@@ -2670,25 +3049,23 @@ TEST(cu_cp_ntn_mobility_test, onboard_initial_ul_position_ue_removal_clears_temp
 {
   auto                      data = make_persisted_recovery_calendar_test_data(97, 107);
   temporary_plan_file_guard guard{data.plan_path};
-  auto provider = std::make_shared<ntn_initial_ul_position_observation_store>("trusted_du_observer");
   data.source.initial_ul_position_validation = ntn_initial_ul_position_validation_mode::strict;
-  data.source.initial_ul_position_provider   = provider;
+  data.source.initial_ul_position_provider.reset();
 
-  cu_cp_test_env_params params;
-  params.ntn_onboard_position_plan                = data.source;
-  params.ntn_recovered_calendar_intents_per_cell  = data.recovered_intents;
-  params.ntn_recovered_calendar_preflight_reports = data.recovered_preflight;
+  cu_cp_test_env_params params = make_private_f1_initial_ul_test_params(data);
   cu_cp_test_environment env{std::move(params)};
   const auto             du_idx = reconcile_persisted_onboard_mapping(env, data, int_to_gnb_du_id(0x76));
   ASSERT_TRUE(du_idx.has_value());
+  ASSERT_TRUE(install_private_f1_initial_ul_rnti_generation(env, *du_idx, to_rnti(0x4601)).has_value());
   ASSERT_TRUE(connect_cu_up_for_ue_admission(env));
 
   const gnb_du_ue_f1ap_id_t du_ue_id = int_to_gnb_du_ue_f1ap_id(0);
   const rnti_t               c_rnti   = to_rnti(0x4601);
-  const auto observation = make_recovered_initial_ul_position_observation(data, *du_idx, c_rnti, 1);
-  ASSERT_EQ(provider->record(observation), ntn_initial_ul_position_record_status::stored);
+  const f1ap_ntn_initial_ul_position_result query_result = make_recovered_initial_ul_position_query_result(
+      data, f1ap_ntn_initial_ul_position_authority::ofh_beam_id_verified);
+  env.set_ntn_initial_ul_position_result(query_result);
   ASSERT_TRUE(env.connect_new_ue(
-      *du_idx, du_ue_id, c_rnti, plmn_identity::test_value(), {}, observation.nci));
+      *du_idx, du_ue_id, c_rnti, plmn_identity::test_value(), {}, query_result.cell_cgi.nci));
   ASSERT_TRUE(env.authenticate_ue(*du_idx, du_ue_id, uint_to_amf_ue_id(0)));
 
   const cu_cp_test_environment::ue_context* ue_ctx = env.find_ue_context(*du_idx, du_ue_id);

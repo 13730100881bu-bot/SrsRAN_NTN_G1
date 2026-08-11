@@ -37,6 +37,13 @@ TEST(FapiPhyUlPrachPduAdaptorTest, valid_pdu_pass)
   // As it's only one PRACH config TLV with one Fd occassion, modify the values from the PRACH FAPI PDU.
   fapi_pdu.index_fd_ra                           = 0;
   fapi_pdu.maintenance_v3.prach_res_config_index = 0;
+  fapi_pdu.maintenance_v3.handle                 = 0x12345678U;
+  fapi_pdu.enable_rx_port_attribution            = true;
+  fapi_pdu.rx_port_attribution_unique_margin_dB  = 8.5F;
+  fapi_pdu.calendar_position_valid               = true;
+  fapi_pdu.calendar_schedule_version             = 41U;
+  fapi_pdu.calendar_cycle_index                  = 160U;
+  fapi_pdu.occasion_offset_us                    = 5000U;
 
   // Creation of the multi-PRACH config TLV. Used random values from the range of the document SCF-222 v4.0
   // section 3.3.2.4 in table PRACH configuration table.
@@ -73,6 +80,7 @@ TEST(FapiPhyUlPrachPduAdaptorTest, valid_pdu_pass)
   std::iota(prach_rx_ports.begin(), prach_rx_ports.end(), 0);
 
   prach_buffer_context context;
+  context.verified_rx_contexts = std::make_shared<const verified_prach_rx_context_list>();
   convert_prach_fapi_to_phy(context, fapi_pdu, prach, carrier_cfg, prach_rx_ports, sfn, slot_id, sector);
 
   ASSERT_EQ(static_cast<unsigned>(fapi_pdu.prach_format), static_cast<unsigned>(context.format));
@@ -82,6 +90,14 @@ TEST(FapiPhyUlPrachPduAdaptorTest, valid_pdu_pass)
   ASSERT_EQ(v3.num_fd_ra, context.nof_fd_occasions);
   ASSERT_EQ(v3.start_preamble_index, context.start_preamble_index);
   ASSERT_EQ(v3.num_preamble_indices, context.nof_preamble_indices);
+  ASSERT_EQ(v3.handle, context.handle);
+  ASSERT_EQ(fapi_pdu.enable_rx_port_attribution, context.enable_rx_port_attribution);
+  ASSERT_FLOAT_EQ(fapi_pdu.rx_port_attribution_unique_margin_dB, context.rx_port_attribution_unique_margin_dB);
+  ASSERT_EQ(fapi_pdu.calendar_position_valid, context.calendar_position_valid);
+  ASSERT_EQ(fapi_pdu.calendar_schedule_version, context.calendar_schedule_version);
+  ASSERT_EQ(fapi_pdu.calendar_cycle_index, context.calendar_cycle_index);
+  ASSERT_EQ(fapi_pdu.occasion_offset_us, context.occasion_offset_us);
+  ASSERT_EQ(context.verified_rx_contexts, nullptr);
   ASSERT_EQ(static_cast<unsigned>(prach.restricted_set), static_cast<unsigned>(context.restricted_set));
   ASSERT_EQ(static_cast<unsigned>(prach.prach_ul_bwp_pusch_scs), static_cast<unsigned>(context.pusch_scs));
   ASSERT_EQ(ocass.prach_root_sequence_index, context.root_sequence_index);

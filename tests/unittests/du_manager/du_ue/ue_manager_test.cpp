@@ -35,6 +35,202 @@
 using namespace srsran;
 using namespace srs_du;
 
+static mac_ntn_initial_ul_position_record make_du_initial_ul_observation(unsigned index = 0)
+{
+  mac_ntn_initial_ul_position_record observation;
+  observation.observation_id         = 1000 + index;
+  observation.cell_index             = to_du_cell_index(0);
+  observation.c_rnti                 = to_rnti(0x4601 + index);
+  observation.rnti_generation        = 17;
+  observation.nci                    = nr_cell_identity::create(0x12345).value();
+  observation.pci                    = pci_t{17};
+  observation.authority              = mac_ntn_initial_ul_position_authority::sdr_rx_port_verified;
+  observation.schedule_version       = 21;
+  observation.calendar_hash          = std::string(64, 'a');
+  observation.mapping_version        = 3;
+  observation.mapping_hash           = std::string(64, 'b');
+  observation.position_id            = "G000123";
+  observation.cell_local_port        = 4;
+  observation.physical_rx_port       = 2;
+  observation.receive_port_margin_db = 6.25F;
+  observation.calendar_cycle_index   = 9;
+  observation.occasion_offset_us     = 40000;
+  return observation;
+}
+
+static f1ap_ntn_initial_ul_position_query
+make_du_initial_ul_query(gnb_du_ue_f1ap_id_t f1ap_ue_id, const mac_ntn_initial_ul_position_record& observation)
+{
+  f1ap_ntn_initial_ul_position_query query;
+  query.query_generation         = 7;
+  query.nonce                    = 0x1020304050607080ULL;
+  query.connection_token         = 0x8877665544332211ULL;
+  query.gnb_du_id                = int_to_gnb_du_id(1);
+  query.cell_cgi                 =
+      nr_cell_global_id_t{plmn_identity::test_value(), observation.nci};
+  query.cell_index               = observation.cell_index;
+  query.pci                      = observation.pci;
+  query.gnb_du_ue_f1ap_id        = f1ap_ue_id;
+  query.c_rnti                   = observation.c_rnti;
+  query.expected_rnti_generation = observation.rnti_generation;
+  return query;
+}
+
+TEST(du_ntn_initial_ul_position_store_test, exact_query_consumes_once_and_same_nonce_is_idempotent)
+{
+  du_ntn_initial_ul_position_store store;
+  const auto                       now         = du_ntn_initial_ul_position_store::clock::time_point{} +
+                         std::chrono::seconds{10};
+  const auto observation = make_du_initial_ul_observation();
+  const auto f1ap_ue_id  = int_to_gnb_du_ue_f1ap_id(51);
+  const auto query       = make_du_initial_ul_query(f1ap_ue_id, observation);
+
+  ASSERT_TRUE(store.store(f1ap_ue_id, observation, now));
+  const auto first = store.query(query, now + std::chrono::milliseconds{1});
+  ASSERT_TRUE(first.accepted);
+  EXPECT_EQ(first.observation_id, observation.observation_id);
+  EXPECT_EQ(first.calendar_cycle_index, observation.calendar_cycle_index);
+  EXPECT_EQ(first.occasion_offset_us, observation.occasion_offset_us);
+
+  const auto retry = store.query(query, now + std::chrono::milliseconds{2});
+  EXPECT_TRUE(retry.accepted);
+  EXPECT_EQ(retry.position_id, first.position_id);
+
+  auto reused_nonce = query;
+  ++reused_nonce.query_generation;
+  const auto nonce_mismatch = store.query(reused_nonce, now + std::chrono::milliseconds{3});
+  EXPECT_FALSE(nonce_mismatch.accepted);
+  EXPECT_EQ(nonce_mismatch.reason, "nonce_identity_mismatch");
+
+  auto different_nonce = query;
+  ++different_nonce.nonce;
+  const auto replay = store.query(different_nonce, now + std::chrono::milliseconds{4});
+  EXPECT_FALSE(replay.accepted);
+  EXPECT_EQ(replay.reason, "observation_consumed");
+}
+
+TEST(du_ntn_initial_ul_position_store_test, mismatched_generation_does_not_consume_and_entry_expires_at_one_second)
+{
+  du_ntn_initial_ul_position_store store;
+  const auto                       now         = du_ntn_initial_ul_position_store::clock::time_point{} +
+                         std::chrono::seconds{10};
+  const auto observation = make_du_initial_ul_observation();
+  const auto f1ap_ue_id  = int_to_gnb_du_ue_f1ap_id(51);
+  auto       query       = make_du_initial_ul_query(f1ap_ue_id, observation);
+
+  ASSERT_TRUE(store.store(f1ap_ue_id, observation, now));
+  ++query.expected_rnti_generation;
+  const auto mismatch = store.query(query, now + std::chrono::milliseconds{1});
+  EXPECT_FALSE(mismatch.accepted);
+  EXPECT_EQ(mismatch.reason, "rnti_generation_mismatch");
+
+  query.expected_rnti_generation = observation.rnti_generation;
+  const auto expired = store.query(query, now + du_ntn_initial_ul_position_store::entry_ttl);
+  EXPECT_FALSE(expired.accepted);
+  EXPECT_EQ(expired.reason, "observation_expired");
+}
+
+TEST(du_ntn_initial_ul_position_store_test, non_authoritative_record_preserves_its_machine_readable_reason)
+{
+  du_ntn_initial_ul_position_store store;
+  const auto now = du_ntn_initial_ul_position_store::clock::time_point{} + std::chrono::seconds{10};
+  auto       observation = make_du_initial_ul_observation();
+  observation.authority  = mac_ntn_initial_ul_position_authority::none;
+  observation.reason     = "ambiguous_receive_position";
+  const auto f1ap_ue_id  = int_to_gnb_du_ue_f1ap_id(51);
+
+  ASSERT_TRUE(store.store(f1ap_ue_id, observation, now));
+  const auto result = store.query(make_du_initial_ul_query(f1ap_ue_id, observation), now);
+  EXPECT_FALSE(result.accepted);
+  EXPECT_EQ(result.reason, "ambiguous_receive_position");
+  EXPECT_EQ(result.observation_id, 0U);
+}
+
+TEST(du_ntn_initial_ul_position_store_test, software_observation_without_physical_port_remains_auditable)
+{
+  du_ntn_initial_ul_position_store store;
+  const auto now = du_ntn_initial_ul_position_store::clock::time_point{} + std::chrono::seconds{10};
+  auto       observation             = make_du_initial_ul_observation();
+  observation.authority              = mac_ntn_initial_ul_position_authority::software_attributed;
+  observation.physical_rx_port       = std::numeric_limits<uint16_t>::max();
+  observation.mapping_version        = 0;
+  observation.mapping_hash.clear();
+  const auto f1ap_ue_id = int_to_gnb_du_ue_f1ap_id(51);
+
+  ASSERT_TRUE(store.store(f1ap_ue_id, observation, now));
+  const auto result = store.query(make_du_initial_ul_query(f1ap_ue_id, observation), now);
+  ASSERT_TRUE(result.accepted);
+  EXPECT_EQ(result.authority, f1ap_ntn_initial_ul_position_authority::software_attributed);
+  EXPECT_EQ(result.physical_port, f1ap_ntn_initial_ul_position_detail::unavailable_physical_port_id);
+}
+
+TEST(du_ntn_initial_ul_position_store_test, capacity_is_bounded_without_overwriting_existing_records)
+{
+  du_ntn_initial_ul_position_store store;
+  const auto now = du_ntn_initial_ul_position_store::clock::time_point{} + std::chrono::seconds{10};
+  for (unsigned i = 0; i != du_ntn_initial_ul_position_store::max_entries; ++i) {
+    ASSERT_TRUE(store.store(int_to_gnb_du_ue_f1ap_id(i + 1), make_du_initial_ul_observation(i), now));
+  }
+  EXPECT_EQ(store.size(), du_ntn_initial_ul_position_store::max_entries);
+  EXPECT_FALSE(store.store(int_to_gnb_du_ue_f1ap_id(2000), make_du_initial_ul_observation(2000), now));
+  EXPECT_EQ(store.size(), du_ntn_initial_ul_position_store::max_entries);
+}
+
+TEST(du_ntn_initial_ul_position_store_test, plan_and_cell_invalidation_remove_records_without_reuse)
+{
+  du_ntn_initial_ul_position_store store;
+  const auto now = du_ntn_initial_ul_position_store::clock::time_point{} + std::chrono::seconds{10};
+  const auto observation = make_du_initial_ul_observation();
+  const auto f1ap_ue_id  = int_to_gnb_du_ue_f1ap_id(51);
+  const auto query       = make_du_initial_ul_query(f1ap_ue_id, observation);
+
+  ASSERT_TRUE(store.store(f1ap_ue_id, observation, now));
+  store.retain_plan(observation.schedule_version + 1, observation.calendar_hash);
+  EXPECT_EQ(store.query(query, now).reason, "observation_missing");
+
+  ASSERT_TRUE(store.store(f1ap_ue_id, observation, now));
+  store.invalidate_cell(observation.cell_index);
+  EXPECT_EQ(store.query(query, now).reason, "observation_missing");
+}
+
+TEST(du_ntn_initial_ul_position_store_test, lease_invalidation_is_scoped_to_the_retired_rnti)
+{
+  du_ntn_initial_ul_position_store store;
+  const auto now = du_ntn_initial_ul_position_store::clock::time_point{} + std::chrono::seconds{10};
+  const auto first_observation  = make_du_initial_ul_observation(0);
+  const auto second_observation = make_du_initial_ul_observation(1);
+  const auto first_f1ap_ue_id   = int_to_gnb_du_ue_f1ap_id(51);
+  const auto second_f1ap_ue_id  = int_to_gnb_du_ue_f1ap_id(52);
+
+  ASSERT_TRUE(store.store(first_f1ap_ue_id, first_observation, now));
+  ASSERT_TRUE(store.store(second_f1ap_ue_id, second_observation, now));
+  store.invalidate_rntis(first_observation.cell_index, {first_observation.c_rnti});
+
+  EXPECT_EQ(store.query(make_du_initial_ul_query(first_f1ap_ue_id, first_observation), now).reason,
+            "observation_missing");
+  EXPECT_TRUE(store.query(make_du_initial_ul_query(second_f1ap_ue_id, second_observation), now).accepted);
+}
+
+TEST(du_ntn_initial_ul_position_store_test, clearing_a_replacement_plan_keeps_previous_plan_observations)
+{
+  du_ntn_initial_ul_position_store store;
+  const auto now = du_ntn_initial_ul_position_store::clock::time_point{} + std::chrono::seconds{10};
+  const auto previous_observation = make_du_initial_ul_observation(0);
+  auto       replacement_observation = make_du_initial_ul_observation(1);
+  replacement_observation.schedule_version++;
+  replacement_observation.calendar_hash = std::string(64, 'c');
+  const auto previous_f1ap_ue_id    = int_to_gnb_du_ue_f1ap_id(51);
+  const auto replacement_f1ap_ue_id = int_to_gnb_du_ue_f1ap_id(52);
+
+  ASSERT_TRUE(store.store(previous_f1ap_ue_id, previous_observation, now));
+  ASSERT_TRUE(store.store(replacement_f1ap_ue_id, replacement_observation, now));
+  store.erase_plan(replacement_observation.schedule_version, replacement_observation.calendar_hash);
+
+  EXPECT_TRUE(store.query(make_du_initial_ul_query(previous_f1ap_ue_id, previous_observation), now).accepted);
+  EXPECT_EQ(store.query(make_du_initial_ul_query(replacement_f1ap_ue_id, replacement_observation), now).reason,
+            "observation_missing");
+}
+
 class du_ue_manager_tester : public ::testing::Test
 {
 protected:
@@ -155,6 +351,26 @@ TEST_F(du_ue_manager_tester,
 
   // TEST: DU manager completes DU UE creation procedure with success.
   ASSERT_TRUE(is_ue_creation_complete());
+}
+
+TEST_F(du_ue_manager_tester, successful_ue_creation_preserves_initial_ul_position_under_actual_f1_identity)
+{
+  auto observation = make_du_initial_ul_observation();
+  observation.nci   = cells[0].nr_cgi.nci;
+  observation.pci   = cells[0].pci;
+  auto ccch_ind     = create_ul_ccch_message(observation.c_rnti);
+  ccch_ind.ntn_initial_ul_position = observation;
+  f1ap_dummy.next_ue_create_response.f1ap_ue_id = int_to_gnb_du_ue_f1ap_id(51);
+
+  push_ul_ccch_message(ccch_ind);
+  mac_completes_ue_creation(true);
+
+  const auto result = ue_mng.handle_ntn_initial_ul_position_query(
+      make_du_initial_ul_query(f1ap_dummy.next_ue_create_response.f1ap_ue_id, observation));
+  ASSERT_TRUE(result.accepted);
+  EXPECT_EQ(result.observation_id, observation.observation_id);
+  EXPECT_EQ(result.position_id, observation.position_id);
+  EXPECT_EQ(result.calendar_cycle_index, observation.calendar_cycle_index);
 }
 
 TEST_F(du_ue_manager_tester, when_mac_fails_to_create_ue_then_no_ue_is_created_in_du)

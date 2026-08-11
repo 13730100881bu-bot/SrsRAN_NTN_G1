@@ -33,6 +33,7 @@
 #include "srsran/cu_cp/cu_cp_configuration.h"
 #include "srsran/cu_cp/cu_cp_types.h"
 #include "srsran/f1ap/ntn_access_calendar.h"
+#include "srsran/f1ap/ntn_initial_ul_position_query.h"
 #include "srsran/ran/plmn_identity.h"
 #include <array>
 #include <optional>
@@ -90,6 +91,8 @@ struct cu_cp_test_env_params {
   bool                                                   ntn_calendar_prepare_reports_ready      = false;
   bool                                                   ntn_calendar_preflight_incomplete       = false;
   bool                                                   ntn_calendar_preflight_unsupported      = false;
+  std::optional<f1ap_ntn_initial_ul_position_result>     ntn_initial_ul_position_result;
+  bool                                                   ntn_initial_ul_position_drop_responses = false;
   std::optional<std::array<uint16_t, 2>>                                  ntn_recovered_calendar_intents_per_cell;
   std::optional<std::array<f1ap_ntn_access_calendar_preflight_report, 2>> ntn_recovered_calendar_preflight_reports;
   bool                                                   ntn_resource_audit_rejects              = false;
@@ -239,6 +242,11 @@ public:
   unsigned nof_ntn_calendar_clear_requests() const { return ntn_calendar_clear_requests; }
 
   const cu_cp_test_env_params& get_test_env_params() const { return params; }
+
+  void set_ntn_initial_ul_position_result(std::optional<f1ap_ntn_initial_ul_position_result> result)
+  {
+    params.ntn_initial_ul_position_result = std::move(result);
+  }
 
   const ue_context* find_ue_context(unsigned du_idx, gnb_du_ue_f1ap_id_t du_ue_id) const;
 

@@ -84,6 +84,28 @@ public:
   bool is_prach_late() const { return prach_late; }
 };
 
+class prach_beam_context_provider_spy : public prach_beam_context_provider
+{
+public:
+  std::optional<static_vector<prach_eaxc_beam_context, MAX_NOF_SUPPORTED_EAXC>>
+  get_prach_beam_context(const prach_buffer_context& context) override
+  {
+    last_context = context;
+    return mappings;
+  }
+
+  void set_mappings(std::optional<static_vector<prach_eaxc_beam_context, MAX_NOF_SUPPORTED_EAXC>> value)
+  {
+    mappings = std::move(value);
+  }
+
+  const std::optional<prach_buffer_context>& get_last_context() const { return last_context; }
+
+private:
+  std::optional<static_vector<prach_eaxc_beam_context, MAX_NOF_SUPPORTED_EAXC>> mappings;
+  std::optional<prach_buffer_context>                                          last_context;
+};
+
 class ofh_uplink_request_handler_impl_fixture : public ::testing::Test
 {
 protected:
@@ -105,8 +127,11 @@ protected:
   std::shared_ptr<uplink_notified_grid_symbol_repository> notified_symbol_repo;
   data_flow_cplane_scheduling_commands_spy*               data_flow;
   data_flow_cplane_scheduling_commands_spy*               data_flow_prach;
+  data_flow_cplane_scheduling_commands_spy*               data_flow_prach_beam;
+  std::shared_ptr<prach_beam_context_provider_spy>         beam_context_provider;
   uplink_request_handler_impl                             handler;
   uplink_request_handler_impl                             handler_prach_cp_en;
+  uplink_request_handler_impl                             handler_prach_beam_context;
 
   explicit ofh_uplink_request_handler_impl_fixture() :
     prach_pool(create_prach_buffer_pool(1)),
@@ -117,8 +142,10 @@ protected:
     ul_slot_repo(std::make_shared<uplink_context_repository>(REPOSITORY_SIZE)),
     ul_prach_repo(std::make_shared<prach_context_repository>(REPOSITORY_SIZE)),
     notified_symbol_repo(std::make_unique<uplink_notified_grid_symbol_repository>(REPOSITORY_SIZE)),
+    beam_context_provider(std::make_shared<prach_beam_context_provider_spy>()),
     handler(get_config_prach_cp_disabled(), get_dependencies_prach_cp_disabled()),
-    handler_prach_cp_en(get_config_prach_cp_enabled(), get_dependencies_prach_cp_enabled())
+    handler_prach_cp_en(get_config_prach_cp_enabled(), get_dependencies_prach_cp_enabled()),
+    handler_prach_beam_context(get_config_prach_beam_context_enabled(), get_dependencies_prach_beam_context_enabled())
   {
   }
 
@@ -158,6 +185,27 @@ protected:
                                                     ofh::data_direction::uplink)};
   }
 
+  uplink_request_handler_impl_dependencies get_dependencies_prach_beam_context_enabled()
+  {
+    auto temp            = std::make_unique<data_flow_cplane_scheduling_commands_spy>();
+    data_flow_prach_beam = temp.get();
+
+    uplink_request_handler_impl_dependencies dependencies{srslog::fetch_basic_logger("TEST"),
+                                                          notifier_spy,
+                                                          ul_slot_repo,
+                                                          ul_prach_repo,
+                                                          notified_symbol_repo,
+                                                          std::move(temp),
+                                                          std::make_shared<ether::eth_frame_pool>(
+                                                              srslog::fetch_basic_logger("TEST"),
+                                                              mtu_size,
+                                                              2,
+                                                              ofh::message_type::control_plane,
+                                                              ofh::data_direction::uplink)};
+    dependencies.prach_beam_context_source = beam_context_provider;
+    return dependencies;
+  }
+
   uplink_request_handler_impl_config get_config_prach_cp_disabled()
   {
     uplink_request_handler_impl_config config;
@@ -188,6 +236,13 @@ protected:
     config.tx_timing_params              = tx_timing_params;
     config.enable_log_warnings_for_lates = true;
 
+    return config;
+  }
+
+  uplink_request_handler_impl_config get_config_prach_beam_context_enabled()
+  {
+    auto config                          = get_config_prach_cp_enabled();
+    config.is_prach_beam_context_enabled = true;
     return config;
   }
 };
@@ -251,9 +306,91 @@ TEST_F(ofh_uplink_request_handler_impl_fixture, handle_prach_request_generates_c
   ASSERT_EQ(prach_eaxc[0], info.eaxc);
   ASSERT_EQ(data_direction::uplink, info.direction);
   ASSERT_EQ(filter_index_type::ul_prach_preamble_short, info.filter_type);
+  ASSERT_FALSE(info.beam_context.has_value());
   ASSERT_FALSE(notifier_spy.is_downlink_late());
   ASSERT_FALSE(notifier_spy.is_uplink_late());
   ASSERT_FALSE(notifier_spy.is_prach_late());
+}
+
+TEST_F(ofh_uplink_request_handler_impl_fixture, valid_beam_context_is_attached_to_the_matching_prach_eaxc)
+{
+  prach_buffer_context context;
+  context.sector           = 0;
+  context.nof_fd_occasions = 1;
+  context.nof_td_occasions = 1;
+  context.format           = prach_format_type::B4;
+  context.slot             = slot_point(1, 20, 1);
+  context.pusch_scs        = subcarrier_spacing::kHz30;
+  context.start_symbol     = 0;
+
+  prach_beam_context beam_context{321, 7, "G000123", 41, "calendar-sha256", 9, "mapping-sha256"};
+  static_vector<prach_eaxc_beam_context, MAX_NOF_SUPPORTED_EAXC> mappings;
+  mappings.push_back({prach_eaxc.front(), beam_context});
+  beam_context_provider->set_mappings(mappings);
+
+  slot_symbol_point ota_time(context.slot, 0, nof_symbols);
+  ota_time -= (calculate_nof_symbols_before_ota(cp, scs, ul_processing_time, tx_timing_params) + 1);
+  handler_prach_beam_context.get_ota_symbol_boundary_notifier().on_new_symbol({ota_time, {}});
+  handler_prach_beam_context.handle_prach_occasion(context, prach_pool->get());
+  ul_prach_repo->process_pending_contexts();
+
+  ASSERT_TRUE(data_flow_prach_beam->has_enqueue_section_type_3_method_been_called());
+  auto info = data_flow_prach_beam->get_spy_info();
+  ASSERT_TRUE(info.beam_context.has_value());
+  EXPECT_TRUE(*info.beam_context == beam_context);
+  EXPECT_EQ(info.beam_context->mapping_hash, "mapping-sha256");
+  ASSERT_TRUE(beam_context_provider->get_last_context().has_value());
+  EXPECT_EQ(beam_context_provider->get_last_context()->slot, context.slot);
+  EXPECT_FALSE(ul_prach_repo->get(context.slot).empty());
+}
+
+TEST_F(ofh_uplink_request_handler_impl_fixture, missing_beam_context_keeps_the_unverified_prach_path)
+{
+  prach_buffer_context context;
+  context.sector           = 0;
+  context.nof_fd_occasions = 1;
+  context.nof_td_occasions = 1;
+  context.format           = prach_format_type::B4;
+  context.slot             = slot_point(1, 20, 1);
+  context.pusch_scs        = subcarrier_spacing::kHz30;
+
+  beam_context_provider->set_mappings(std::nullopt);
+  slot_symbol_point ota_time(context.slot, 0, nof_symbols);
+  ota_time -= (calculate_nof_symbols_before_ota(cp, scs, ul_processing_time, tx_timing_params) + 1);
+  handler_prach_beam_context.get_ota_symbol_boundary_notifier().on_new_symbol({ota_time, {}});
+  handler_prach_beam_context.handle_prach_occasion(context, prach_pool->get());
+  ul_prach_repo->process_pending_contexts();
+
+  ASSERT_TRUE(data_flow_prach_beam->has_enqueue_section_type_3_method_been_called());
+  EXPECT_FALSE(data_flow_prach_beam->get_spy_info().beam_context.has_value());
+  EXPECT_FALSE(ul_prach_repo->get(context.slot).empty());
+}
+
+TEST_F(ofh_uplink_request_handler_impl_fixture, duplicate_eaxc_beam_mapping_fails_closed)
+{
+  prach_buffer_context context;
+  context.sector           = 0;
+  context.nof_fd_occasions = 1;
+  context.nof_td_occasions = 1;
+  context.format           = prach_format_type::B4;
+  context.slot             = slot_point(1, 20, 1);
+  context.pusch_scs        = subcarrier_spacing::kHz30;
+
+  prach_beam_context beam_context{321, 7, "G000123", 41, "calendar-sha256", 9, "mapping-sha256"};
+  static_vector<prach_eaxc_beam_context, MAX_NOF_SUPPORTED_EAXC> mappings;
+  mappings.push_back({prach_eaxc.front(), beam_context});
+  mappings.push_back({prach_eaxc.front(), beam_context});
+  beam_context_provider->set_mappings(mappings);
+
+  slot_symbol_point ota_time(context.slot, 0, nof_symbols);
+  ota_time -= (calculate_nof_symbols_before_ota(cp, scs, ul_processing_time, tx_timing_params) + 1);
+  handler_prach_beam_context.get_ota_symbol_boundary_notifier().on_new_symbol({ota_time, {}});
+  handler_prach_beam_context.handle_prach_occasion(context, prach_pool->get());
+  ul_prach_repo->process_pending_contexts();
+
+  ASSERT_TRUE(data_flow_prach_beam->has_enqueue_section_type_3_method_been_called());
+  EXPECT_FALSE(data_flow_prach_beam->get_spy_info().beam_context.has_value());
+  EXPECT_FALSE(ul_prach_repo->get(context.slot).empty());
 }
 
 TEST_F(ofh_uplink_request_handler_impl_fixture, handle_late_prach_request_does_not_generate_cplane_message)

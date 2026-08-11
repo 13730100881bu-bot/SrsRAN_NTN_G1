@@ -132,6 +132,11 @@ TEST_F(sched_no_ue_tester, ntn_calendar_preflight_reports_matched_partial_and_mi
     if (!result.ul.prachs.empty() && !prach_slot.has_value()) {
       prach_slot = offset;
     }
+    for (const prach_occasion_info& occasion : result.ul.prachs) {
+      EXPECT_EQ(occasion.handle, 0U);
+      EXPECT_FALSE(occasion.enable_rx_port_attribution);
+      EXPECT_FLOAT_EQ(occasion.rx_port_attribution_unique_margin_dB, 6.0F);
+    }
     if (result.dl.bc.ssb_info.empty() && !no_ssb_slot.has_value()) {
       no_ssb_slot = offset;
     }
@@ -214,13 +219,15 @@ TEST_F(sched_no_ue_tester, when_calendar_allows_only_prach_then_ssb_is_gated_wit
   ASSERT_TRUE(sch.slot_indication(slot_point{0, 0}, cell_cfg_msg.cell_index).success);
 
   ntn_access_calendar_request request;
-  request.operation       = ntn_access_calendar_operation::prepare;
-  request.cell_index      = cell_cfg_msg.cell_index;
-  request.version         = 1;
-  request.content_hash    = "sha256:prach-only";
-  request.activation_slot = slot_point{0, 32};
-  request.validity_slots  = 1000;
-  request.cycle_slots     = 1;
+  request.operation                                  = ntn_access_calendar_operation::prepare;
+  request.cell_index                                 = cell_cfg_msg.cell_index;
+  request.version                                    = 1;
+  request.content_hash                               = "sha256:prach-only";
+  request.activation_slot                            = slot_point{0, 32};
+  request.validity_slots                             = 1000;
+  request.cycle_slots                                = 1;
+  request.enable_prach_rx_port_attribution           = true;
+  request.prach_rx_port_attribution_unique_margin_dB = 8.5F;
   request.windows.push_back({0, 1, ntn_access_calendar_purpose_bit(ntn_access_calendar_purpose::prach)});
   ASSERT_EQ(sch.handle_ntn_access_calendar_update(request).state, ntn_access_calendar_state::ready);
 
@@ -232,6 +239,11 @@ TEST_F(sched_no_ue_tester, when_calendar_allows_only_prach_then_ssb_is_gated_wit
     if (count >= request.activation_slot.to_uint()) {
       nof_ssbs += result.dl.bc.ssb_info.size();
       nof_prachs += result.ul.prachs.size();
+      for (const prach_occasion_info& occasion : result.ul.prachs) {
+        EXPECT_NE(occasion.handle, 0U);
+        EXPECT_TRUE(occasion.enable_rx_port_attribution);
+        EXPECT_FLOAT_EQ(occasion.rx_port_attribution_unique_margin_dB, 8.5F);
+      }
     }
   }
 

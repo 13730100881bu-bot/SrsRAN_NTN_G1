@@ -30,6 +30,16 @@ set(TEST_DATA_DIR ${CMAKE_CURRENT_BINARY_DIR}/test_data)
 
 set_directory_properties(PROPERTIES LABELS "phy")
 
+add_executable(prach_detector_port_attribution_test prach_detector_port_attribution_test.cpp)
+target_link_libraries(prach_detector_port_attribution_test
+        srsran_channel_processors
+        srsran_dft
+        srsran_phy_support
+        srslog
+        gtest
+        gtest_main)
+gtest_discover_tests(prach_detector_port_attribution_test)
+
 if (USE_PHY_TESTVECTORS)
     add_executable(prach_detector_vectortest prach_detector_vectortest.cpp)
     target_link_libraries(prach_detector_vectortest srsran_channel_processors srsran_dft srsran_phy_support srslog gtest gtest_main)

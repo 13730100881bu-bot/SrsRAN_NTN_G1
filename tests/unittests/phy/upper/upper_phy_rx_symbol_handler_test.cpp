@@ -27,6 +27,7 @@
 #include "uplink_processor_test_doubles.h"
 #include "srsran/phy/support/prach_buffer_context.h"
 #include "srsran/phy/upper/upper_phy_factories.h"
+#include "srsran/ru/ru_adapters.h"
 #include <gtest/gtest.h>
 
 using namespace srsran;
@@ -153,4 +154,73 @@ TEST_F(UpperPhyRxSymbolHandlerFixture, handling_valid_pusch_pdu_calls_uplink_pro
   ASSERT_EQ(ul_proc_spy->get_last_end_symbol_index(), 2);
   ASSERT_EQ(default_ul_proc_spy->get_on_rx_symbol_count(), 0);
   ASSERT_EQ(default_ul_proc_spy->get_last_end_symbol_index(), std::numeric_limits<unsigned>::max());
+}
+
+TEST_F(UpperPhyRxSymbolHandlerFixture, ru_adapter_attaches_complete_verified_prach_receive_context)
+{
+  upper_phy_ru_ul_adapter adapter(1);
+  adapter.map_handler(0, rx_handler);
+
+  prach_buffer_context context;
+  context.sector = 0;
+  context.slot   = test_slot;
+  context.ports  = {3};
+
+  verified_prach_rx_context verified;
+  verified.authority          = prach_rx_context_authority::ofh_beam_id_verified;
+  verified.buffer_port        = 0;
+  verified.logical_port_id    = 7;
+  verified.ofh_prach_eaxc     = 5;
+  verified.ofh_beam_id        = 0x1234;
+  verified.position_id        = "G000123";
+  verified.schedule_version   = 41;
+  verified.calendar_hash      = "calendar-sha256";
+  verified.mapping_generation = 9;
+  verified.mapping_hash       = "mapping-sha256";
+
+  verified_prach_rx_context_list contexts;
+  contexts.push_back(verified);
+  adapter.on_new_prach_window_data(context, prach_pool->get(), contexts);
+
+  ASSERT_TRUE(default_ul_proc_spy->is_process_prach_method_called());
+  const auto& forwarded = default_ul_proc_spy->get_last_prach_context();
+  ASSERT_NE(forwarded.verified_rx_contexts, nullptr);
+  ASSERT_EQ(forwarded.verified_rx_contexts->size(), 1);
+  EXPECT_EQ(forwarded.verified_rx_contexts->front().buffer_port, 0);
+  ASSERT_TRUE(forwarded.verified_rx_contexts->front().ofh_prach_eaxc.has_value());
+  EXPECT_EQ(forwarded.verified_rx_contexts->front().ofh_prach_eaxc.value(), 5);
+  EXPECT_EQ(forwarded.verified_rx_contexts->front().position_id, "G000123");
+  EXPECT_EQ(forwarded.verified_rx_contexts->front().mapping_hash, "mapping-sha256");
+}
+
+TEST_F(UpperPhyRxSymbolHandlerFixture, ru_adapter_does_not_attach_duplicate_verified_buffer_port)
+{
+  upper_phy_ru_ul_adapter adapter(1);
+  adapter.map_handler(0, rx_handler);
+
+  prach_buffer_context context;
+  context.sector = 0;
+  context.slot   = test_slot;
+  context.ports  = {3, 4};
+
+  verified_prach_rx_context verified;
+  verified.authority          = prach_rx_context_authority::ofh_beam_id_verified;
+  verified.buffer_port        = 0;
+  verified.logical_port_id    = 7;
+  verified.ofh_prach_eaxc     = 5;
+  verified.ofh_beam_id        = 0x1234;
+  verified.position_id        = "G000123";
+  verified.schedule_version   = 41;
+  verified.calendar_hash      = "calendar-sha256";
+  verified.mapping_generation = 9;
+  verified.mapping_hash       = "mapping-sha256";
+
+  verified_prach_rx_context_list contexts;
+  contexts.push_back(verified);
+  verified.ofh_prach_eaxc = 6;
+  contexts.push_back(verified);
+  adapter.on_new_prach_window_data(context, prach_pool->get(), contexts);
+
+  ASSERT_TRUE(default_ul_proc_spy->is_process_prach_method_called());
+  EXPECT_EQ(default_ul_proc_spy->get_last_prach_context().verified_rx_contexts, nullptr);
 }

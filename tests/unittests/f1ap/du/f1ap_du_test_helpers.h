@@ -77,10 +77,12 @@ public:
   f1ap_ue_context_creation_response               next_ue_context_creation_response;
   std::optional<f1ap_ue_context_update_request>   last_ue_context_update_req;
   f1ap_ue_context_update_response                 next_ue_context_update_response;
-  std::optional<f1ap_ntn_rnti_lease_pool_update>  last_ntn_rnti_lease_pool_update;
-  f1ap_ntn_rnti_lease_pool_result                 next_ntn_rnti_lease_pool_result;
+  std::optional<f1ap_ntn_rnti_lease_pool_update>   last_ntn_rnti_lease_pool_update;
+  f1ap_ntn_rnti_lease_pool_result                  next_ntn_rnti_lease_pool_result;
   std::optional<f1ap_ntn_resource_audit_request>   last_ntn_resource_audit_request;
   f1ap_ntn_resource_audit_result                   next_ntn_resource_audit_result;
+  std::optional<f1ap_ntn_initial_ul_position_query> last_ntn_initial_ul_position_query;
+  f1ap_ntn_initial_ul_position_result               next_ntn_initial_ul_position_result;
   std::optional<f1ap_ntn_sib19_broadcast_update>   last_ntn_sib19_broadcast_update;
   f1ap_ntn_sib19_broadcast_result                  next_ntn_sib19_broadcast_result;
   std::optional<f1ap_ntn_access_calendar_update>   last_ntn_access_calendar_update;
@@ -126,6 +128,13 @@ public:
   {
     last_ntn_resource_audit_request = request;
     return launch_no_op_task(next_ntn_resource_audit_result);
+  }
+
+  async_task<f1ap_ntn_initial_ul_position_result>
+  request_ntn_initial_ul_position(const f1ap_ntn_initial_ul_position_query& request) override
+  {
+    last_ntn_initial_ul_position_query = request;
+    return launch_no_op_task(next_ntn_initial_ul_position_result);
   }
 
   async_task<f1ap_ntn_sib19_broadcast_result>

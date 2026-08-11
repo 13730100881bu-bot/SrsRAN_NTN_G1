@@ -45,6 +45,7 @@
 #include "srsran/e1ap/common/e1ap_types.h"
 #include "srsran/f1ap/f1ap_message.h"
 #include "srsran/f1ap/ntn_access_calendar.h"
+#include "srsran/f1ap/ntn_initial_ul_position_query.h"
 #include "srsran/f1ap/ntn_rnti_lease_pool.h"
 #include "srsran/ngap/ngap_message.h"
 #include "srsran/ran/cu_types.h"
@@ -85,6 +86,15 @@ static bool is_ntn_access_calendar_query(const f1ap_message& pdu)
   const auto  update  =
       decode_f1ap_ntn_access_calendar_update(request->eutra_nr_cell_res_coordination_req_container);
   return update.has_value() && update->operation == f1ap_ntn_access_calendar_operation::query;
+}
+
+static bool is_ntn_initial_ul_position_query(const f1ap_message& pdu)
+{
+  if (!is_gnb_du_resource_coordination_request(pdu)) {
+    return false;
+  }
+  const auto& request = pdu.pdu.init_msg().value.gnb_du_res_coordination_request();
+  return decode_f1ap_ntn_initial_ul_position_query(request->eutra_nr_cell_res_coordination_req_container).has_value();
 }
 
 static void record_ntn_calendar_prepare(const f1ap_message&      request,
@@ -139,6 +149,7 @@ static f1ap_message make_gnb_du_resource_coordination_response(
     bool                                                      ntn_calendar_prepare_reports_ready,
     bool                                                      ntn_calendar_preflight_incomplete,
     bool                                                      ntn_calendar_preflight_unsupported,
+    const std::optional<f1ap_ntn_initial_ul_position_result>& ntn_initial_ul_position_result,
     bool                                                      ntn_resource_audit_rejects,
     bool                                                      ntn_resource_audit_rnti_snapshot_complete,
     bool                                                      ntn_resource_audit_retirement_supported,
@@ -168,9 +179,31 @@ static f1ap_message make_gnb_du_resource_coordination_response(
       decode_f1ap_ntn_sib19_broadcast_update(asn1_req->eutra_nr_cell_res_coordination_req_container);
   const std::optional<f1ap_ntn_resource_audit_request> audit_request =
       decode_f1ap_ntn_resource_audit_request(asn1_req->eutra_nr_cell_res_coordination_req_container);
+  const std::optional<f1ap_ntn_initial_ul_position_query> initial_ul_position_query =
+      decode_f1ap_ntn_initial_ul_position_query(asn1_req->eutra_nr_cell_res_coordination_req_container);
 
   byte_buffer response_container;
-  if (calendar_update.has_value()) {
+  if (initial_ul_position_query.has_value()) {
+    f1ap_ntn_initial_ul_position_result result;
+    if (ntn_initial_ul_position_result.has_value()) {
+      result = *ntn_initial_ul_position_result;
+    } else {
+      result.accepted  = false;
+      result.authority = f1ap_ntn_initial_ul_position_authority::none;
+      result.reason    = "observation_missing";
+    }
+    result.query_generation         = initial_ul_position_query->query_generation;
+    result.nonce                    = initial_ul_position_query->nonce;
+    result.connection_token         = initial_ul_position_query->connection_token;
+    result.gnb_du_id                = initial_ul_position_query->gnb_du_id;
+    result.cell_cgi                 = initial_ul_position_query->cell_cgi;
+    result.cell_index               = initial_ul_position_query->cell_index;
+    result.pci                      = initial_ul_position_query->pci;
+    result.gnb_du_ue_f1ap_id        = initial_ul_position_query->gnb_du_ue_f1ap_id;
+    result.c_rnti                   = initial_ul_position_query->c_rnti;
+    result.expected_rnti_generation = initial_ul_position_query->expected_rnti_generation;
+    response_container = encode_f1ap_ntn_initial_ul_position_result(result);
+  } else if (calendar_update.has_value()) {
     if (calendar_update->operation == f1ap_ntn_access_calendar_operation::clear) {
       ++ntn_calendar_clear_requests;
     }
@@ -597,7 +630,11 @@ bool cu_cp_test_environment::wait_for_f1ap_tx_pdu(unsigned du_idx, f1ap_message&
       return false;
     }
     if (is_gnb_du_resource_coordination_request(pdu)) {
-      if (!params.ntn_calendar_drop_query_responses || !is_ntn_access_calendar_query(pdu)) {
+      const bool drop_calendar_query =
+          params.ntn_calendar_drop_query_responses && is_ntn_access_calendar_query(pdu);
+      const bool drop_initial_ul_query =
+          params.ntn_initial_ul_position_drop_responses && is_ntn_initial_ul_position_query(pdu);
+      if (!drop_calendar_query && !drop_initial_ul_query) {
         dus[du_idx]->push_ul_pdu(
             make_gnb_du_resource_coordination_response(pdu,
                                                        params.ntn_calendar_query_stays_ready,
@@ -607,6 +644,7 @@ bool cu_cp_test_environment::wait_for_f1ap_tx_pdu(unsigned du_idx, f1ap_message&
                                                        params.ntn_calendar_prepare_reports_ready,
                                                        params.ntn_calendar_preflight_incomplete,
                                                        params.ntn_calendar_preflight_unsupported,
+                                                       params.ntn_initial_ul_position_result,
                                                        params.ntn_resource_audit_rejects,
                                                        params.ntn_resource_audit_rnti_snapshot_complete,
                                                        params.ntn_resource_audit_retirement_supported,
@@ -659,6 +697,7 @@ void cu_cp_test_environment::respond_to_f1ap_resource_coordination_request(unsig
                                                                       params.ntn_calendar_prepare_reports_ready,
                                                                       params.ntn_calendar_preflight_incomplete,
                                                                       params.ntn_calendar_preflight_unsupported,
+                                                                      params.ntn_initial_ul_position_result,
                                                                       params.ntn_resource_audit_rejects,
                                                                       params.ntn_resource_audit_rnti_snapshot_complete,
                                                                       params.ntn_resource_audit_retirement_supported,
@@ -689,6 +728,7 @@ void cu_cp_test_environment::apply_f1ap_resource_coordination_request_without_re
                                                    params.ntn_calendar_prepare_reports_ready,
                                                    params.ntn_calendar_preflight_incomplete,
                                                    params.ntn_calendar_preflight_unsupported,
+                                                   params.ntn_initial_ul_position_result,
                                                    params.ntn_resource_audit_rejects,
                                                    params.ntn_resource_audit_rnti_snapshot_complete,
                                                    params.ntn_resource_audit_retirement_supported,
@@ -718,7 +758,11 @@ void cu_cp_test_environment::drain_f1ap_resource_coordination_requests(unsigned 
       }
       report_fatal_error_if_not(is_gnb_du_resource_coordination_request(f1ap_pdu),
                                 "there are still F1AP DL messages to pop from DU");
-      if (!params.ntn_calendar_drop_query_responses || !is_ntn_access_calendar_query(f1ap_pdu)) {
+      const bool drop_calendar_query =
+          params.ntn_calendar_drop_query_responses && is_ntn_access_calendar_query(f1ap_pdu);
+      const bool drop_initial_ul_query =
+          params.ntn_initial_ul_position_drop_responses && is_ntn_initial_ul_position_query(f1ap_pdu);
+      if (!drop_calendar_query && !drop_initial_ul_query) {
         du_it->second->push_ul_pdu(
             make_gnb_du_resource_coordination_response(f1ap_pdu,
                                                        params.ntn_calendar_query_stays_ready,
@@ -728,6 +772,7 @@ void cu_cp_test_environment::drain_f1ap_resource_coordination_requests(unsigned 
                                                        params.ntn_calendar_prepare_reports_ready,
                                                        params.ntn_calendar_preflight_incomplete,
                                                        params.ntn_calendar_preflight_unsupported,
+                                                       params.ntn_initial_ul_position_result,
                                                        params.ntn_resource_audit_rejects,
                                                        params.ntn_resource_audit_rnti_snapshot_complete,
                                                        params.ntn_resource_audit_retirement_supported,

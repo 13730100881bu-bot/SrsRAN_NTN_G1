@@ -32,8 +32,10 @@ namespace testing {
 /// User-Plane received symbol notifier spy.
 class uplane_rx_symbol_notifier_spy : public uplane_rx_symbol_notifier
 {
-  bool new_uplink_symbol_function_called = false;
-  bool new_prach_function_called         = false;
+  bool                                                                    new_uplink_symbol_function_called  = false;
+  bool                                                                    new_prach_function_called          = false;
+  bool                                                                    new_verified_prach_function_called = false;
+  static_vector<verified_prach_uplane_context, MAX_NOF_SUPPORTED_EAXC> last_verified_contexts;
 
 public:
   // See interface for documentation.
@@ -48,11 +50,26 @@ public:
     new_prach_function_called = true;
   }
 
+  // See interface for documentation.
+  void on_new_prach_window_data(const prach_buffer_context&                 context,
+                                shared_prach_buffer                         buffer,
+                                span<const verified_prach_uplane_context>   verified_contexts) override
+  {
+    new_prach_function_called          = true;
+    new_verified_prach_function_called = true;
+    last_verified_contexts.assign(verified_contexts.begin(), verified_contexts.end());
+  }
+
   /// Returns true if on_new_uplink_symbol function has been called, otherwise false.
   bool has_new_uplink_symbol_function_been_called() const { return new_uplink_symbol_function_called; }
 
   /// Returns true if on_new_prach_window_data function has been called, otherwise false.
   bool has_new_prach_function_been_called() const { return new_prach_function_called; }
+
+  /// Returns true if verified PRACH context was supplied with the PRACH buffer.
+  bool has_new_verified_prach_function_been_called() const { return new_verified_prach_function_called; }
+
+  span<const verified_prach_uplane_context> get_last_verified_contexts() const { return last_verified_contexts; }
 };
 
 } // namespace testing
