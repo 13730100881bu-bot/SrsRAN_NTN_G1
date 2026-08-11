@@ -30,7 +30,8 @@ mac_ul_processor::mac_ul_processor(const mac_ul_config& cfg_) :
   cfg(cfg_),
   logger(srslog::fetch_basic_logger("MAC")),
   ue_manager(cfg.rnti_table),
-  pdu_handler(cfg.ul_ccch_notifier, cfg.ue_exec_mapper, cfg.sched, ue_manager, cfg.rnti_table, cfg.pcap)
+  pdu_handler(
+      cfg.ul_ccch_notifier, cfg.ue_exec_mapper, cfg.sched, ue_manager, cfg.rnti_table, cfg.pcap, cfg.ntn_position_mng)
 {
 }
 

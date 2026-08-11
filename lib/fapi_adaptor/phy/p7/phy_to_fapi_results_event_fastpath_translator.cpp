@@ -24,6 +24,9 @@
 #include "srsran/fapi/message_builders.h"
 #include "srsran/fapi/message_validators.h"
 #include "srsran/support/math/math_utils.h"
+#include <algorithm>
+#include <array>
+#include <utility>
 
 using namespace srsran;
 using namespace fapi_adaptor;
@@ -63,6 +66,73 @@ static float convert_to_dBFS(float value_dB, float full_scale_reference)
   return value_dB - convert_amplitude_to_dB(full_scale_reference);
 }
 
+static fapi::prach_rx_port_attribution_status
+to_fapi_port_attribution_status(prach_detection_result::rx_port_attribution_status status)
+{
+  switch (status) {
+    case prach_detection_result::rx_port_attribution_status::unique:
+      return fapi::prach_rx_port_attribution_status::unique;
+    case prach_detection_result::rx_port_attribution_status::ambiguous:
+      return fapi::prach_rx_port_attribution_status::ambiguous;
+    case prach_detection_result::rx_port_attribution_status::unavailable:
+    default:
+      return fapi::prach_rx_port_attribution_status::unavailable;
+  }
+}
+
+static bool has_complete_unique_ofh_context(const prach_buffer_context& context)
+{
+  if (!context.verified_rx_contexts || context.verified_rx_contexts->empty() ||
+      context.verified_rx_contexts->size() != context.ports.size()) {
+    return false;
+  }
+
+  std::array<bool, MAX_PORTS> seen_buffer_ports{};
+  for (const auto& item : *context.verified_rx_contexts) {
+    if (item.authority != prach_rx_context_authority::ofh_beam_id_verified ||
+        !is_valid_verified_prach_rx_context(item) || item.buffer_port >= context.ports.size() ||
+        seen_buffer_ports[item.buffer_port]) {
+      return false;
+    }
+    if (std::count_if(context.verified_rx_contexts->begin(),
+                      context.verified_rx_contexts->end(),
+                      [&item](const auto& candidate) {
+                        return candidate.ofh_prach_eaxc == item.ofh_prach_eaxc;
+                      }) != 1) {
+      return false;
+    }
+    seen_buffer_ports[item.buffer_port] = true;
+  }
+  for (unsigned port = 0; port != context.ports.size(); ++port) {
+    if (!seen_buffer_ports[port]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static std::shared_ptr<const verified_prach_rx_context>
+select_verified_ofh_context(const prach_buffer_context& context, unsigned strongest_buffer_port)
+{
+  if (!has_complete_unique_ofh_context(context) || strongest_buffer_port >= context.ports.size()) {
+    return nullptr;
+  }
+
+  const verified_prach_rx_context* selected = nullptr;
+  for (const auto& item : *context.verified_rx_contexts) {
+    if (item.buffer_port == strongest_buffer_port) {
+      if (selected != nullptr) {
+        return nullptr;
+      }
+      selected = &item;
+    }
+  }
+  if (selected == nullptr || !selected->ofh_prach_eaxc || !selected->ofh_beam_id) {
+    return nullptr;
+  }
+  return std::shared_ptr<const verified_prach_rx_context>(context.verified_rx_contexts, selected);
+}
+
 void phy_to_fapi_results_event_fastpath_translator::on_new_prach_results(const ul_prach_results& result)
 {
   if (result.result.preambles.empty()) {
@@ -88,15 +158,13 @@ void phy_to_fapi_results_event_fastpath_translator::on_new_prach_results(const u
 
   builder.set_basic_parameters(slot.sfn(), slot.slot_index());
 
-  // NOTE: Currently not managing handle.
-  static constexpr unsigned handle = 0U;
   // NOTE: Currently not supporting PRACH multiplexed in frequency domain.
   static constexpr unsigned fd_ra_index = 0U;
   // NOTE: Clamp values defined in SCF-222 v4.0 Section 3.4.11 Table RACH.indication message body.
   static constexpr float            MIN_AVG_RSSI_VALUE = -140.F;
   static constexpr float            MAX_AVG_RSSI_VALUE = 30.F;
   fapi::rach_indication_pdu_builder builder_pdu        = builder.add_pdu(
-      handle,
+      result.context.handle,
       result.context.start_symbol,
       slot.slot_index(),
       fd_ra_index,
@@ -104,6 +172,10 @@ void phy_to_fapi_results_event_fastpath_translator::on_new_prach_results(const u
           convert_to_dBFS(result.result.rssi_dB, dBFS_calibration_value), MIN_AVG_RSSI_VALUE, MAX_AVG_RSSI_VALUE),
       {},
       {});
+  builder_pdu.set_ntn_calendar_position(result.context.calendar_position_valid,
+                                        result.context.calendar_cycle_index,
+                                        result.context.occasion_offset_us,
+                                        result.context.calendar_schedule_version);
 
   for (const auto& preamble : result.result.preambles) {
     // NOTE: Clamp values defined in SCF-222 v4.0 Section 3.4.11 Table RACH.indication message body.
@@ -120,13 +192,34 @@ void phy_to_fapi_results_event_fastpath_translator::on_new_prach_results(const u
       continue;
     }
 
+    fapi::prach_rx_port_attribution_status port_status =
+        to_fapi_port_attribution_status(preamble.port_attribution.status);
+    std::optional<uint8_t>                           strongest_physical_port;
+    std::optional<float>                             strongest_to_second_margin_dB;
+    std::shared_ptr<const verified_prach_rx_context> verified_rx_context;
+    if ((port_status != fapi::prach_rx_port_attribution_status::unavailable) &&
+        (preamble.port_attribution.strongest_port_index < result.context.ports.size())) {
+      strongest_physical_port       = result.context.ports[preamble.port_attribution.strongest_port_index];
+      strongest_to_second_margin_dB = preamble.port_attribution.strongest_to_second_margin_dB;
+      if (port_status == fapi::prach_rx_port_attribution_status::unique) {
+        verified_rx_context =
+            select_verified_ofh_context(result.context, preamble.port_attribution.strongest_port_index);
+      }
+    } else {
+      port_status = fapi::prach_rx_port_attribution_status::unavailable;
+    }
+
     builder_pdu.add_preamble(preamble.preamble_index,
                              {},
                              TA_ns,
                              std::clamp(convert_to_dBFS(preamble.preamble_power_dB, dBFS_calibration_value),
                                         MIN_PREAMBLE_POWER_VALUE,
                                         MAX_PREAMBLE_POWER_VALUE),
-                             {});
+                             {},
+                             port_status,
+                             strongest_physical_port,
+                             strongest_to_second_margin_dB,
+                             std::move(verified_rx_context));
   }
 
   error_type<fapi::validator_report> validation_result = validate_rach_indication(msg);

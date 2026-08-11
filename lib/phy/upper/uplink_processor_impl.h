@@ -215,6 +215,9 @@ private:
   // See uplink_slot_processor interface for documentation.
   void process_prach(shared_prach_buffer buffer, const prach_buffer_context& context) override;
 
+  /// Runs one accepted PRACH detector task and publishes its result.
+  void run_prach_task(const shared_prach_buffer& buffer, const prach_buffer_context& context);
+
   // See uplink_slot_processor interface for documentation.
   void discard_slot() override;
 

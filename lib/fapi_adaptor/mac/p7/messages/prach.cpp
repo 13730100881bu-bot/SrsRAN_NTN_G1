@@ -43,16 +43,21 @@ void srsran::fapi_adaptor::convert_prach_mac_to_fapi(fapi::ul_prach_pdu_builder&
   builder.set_basic_parameters(
       mac_pdu.pci, nof_prach_occasions, mac_pdu.format, mac_pdu.index_fd_ra, mac_pdu.start_symbol, mac_pdu.nof_cs);
 
-  // NOTE: Parameter not used for now, setting value to 0.
-  static constexpr unsigned handle = 0;
   // NOTE: As only one configuration is supported, the prach res config index is set to 0.
   static constexpr unsigned prach_res_config_index = 0;
   // NOTE: Only supporting PHY context.
   static constexpr fapi::prach_config_scope_type context = fapi::prach_config_scope_type::phy_context;
-  builder.set_maintenance_v3_basic_parameters(handle,
+  builder.set_maintenance_v3_basic_parameters(mac_pdu.handle,
                                               context,
                                               prach_res_config_index,
                                               mac_pdu.nof_fd_ra,
                                               mac_pdu.start_preamble_index,
                                               mac_pdu.nof_preamble_indexes);
+  builder.set_rx_port_attribution_parameters(mac_pdu.enable_rx_port_attribution,
+                                             mac_pdu.rx_port_attribution_unique_margin_dB);
+  builder.set_ntn_calendar_position(
+      mac_pdu.calendar_position_valid,
+      mac_pdu.calendar_cycle_index,
+      mac_pdu.occasion_offset_us,
+      mac_pdu.calendar_schedule_version);
 }

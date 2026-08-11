@@ -56,6 +56,8 @@ struct transmitter_config {
   static_vector<unsigned, MAX_NOF_SUPPORTED_EAXC> prach_eaxc;
   /// PRACH Contol-Plane enabled flag.
   bool is_prach_cp_enabled;
+  /// Enables slot-specific NTN PRACH BeamId and receive-context tracking.
+  bool is_prach_beam_context_enabled = false;
   /// Destination MAC address.
   ether::mac_address mac_dst_address;
   /// Source MAC address.

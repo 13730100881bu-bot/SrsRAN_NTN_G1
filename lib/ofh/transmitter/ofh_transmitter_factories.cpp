@@ -189,7 +189,8 @@ resolve_transmitter_dependencies(const transmitter_config&                      
                                  std::shared_ptr<uplink_context_repository>              ul_slot_context_repo,
                                  std::shared_ptr<uplink_cplane_context_repository>       ul_cp_context_repo,
                                  std::shared_ptr<uplink_cplane_context_repository>       prach_cp_context_repo,
-                                 std::shared_ptr<uplink_notified_grid_symbol_repository> notifier_symbol_repo)
+                                 std::shared_ptr<uplink_notified_grid_symbol_repository> notifier_symbol_repo,
+                                 std::shared_ptr<prach_beam_context_provider>            prach_beam_context_source)
 {
   transmitter_impl_dependencies dependencies;
 
@@ -234,7 +235,8 @@ resolve_transmitter_dependencies(const transmitter_config&                      
   dependencies.ul_slot_repo         = std::move(ul_slot_context_repo);
   dependencies.ul_prach_repo        = std::move(prach_context_repo);
   dependencies.eth_transmitter      = std::move(eth_transmitter);
-  dependencies.notifier_symbol_repo = std::move(notifier_symbol_repo);
+  dependencies.notifier_symbol_repo       = std::move(notifier_symbol_repo);
+  dependencies.prach_beam_context_source = std::move(prach_beam_context_source);
 
   return dependencies;
 }
@@ -250,7 +252,8 @@ srsran::ofh::create_transmitter(const transmitter_config&                       
                                 std::shared_ptr<uplink_context_repository>              ul_slot_context_repo,
                                 std::shared_ptr<uplink_cplane_context_repository>       ul_cp_context_repo,
                                 std::shared_ptr<uplink_cplane_context_repository>       prach_cp_context_repo,
-                                std::shared_ptr<uplink_notified_grid_symbol_repository> notifier_symbol_repo)
+                                std::shared_ptr<uplink_notified_grid_symbol_repository> notifier_symbol_repo,
+                                std::shared_ptr<prach_beam_context_provider>            prach_beam_context_source)
 {
   return std::make_unique<transmitter_impl>(transmitter_cfg,
                                             resolve_transmitter_dependencies(transmitter_cfg,
@@ -263,5 +266,6 @@ srsran::ofh::create_transmitter(const transmitter_config&                       
                                                                              std::move(ul_slot_context_repo),
                                                                              std::move(ul_cp_context_repo),
                                                                              std::move(prach_cp_context_repo),
-                                                                             std::move(notifier_symbol_repo)));
+                                                                             std::move(notifier_symbol_repo),
+                                                                             std::move(prach_beam_context_source)));
 }

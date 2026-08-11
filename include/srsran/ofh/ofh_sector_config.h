@@ -34,6 +34,7 @@
 #include "srsran/ran/bs_channel_bandwidth.h"
 #include "srsran/ran/cyclic_prefix.h"
 #include "srsran/srslog/srslog.h"
+#include <memory>
 #include <string>
 
 namespace srsran {
@@ -43,6 +44,7 @@ class task_executor;
 namespace ofh {
 
 class error_notifier;
+class prach_beam_context_provider;
 
 /// Open Fronthaul sector configuration.
 struct sector_configuration {
@@ -90,6 +92,8 @@ struct sector_configuration {
 
   /// Enables the Control-Plane PRACH message signalling.
   bool is_prach_control_plane_enabled = false;
+  /// True only when the RU declares end-to-end support for PRACH Type-3 BeamId.
+  bool supports_prach_beam_id = false;
   /// Ignore the start symbol value received in the PRACH U-Plane packets.
   bool ignore_prach_start_symbol = false;
   /// If set to true, the payload size encoded in a eCPRI header is ignored.
@@ -147,6 +151,8 @@ struct sector_dependencies {
   task_executor* uplink_executor = nullptr;
   /// User-Plane received symbol notifier.
   uplane_rx_symbol_notifier* notifier = nullptr;
+  /// Optional slot-specific NTN PRACH BeamId provider.
+  std::shared_ptr<prach_beam_context_provider> prach_beam_context_source;
   /// Optional Ethernet transmitter.
   std::optional<std::unique_ptr<ether::transmitter>> eth_transmitter;
   /// Optional Ethernet receiver.

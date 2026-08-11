@@ -31,11 +31,16 @@
 #include <chrono>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace srsran {
+
+namespace ofh {
+class prach_beam_context_provider;
+}
 
 class mac_cell_manager;
 class mac_ue_configurator;
@@ -122,7 +127,10 @@ struct mac_ntn_access_calendar_cell {
 
 struct mac_ntn_access_calendar_update {
   mac_ntn_access_calendar_operation operation = mac_ntn_access_calendar_operation::query;
+  std::string                       satellite_id;
+  uint64_t                          catalog_version = 0;
   uint64_t                          schedule_version = 0;
+  std::string                       source_content_hash;
   std::string                       calendar_hash;
   std::chrono::system_clock::time_point activation_epoch{};
   std::chrono::system_clock::time_point valid_until{};
@@ -180,6 +188,9 @@ public:
   /// "applied" proves scheduler software state only; it is not RU/RF telemetry.
   virtual mac_ntn_access_calendar_result
   apply_ntn_access_calendar_update(const mac_ntn_access_calendar_update& request) = 0;
+
+  /// Returns the optional slot-specific OFH PRACH BeamId provider used by an NTN receive mapping.
+  virtual std::shared_ptr<ofh::prach_beam_context_provider> get_ntn_prach_beam_context_provider() { return {}; }
 };
 
 } // namespace srsran

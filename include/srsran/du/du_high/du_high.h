@@ -28,8 +28,12 @@
 #include "srsran/mac/mac_cell_slot_handler.h"
 #include "srsran/mac/mac_pdu_handler.h"
 #include "srsran/ran/du_types.h"
+#include <memory>
 
 namespace srsran {
+namespace ofh {
+class prach_beam_context_provider;
+}
 namespace srs_du {
 
 class du_configurator;
@@ -70,6 +74,9 @@ public:
 
   /// Returns handler to get Cell MAC slot-time mapper.
   virtual du_manager_time_mapper_accessor& get_du_manager_time_mapper_accessor() = 0;
+
+  /// Returns the optional NTN PRACH BeamId provider owned by MAC.
+  virtual std::shared_ptr<ofh::prach_beam_context_provider> get_ntn_prach_beam_context_provider() { return {}; }
 };
 
 } // namespace srs_du

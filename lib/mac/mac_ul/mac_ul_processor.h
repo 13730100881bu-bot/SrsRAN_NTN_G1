@@ -33,6 +33,7 @@
 namespace srsran {
 
 class timer_manager;
+class mac_ntn_initial_ul_position_manager;
 
 struct mac_ul_config {
   task_executor&                      ctrl_exec;
@@ -42,6 +43,7 @@ struct mac_ul_config {
   du_rnti_table&                      rnti_table;
   mac_pcap&                           pcap;
   timer_manager&                      timers;
+  mac_ntn_initial_ul_position_manager* ntn_position_mng = nullptr;
 };
 
 class mac_ul_processor final : public mac_ul_configurator, public mac_pdu_handler

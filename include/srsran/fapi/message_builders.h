@@ -42,6 +42,7 @@
 #include "srsran/support/math/math_utils.h"
 #include "srsran/support/shared_transport_block.h"
 #include <algorithm>
+#include <utility>
 
 namespace srsran {
 namespace fapi {
@@ -1229,7 +1230,7 @@ public:
 
   /// Sets the basic parameters of the RACH.indication PDU and returns a reference to the builder.
   /// \note These parameters are specified in SCF-222 v4.0 section 3.4.11 in table RACH.indication message body.
-  rach_indication_pdu_builder& set_basic_params(uint16_t             handle,
+  rach_indication_pdu_builder& set_basic_params(uint32_t             handle,
                                                 uint8_t              symbol_index,
                                                 uint8_t              slot_index,
                                                 uint8_t              ra_index,
@@ -1269,15 +1270,34 @@ public:
     return *this;
   }
 
+  /// Sets the internal NTN calendar position echoed from the corresponding PRACH request.
+  rach_indication_pdu_builder&
+  set_ntn_calendar_position(bool     valid,
+                            uint64_t calendar_cycle_index,
+                            uint32_t occasion_offset_us,
+                            uint64_t calendar_schedule_version = 0)
+  {
+    pdu.calendar_position_valid = valid;
+    pdu.calendar_schedule_version = calendar_schedule_version;
+    pdu.calendar_cycle_index    = calendar_cycle_index;
+    pdu.occasion_offset_us      = occasion_offset_us;
+    return *this;
+  }
+
   /// Adds a preamble to the RACH.indication PDU and returns a reference to the builder.
   /// \note These parameters are specified in SCF-222 v4.0 section 3.4.11 in table RACH.indication message body.
   /// \note Units for timing advace offset parameter are specified in SCF-222 v4.0 section 3.4.11 in table
   /// RACH.indication message body, and this function expect this units.
-  rach_indication_pdu_builder& add_preamble(unsigned                preamble_index,
-                                            std::optional<unsigned> timing_advance_offset,
-                                            std::optional<uint32_t> timing_advance_offset_ns,
-                                            std::optional<float>    preamble_power,
-                                            std::optional<float>    preamble_snr)
+  rach_indication_pdu_builder&
+  add_preamble(unsigned                         preamble_index,
+               std::optional<unsigned>          timing_advance_offset,
+               std::optional<uint32_t>          timing_advance_offset_ns,
+               std::optional<float>             preamble_power,
+               std::optional<float>             preamble_snr,
+               prach_rx_port_attribution_status port_attribution_status = prach_rx_port_attribution_status::unavailable,
+               std::optional<uint8_t>           strongest_rx_port       = std::nullopt,
+               std::optional<float>             strongest_to_second_margin_dB = std::nullopt,
+               std::shared_ptr<const verified_prach_rx_context> verified_rx_context = nullptr)
 
   {
     auto& preamble = pdu.preambles.emplace_back();
@@ -1303,6 +1323,13 @@ public:
 
     preamble.preamble_snr = static_cast<uint8_t>(snr);
 
+    preamble.port_attribution_status = port_attribution_status;
+    preamble.strongest_rx_port =
+        strongest_rx_port.has_value() ? strongest_rx_port.value() : std::numeric_limits<uint8_t>::max();
+    preamble.strongest_to_second_margin_dB =
+        strongest_to_second_margin_dB.has_value() ? strongest_to_second_margin_dB.value() : 0.0F;
+    preamble.verified_rx_context = std::move(verified_rx_context);
+
     return *this;
   }
 };
@@ -1327,7 +1354,7 @@ public:
 
   /// Adds a PDU to the RACH.indication message and returns a reference to the builder.
   /// \note These parameters are specified in SCF-222 v4.0 section 3.4.11 in table RACH.indication message body.
-  rach_indication_pdu_builder add_pdu(uint16_t             handle,
+  rach_indication_pdu_builder add_pdu(uint32_t             handle,
                                       uint8_t              symbol_index,
                                       uint8_t              slot_index,
                                       uint8_t              ra_index,
@@ -2149,6 +2176,28 @@ public:
         (start_preamble_index) ? start_preamble_index.value() : std::numeric_limits<uint8_t>::max();
     v3.num_preamble_indices = num_preambles_indices;
 
+    return *this;
+  }
+
+  /// Sets the internal optional receive-port attribution request.
+  ul_prach_pdu_builder& set_rx_port_attribution_parameters(bool enabled, float unique_margin_dB)
+  {
+    pdu.enable_rx_port_attribution           = enabled;
+    pdu.rx_port_attribution_unique_margin_dB = unique_margin_dB;
+    return *this;
+  }
+
+  /// Sets the internal NTN calendar position carried with this PRACH request.
+  ul_prach_pdu_builder&
+  set_ntn_calendar_position(bool     valid,
+                            uint64_t calendar_cycle_index,
+                            uint32_t occasion_offset_us,
+                            uint64_t calendar_schedule_version = 0)
+  {
+    pdu.calendar_position_valid = valid;
+    pdu.calendar_schedule_version = calendar_schedule_version;
+    pdu.calendar_cycle_index    = calendar_cycle_index;
+    pdu.occasion_offset_us      = occasion_offset_us;
     return *this;
   }
 

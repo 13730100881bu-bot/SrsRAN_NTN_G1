@@ -24,10 +24,16 @@
 
 #include "srsran/adt/static_vector.h"
 #include "srsran/fapi/messages/base_message.h"
+#include "srsran/ran/prach/verified_prach_rx_context.h"
 #include "srsran/ran/rnti.h"
+#include <limits>
+#include <memory>
 
 namespace srsran {
 namespace fapi {
+
+/// Internal receive-port attribution status for a detected PRACH preamble.
+enum class prach_rx_port_attribution_status : uint8_t { unavailable, unique, ambiguous };
 
 /// RACH indication pdu preamble.
 struct rach_indication_pdu_preamble {
@@ -36,6 +42,14 @@ struct rach_indication_pdu_preamble {
   uint32_t timing_advance_offset_ns;
   uint32_t preamble_pwr;
   uint8_t  preamble_snr;
+  /// Optional receive-port attribution produced by the upper PHY.
+  prach_rx_port_attribution_status port_attribution_status = prach_rx_port_attribution_status::unavailable;
+  /// Physical receive-port identifier. Set to the maximum uint8_t value when unavailable.
+  uint8_t strongest_rx_port = std::numeric_limits<uint8_t>::max();
+  /// Power difference between the strongest and second strongest receive ports, in dB.
+  float strongest_to_second_margin_dB = 0.0F;
+  /// OFH position metadata selected by an unambiguous detector port. Empty for the standard and legacy paths.
+  std::shared_ptr<const verified_prach_rx_context> verified_rx_context;
 };
 
 /// RACH indication pdu.
@@ -43,7 +57,7 @@ struct rach_indication_pdu {
   /// Maximum number of supported preambles per slot.
   static constexpr unsigned MAX_NUM_PREAMBLES = 64;
 
-  uint16_t handle;
+  uint32_t handle = 0;
   uint8_t  symbol_index;
   uint8_t  slot_index;
   uint8_t  ra_index;
@@ -51,6 +65,11 @@ struct rach_indication_pdu {
   uint32_t                                                       avg_rssi;
   uint16_t                                                       rsrp;
   uint8_t                                                        avg_snr;
+  /// Internal NTN calendar position echoed from the corresponding PRACH request.
+  bool     calendar_position_valid = false;
+  uint64_t calendar_schedule_version = 0;
+  uint64_t calendar_cycle_index    = 0;
+  uint32_t occasion_offset_us      = 0;
   static_vector<rach_indication_pdu_preamble, MAX_NUM_PREAMBLES> preambles;
 };
 

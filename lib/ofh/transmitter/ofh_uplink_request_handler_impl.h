@@ -59,6 +59,8 @@ struct uplink_request_handler_impl_config {
   tx_window_timing_parameters tx_timing_params;
   /// If set to true, logs late events as warnings, otherwise as info.
   bool enable_log_warnings_for_lates;
+  /// Enables authoritative per-eAxC BeamId and access-calendar context for PRACH requests.
+  bool is_prach_beam_context_enabled = false;
 };
 
 /// Uplink request handler implmentation dependencies.
@@ -77,6 +79,8 @@ struct uplink_request_handler_impl_dependencies {
   std::unique_ptr<data_flow_cplane_scheduling_commands> data_flow;
   /// Ethernet frame pool.
   std::shared_ptr<ether::eth_frame_pool> frame_pool;
+  /// Optional provider of slot-specific BeamId and access-calendar context.
+  std::shared_ptr<prach_beam_context_provider> prach_beam_context_source;
 };
 
 /// Open Fronthaul uplink request handler.
@@ -111,9 +115,11 @@ private:
   std::shared_ptr<uplink_notified_grid_symbol_repository> notifier_symbol_repo;
   std::unique_ptr<data_flow_cplane_scheduling_commands>   data_flow;
   std::shared_ptr<ether::eth_frame_pool>                  frame_pool;
+  std::shared_ptr<prach_beam_context_provider>            prach_beam_context_source;
   error_notifier&                                         err_notifier;
   uplink_request_handler_metrics_collector                metrics_collector;
   bool                                                    enable_log_warnings_for_lates;
+  const bool                                              is_prach_beam_context_enabled;
 };
 
 } // namespace ofh

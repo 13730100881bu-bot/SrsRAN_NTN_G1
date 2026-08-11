@@ -414,7 +414,9 @@ static prach_detector::configuration get_prach_dectector_config_from(const prach
   } else if (config.format == prach_format_type::three) {
     config.ra_scs = prach_subcarrier_spacing::kHz5;
   }
-  config.nof_rx_ports = context.ports.size();
+  config.nof_rx_ports                      = context.ports.size();
+  config.port_attribution.enabled          = context.enable_rx_port_attribution;
+  config.port_attribution.unique_margin_dB = context.rx_port_attribution_unique_margin_dB;
 
   return config;
 }

@@ -27,9 +27,12 @@ using namespace srsran;
 
 mac_impl::mac_impl(const mac_config& params) :
   rnti_table(params.mac_cfg.initial_crnti),
+  ntn_initial_ul_position_mng(
+      std::make_shared<mac_ntn_initial_ul_position_manager>(params.mac_cfg.ntn_initial_ul_rx_mapping)),
   mac_sched(std::make_unique<srsran_scheduler_adapter>(
       srsran_mac_sched_config{params.mac_cfg, params.ctrl_exec, params.timers.get_timer_manager(), params.sched_cfg},
-      rnti_table)),
+      rnti_table,
+      ntn_initial_ul_position_mng.get())),
   dl_unit(mac_dl_config{params.ue_exec_mapper,
                         params.cell_exec_mapper,
                         params.ctrl_exec,
@@ -44,7 +47,8 @@ mac_impl::mac_impl(const mac_config& params) :
                         *mac_sched,
                         rnti_table,
                         params.pcap,
-                        params.timers.get_timer_manager()}),
+                        params.timers.get_timer_manager(),
+                        ntn_initial_ul_position_mng.get()}),
   ctrl_unit(mac_control_config{params.ul_ccch_notifier,
                                params.ctrl_exec,
                                params.timers,

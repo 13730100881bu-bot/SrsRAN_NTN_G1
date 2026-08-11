@@ -32,6 +32,9 @@
 #include "srsran/ran/transform_precoding/transform_precoding_helpers.h"
 #include "srsran/rlc/rlc_config.h"
 #include <algorithm>
+#include <cmath>
+#include <limits>
+#include <set>
 
 using namespace srsran;
 
@@ -1530,6 +1533,100 @@ static bool validate_qos_config(span<const du_high_unit_qos_config> config)
   return true;
 }
 
+static bool validate_ntn_initial_ul_rx_mapping(const du_high_unit_ntn_initial_ul_rx_mapping_config& config)
+{
+  if (config.entries.size() > 1024U) {
+    fmt::print("NTN Initial UL receive mapping cannot contain more than 1024 entries.\n");
+    return false;
+  }
+  if (!config.enabled) {
+    return true;
+  }
+
+  if (config.version == 0) {
+    fmt::print("NTN Initial UL receive mapping version must be non-zero when enabled.\n");
+    return false;
+  }
+  if (config.hash.empty() || config.hash.size() > 128) {
+    fmt::print("NTN Initial UL receive mapping hash must contain 1..128 bytes.\n");
+    return false;
+  }
+  if (!std::isfinite(config.unique_margin_db) || config.unique_margin_db < 0.0F || config.unique_margin_db > 60.0F) {
+    fmt::print("NTN Initial UL receive mapping unique_margin_db must be finite and in the range 0..60 dB.\n");
+    return false;
+  }
+  if (config.entries.empty()) {
+    fmt::print("NTN Initial UL receive mapping must contain at least one entry when enabled.\n");
+    return false;
+  }
+  std::set<std::pair<uint64_t, unsigned>> logical_ports;
+  std::set<std::pair<uint64_t, unsigned>> physical_ports;
+  std::set<std::pair<uint64_t, unsigned>> ofh_eaxcs;
+  std::set<std::pair<uint64_t, unsigned>> ofh_beam_ids;
+  std::map<uint64_t, unsigned>             entries_per_nci;
+
+  for (const du_high_unit_ntn_initial_ul_rx_mapping_entry& entry : config.entries) {
+    if (!nr_cell_identity::create(entry.nci).has_value()) {
+      fmt::print("Invalid 36-bit NCI in NTN Initial UL receive mapping: {}.\n", entry.nci);
+      return false;
+    }
+    if (entry.cell_local_port >= std::numeric_limits<uint16_t>::max() || entry.physical_rx_port > 254U) {
+      fmt::print("NTN Initial UL logical ports must be in 0..65534 and physical receive ports in 0..254.\n");
+      return false;
+    }
+    if (++entries_per_nci[entry.nci] > 16U) {
+      fmt::print("NTN Initial UL receive mapping cannot contain more than 16 ports for one NCI.\n");
+      return false;
+    }
+    if (!logical_ports.emplace(entry.nci, entry.cell_local_port).second) {
+      fmt::print("Duplicate NCI/cell_local_port in NTN Initial UL receive mapping: {}/{}.\n",
+                 entry.nci,
+                 entry.cell_local_port);
+      return false;
+    }
+    if (!physical_ports.emplace(entry.nci, entry.physical_rx_port).second) {
+      fmt::print("Duplicate NCI/physical_rx_port in NTN Initial UL receive mapping: {}/{}.\n",
+                 entry.nci,
+                 entry.physical_rx_port);
+      return false;
+    }
+
+    if (entry.backend == "sdr") {
+      if (entry.prach_eaxc.has_value() || entry.beam_id.has_value()) {
+        fmt::print("SDR NTN Initial UL receive mappings cannot define prach_eaxc or beam_id.\n");
+        return false;
+      }
+      continue;
+    }
+    if (entry.backend != "ofh") {
+      fmt::print("NTN Initial UL receive mapping backend must be either 'sdr' or 'ofh'.\n");
+      return false;
+    }
+    if (!entry.prach_eaxc.has_value() || !entry.beam_id.has_value()) {
+      fmt::print("OFH NTN Initial UL receive mappings require both prach_eaxc and beam_id.\n");
+      return false;
+    }
+    if (entry.prach_eaxc.value() >= 32U || entry.beam_id.value() > 0x7fffU) {
+      fmt::print("OFH NTN Initial UL receive mapping requires prach_eaxc 0..31 and BeamId 0..32767.\n");
+      return false;
+    }
+    if (!ofh_eaxcs.emplace(entry.nci, entry.prach_eaxc.value()).second) {
+      fmt::print("Duplicate NCI/prach_eaxc in NTN Initial UL receive mapping: {}/{}.\n",
+                 entry.nci,
+                 entry.prach_eaxc.value());
+      return false;
+    }
+    if (!ofh_beam_ids.emplace(entry.nci, entry.beam_id.value()).second) {
+      fmt::print("Duplicate NCI/BeamId in NTN Initial UL receive mapping: {}/{}.\n",
+                 entry.nci,
+                 entry.beam_id.value());
+      return false;
+    }
+  }
+
+  return true;
+}
+
 bool srsran::validate_du_high_config(const du_high_unit_config& config)
 {
   if (!validate_cells_unit_config(config.cells_cfg, config.gnb_id)) {
@@ -1549,6 +1646,10 @@ bool srsran::validate_du_high_config(const du_high_unit_config& config)
   }
 
   if (!validate_pcap_configs(config)) {
+    return false;
+  }
+
+  if (!validate_ntn_initial_ul_rx_mapping(config.ntn_initial_ul_rx_mapping)) {
     return false;
   }
 

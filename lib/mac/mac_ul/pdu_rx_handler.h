@@ -34,6 +34,8 @@
 
 namespace srsran {
 
+class mac_ntn_initial_ul_position_manager;
+
 /// Stores MAC RX PDU, as well as any contextual or temporary information related to the PDU decoding.
 struct decoded_mac_rx_pdu {
   decoded_mac_rx_pdu() = default;
@@ -84,7 +86,8 @@ public:
                  mac_scheduler_ce_info_handler&      sched_,
                  mac_ul_ue_manager&                  ue_manager_,
                  du_rnti_table&                      rnti_table_,
-                 mac_pcap&                           pcap_);
+                 mac_pcap&                           pcap_,
+                 mac_ntn_initial_ul_position_manager* ntn_position_mng_ = nullptr);
 
   /// Decode MAC Rx PDU, log contents and handle subPDUs.
   /// \param sl_rx Slot when MAC UL PDU was received.
@@ -138,6 +141,7 @@ private:
   mac_ul_ue_manager&                  ue_manager;
   du_rnti_table&                      rnti_table;
   mac_pcap&                           pcap;
+  mac_ntn_initial_ul_position_manager* ntn_position_mng;
 };
 
 } // namespace srsran

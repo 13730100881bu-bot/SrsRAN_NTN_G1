@@ -126,7 +126,11 @@ void closed_rx_window_handler::handle_prach_context(slot_symbol_point symbol_poi
 
   const auto& ctx_value = context->context;
 
-  notifier->on_new_prach_window_data(ctx_value, std::move(context->buffer));
+  if (context->verified_contexts) {
+    notifier->on_new_prach_window_data(ctx_value, std::move(context->buffer), *context->verified_contexts);
+  } else {
+    notifier->on_new_prach_window_data(ctx_value, std::move(context->buffer));
+  }
 
   // Increase the metrics counter.
   nof_missed_prach_contexts.fetch_add(1, std::memory_order_relaxed);

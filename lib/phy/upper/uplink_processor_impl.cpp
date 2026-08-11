@@ -33,19 +33,92 @@
 
 using namespace srsran;
 
+namespace {
+
+/// PRACH context as it existed before optional receive-provenance metadata was added. Keeping this compact snapshot
+/// allows the default terrestrial executor closure to retain its original bounded, allocation-free behavior.
+struct legacy_prach_task_context {
+  static_vector<uint8_t, MAX_PORTS> ports;
+  slot_point                        slot;
+  uint16_t                          nof_prb_ul_grid;
+  uint16_t                          root_sequence_index;
+  uint16_t                          rb_offset;
+  uint8_t                           sector;
+  uint8_t                           start_symbol;
+  prach_format_type                 format;
+  uint8_t                           nof_td_occasions;
+  uint8_t                           nof_fd_occasions;
+  subcarrier_spacing                pusch_scs;
+  restricted_set_config            restricted_set;
+  uint8_t                           zero_correlation_zone;
+  uint8_t                           start_preamble_index;
+  uint8_t                           nof_preamble_indices;
+
+  explicit legacy_prach_task_context(const prach_buffer_context& context) :
+    ports(context.ports),
+    slot(context.slot),
+    nof_prb_ul_grid(context.nof_prb_ul_grid),
+    root_sequence_index(context.root_sequence_index),
+    rb_offset(context.rb_offset),
+    sector(context.sector),
+    start_symbol(context.start_symbol),
+    format(context.format),
+    nof_td_occasions(context.nof_td_occasions),
+    nof_fd_occasions(context.nof_fd_occasions),
+    pusch_scs(context.pusch_scs),
+    restricted_set(context.restricted_set),
+    zero_correlation_zone(context.zero_correlation_zone),
+    start_preamble_index(context.start_preamble_index),
+    nof_preamble_indices(context.nof_preamble_indices)
+  {
+  }
+
+  prach_buffer_context materialize() const
+  {
+    prach_buffer_context context;
+    context.ports                  = ports;
+    context.slot                   = slot;
+    context.nof_prb_ul_grid        = nof_prb_ul_grid;
+    context.root_sequence_index    = root_sequence_index;
+    context.rb_offset              = rb_offset;
+    context.sector                 = sector;
+    context.start_symbol           = start_symbol;
+    context.format                 = format;
+    context.nof_td_occasions       = nof_td_occasions;
+    context.nof_fd_occasions       = nof_fd_occasions;
+    context.pusch_scs              = pusch_scs;
+    context.restricted_set         = restricted_set;
+    context.zero_correlation_zone  = zero_correlation_zone;
+    context.start_preamble_index   = start_preamble_index;
+    context.nof_preamble_indices   = nof_preamble_indices;
+    return context;
+  }
+};
+
+bool has_receive_provenance(const prach_buffer_context& context)
+{
+  return context.handle != 0 || context.enable_rx_port_attribution || context.calendar_position_valid ||
+         context.calendar_schedule_version != 0 || context.calendar_cycle_index != 0 ||
+         context.occasion_offset_us != 0 || context.verified_rx_contexts != nullptr;
+}
+
+} // namespace
+
 /// \brief Returns a PRACH detector slot configuration using the given PRACH buffer context.
 static prach_detector::configuration get_prach_dectector_config_from_prach_context(const prach_buffer_context& context)
 {
   prach_detector::configuration config;
-  config.root_sequence_index   = context.root_sequence_index;
-  config.format                = context.format;
-  config.restricted_set        = context.restricted_set;
-  config.zero_correlation_zone = context.zero_correlation_zone;
-  config.start_preamble_index  = context.start_preamble_index;
-  config.nof_preamble_indices  = context.nof_preamble_indices;
-  config.ra_scs                = to_ra_subcarrier_spacing(context.pusch_scs);
-  config.nof_rx_ports          = context.ports.size();
-  config.slot                  = context.slot;
+  config.root_sequence_index               = context.root_sequence_index;
+  config.format                            = context.format;
+  config.restricted_set                    = context.restricted_set;
+  config.zero_correlation_zone             = context.zero_correlation_zone;
+  config.start_preamble_index              = context.start_preamble_index;
+  config.nof_preamble_indices              = context.nof_preamble_indices;
+  config.ra_scs                            = to_ra_subcarrier_spacing(context.pusch_scs);
+  config.nof_rx_ports                      = context.ports.size();
+  config.slot                              = context.slot;
+  config.port_attribution.enabled          = context.enable_rx_port_attribution;
+  config.port_attribution.unique_margin_dB = context.rx_port_attribution_unique_margin_dB;
 
   return config;
 }
@@ -252,27 +325,39 @@ void uplink_processor_impl::process_prach(shared_prach_buffer buffer, const prac
     return;
   }
 
-  bool success = task_executors.prach_executor.execute(
-      [this, buffer_ = std::move(buffer), context_]() noexcept SRSRAN_RTSAN_NONBLOCKING {
-        trace_point tp = l1_ul_tracer.now();
-
-        ul_prach_results ul_results;
-        ul_results.context = context_;
-        ul_results.result  = prach->detect(*buffer_, get_prach_dectector_config_from_prach_context(context_));
-
-        // Notify the PRACH results.
-        notifier.on_new_prach_results(ul_results);
-
-        l1_ul_tracer << trace_event("process_prach", tp);
-
-        // Notify the end of the PRACH detection.
-        state_machine.on_end_prach_detection();
-      });
+  bool success = false;
+  if (!has_receive_provenance(context_)) {
+    // Preserve the original terrestrial closure shape and allocation behavior when NTN receive attribution is off.
+    success = task_executors.prach_executor.execute(
+        [this, buffer_ = std::move(buffer), context = legacy_prach_task_context{context_}]() noexcept
+        SRSRAN_RTSAN_NONBLOCKING { run_prach_task(buffer_, context.materialize()); });
+  } else {
+    // The optional immutable sidecar can outlive the RU/FAPI callback. Share the complete context only on this
+    // explicitly enabled path, without imposing a single-entry pool or queue limit on ordinary PRACH processing.
+    auto context = std::make_shared<const prach_buffer_context>(context_);
+    success      = task_executors.prach_executor.execute(
+        [this, buffer_ = std::move(buffer), context = std::move(context)]() noexcept SRSRAN_RTSAN_NONBLOCKING {
+          run_prach_task(buffer_, *context);
+        });
+  }
 
   if (!success) {
     logger.warning(current_slot.sfn(), current_slot.slot_index(), "Failed to execute PRACH. Ignoring detection.");
     state_machine.on_end_prach_detection();
   }
+}
+
+void uplink_processor_impl::run_prach_task(const shared_prach_buffer& buffer, const prach_buffer_context& context)
+{
+  trace_point tp = l1_ul_tracer.now();
+
+  ul_prach_results ul_results;
+  ul_results.context = context;
+  ul_results.result  = prach->detect(*buffer, get_prach_dectector_config_from_prach_context(context));
+
+  notifier.on_new_prach_results(ul_results);
+  l1_ul_tracer << trace_event("process_prach", tp);
+  state_machine.on_end_prach_detection();
 }
 
 void uplink_processor_impl::process_pusch(const uplink_pdu_slot_repository::pusch_pdu& pdu)

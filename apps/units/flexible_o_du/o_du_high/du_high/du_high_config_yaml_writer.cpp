@@ -866,6 +866,34 @@ static YAML::Node build_du_high_testmode_section(const du_high_unit_test_mode_co
   return node;
 }
 
+static YAML::Node
+build_ntn_initial_ul_rx_mapping_section(const du_high_unit_ntn_initial_ul_rx_mapping_config& config)
+{
+  YAML::Node node;
+  node["enabled"]          = config.enabled;
+  node["version"]          = config.version;
+  node["hash"]             = config.hash;
+  node["unique_margin_db"] = config.unique_margin_db;
+
+  YAML::Node entries(YAML::NodeType::Sequence);
+  for (const du_high_unit_ntn_initial_ul_rx_mapping_entry& config_entry : config.entries) {
+    YAML::Node entry;
+    entry["nci"]              = config_entry.nci;
+    entry["cell_local_port"]  = config_entry.cell_local_port;
+    entry["backend"]          = config_entry.backend;
+    entry["physical_rx_port"] = config_entry.physical_rx_port;
+    if (config_entry.prach_eaxc.has_value()) {
+      entry["prach_eaxc"] = config_entry.prach_eaxc.value();
+    }
+    if (config_entry.beam_id.has_value()) {
+      entry["beam_id"] = config_entry.beam_id.value();
+    }
+    entries.push_back(entry);
+  }
+  node["entries"] = entries;
+  return node;
+}
+
 void srsran::fill_du_high_config_in_yaml_schema(YAML::Node& node, const du_high_unit_config& config)
 {
   node["gnb_id"]            = config.gnb_id.id;
@@ -880,6 +908,10 @@ void srsran::fill_du_high_config_in_yaml_schema(YAML::Node& node, const du_high_
   node["du"] = build_du_section(config);
   if (config.test_mode_cfg.test_ue.rnti != rnti_t::INVALID_RNTI) {
     node["test_mode"] = build_du_high_testmode_section(config.test_mode_cfg);
+  }
+  if (config.ntn_initial_ul_rx_mapping.enabled) {
+    node["ntn_initial_ul_rx_mapping"] =
+        build_ntn_initial_ul_rx_mapping_section(config.ntn_initial_ul_rx_mapping);
   }
 
   fill_qos_section(node, config.qos_cfg);

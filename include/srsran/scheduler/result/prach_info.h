@@ -49,6 +49,20 @@ struct prach_occasion_info {
   uint8_t start_preamble_index;
   /// Number of preamble logical indices. Values: {1,...,64}.
   uint8_t nof_preamble_indexes;
+  /// Request handle echoed by the PRACH detection result. Zero preserves the legacy uncorrelated behavior.
+  uint32_t handle = 0;
+  /// Enables receive-port attribution for detected preambles.
+  bool enable_rx_port_attribution = false;
+  /// Minimum strongest-to-second-strongest power margin for a unique receive-port attribution, in dB.
+  float rx_port_attribution_unique_margin_dB = 6.0F;
+  /// Whether the following NTN calendar position was derived from the scheduler's extended slot timeline.
+  bool calendar_position_valid = false;
+  /// Immutable schedule version selected by the slot thread for this PRACH opportunity.
+  uint64_t calendar_schedule_version = 0;
+  /// Number of complete calendar cycles since the active calendar's activation slot.
+  uint64_t calendar_cycle_index = 0;
+  /// Offset of this PRACH opportunity within its calendar cycle, in microseconds.
+  uint32_t occasion_offset_us = 0;
 };
 
 } // namespace srsran

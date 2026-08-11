@@ -26,6 +26,11 @@
 #include "apps/units/flexible_o_du/split_7_2/helpers/ru_ofh_config_validator.h"
 #include "apps/units/flexible_o_du/split_8/helpers/ru_sdr_config_validator.h"
 #include "srsran/ran/prach/prach_configuration.h"
+#include "fmt/format.h"
+#include <algorithm>
+#include <iterator>
+#include <optional>
+#include <set>
 
 using namespace srsran;
 
@@ -104,6 +109,76 @@ static std::vector<ru_sdr_cell_validation_config> get_ru_sdr_validation_dependen
   return out_cfg;
 }
 
+static bool validate_dynamic_ntn_rx_mapping(const du_high_unit_config& du_cfg,
+                                            const ru_ofh_unit_config*  ofh_cfg,
+                                            bool                       is_sdr)
+{
+  const auto& mapping = du_cfg.ntn_initial_ul_rx_mapping;
+  if (!mapping.enabled) {
+    return true;
+  }
+  const char* expected_backend = is_sdr ? "sdr" : "ofh";
+  std::vector<std::set<unsigned>> mapped_buffer_ports(du_cfg.cells_cfg.size());
+  for (const auto& entry : mapping.entries) {
+    if (entry.backend != expected_backend) {
+      fmt::print("Dynamic O-DU NTN Initial UL receive mapping backend must match the selected RU type '{}'.\n",
+                 expected_backend);
+      return false;
+    }
+
+    std::optional<unsigned> cell_index;
+    for (unsigned i = 0; i != du_cfg.cells_cfg.size(); ++i) {
+      const auto& cell = du_cfg.cells_cfg[i].cell;
+      if (!cell.sector_id.has_value()) {
+        continue;
+      }
+      const auto nci = nr_cell_identity::create(du_cfg.gnb_id, cell.sector_id.value());
+      if (nci.has_value() && nci.value().value() == entry.nci) {
+        cell_index = i;
+        break;
+      }
+    }
+    if (!cell_index.has_value()) {
+      fmt::print("Dynamic O-DU NTN Initial UL mapping NCI {} is not served.\n", entry.nci);
+      return false;
+    }
+    const auto& ports = du_cfg.cells_cfg[cell_index.value()].cell.prach_cfg.ports;
+    const auto  port  = std::find(ports.begin(), ports.end(), entry.physical_rx_port);
+    if (port == ports.end()) {
+      fmt::print("Dynamic O-DU NTN Initial UL mapping physical receive port is not configured for PRACH.\n");
+      return false;
+    }
+    if (!is_sdr) {
+      if (ofh_cfg == nullptr || cell_index.value() >= ofh_cfg->cells.size()) {
+        return false;
+      }
+      const unsigned buffer_port = static_cast<unsigned>(std::distance(ports.begin(), port));
+      const auto&    ru_cell     = ofh_cfg->cells[cell_index.value()];
+      if (buffer_port >= ru_cell.ru_prach_port_id.size() || !entry.prach_eaxc.has_value() ||
+          entry.prach_eaxc.value() != ru_cell.ru_prach_port_id[buffer_port]) {
+        fmt::print("Dynamic OFH NTN Initial UL mapping requires the matching PRACH eAxC.\n");
+        return false;
+      }
+      mapped_buffer_ports[cell_index.value()].insert(buffer_port);
+    }
+  }
+  if (!is_sdr) {
+    for (unsigned i = 0; i != mapped_buffer_ports.size(); ++i) {
+      if (mapped_buffer_ports[i].empty()) {
+        continue;
+      }
+      const auto& prach_ports = du_cfg.cells_cfg[i].cell.prach_cfg.ports;
+      const auto& ru_cell     = ofh_cfg->cells[i];
+      if (mapped_buffer_ports[i].size() != prach_ports.size() ||
+          mapped_buffer_ports[i].size() != ru_cell.ru_prach_port_id.size()) {
+        fmt::print("Dynamic OFH NTN Initial UL mapping for cell {} must cover every PRACH receive port/eAxC.\n", i);
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 bool srsran::validate_dynamic_o_du_unit_config(const dynamic_o_du_unit_config& config)
 {
   if (!validate_o_du_high_config(config.odu_high_cfg)) {
@@ -117,13 +192,19 @@ bool srsran::validate_dynamic_o_du_unit_config(const dynamic_o_du_unit_config& c
 
   if (auto* ru_ofh = std::get_if<ru_ofh_unit_parsed_config>(&config.ru_cfg)) {
     auto ru_ofh_dependencies = get_ru_ofh_validation_dependencies(config.odu_high_cfg.du_high_cfg.config);
-    return validate_ru_ofh_config(ru_ofh->config, ru_ofh_dependencies);
+    return validate_ru_ofh_config(ru_ofh->config, ru_ofh_dependencies) &&
+           validate_dynamic_ntn_rx_mapping(config.odu_high_cfg.du_high_cfg.config, &ru_ofh->config, false);
   }
 
   if (auto* ru_sdr = std::get_if<ru_sdr_unit_config>(&config.ru_cfg)) {
     auto ru_sdr_dependencies = get_ru_sdr_validation_dependencies(config.odu_high_cfg.du_high_cfg.config);
-    return validate_ru_sdr_config(*ru_sdr, ru_sdr_dependencies);
+    return validate_ru_sdr_config(*ru_sdr, ru_sdr_dependencies) &&
+           validate_dynamic_ntn_rx_mapping(config.odu_high_cfg.du_high_cfg.config, nullptr, true);
   }
 
+  if (config.odu_high_cfg.du_high_cfg.config.ntn_initial_ul_rx_mapping.enabled) {
+    fmt::print("Dynamic O-DU NTN Initial UL receive mapping is unavailable with the dummy RU.\n");
+    return false;
+  }
   return true;
 }

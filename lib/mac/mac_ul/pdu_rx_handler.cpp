@@ -21,6 +21,7 @@
  */
 
 #include "pdu_rx_handler.h"
+#include "../mac_ntn_initial_ul_position_manager.h"
 #include "srsran/instrumentation/traces/up_traces.h"
 #include "srsran/srslog/srslog.h"
 #include "srsran/support/format/fmt_basic_parser.h"
@@ -77,14 +78,16 @@ pdu_rx_handler::pdu_rx_handler(mac_ul_ccch_notifier&               ccch_notifier
                                mac_scheduler_ce_info_handler&      sched_,
                                mac_ul_ue_manager&                  ue_manager_,
                                du_rnti_table&                      rnti_table_,
-                               mac_pcap&                           pcap_) :
+                               mac_pcap&                           pcap_,
+                               mac_ntn_initial_ul_position_manager* ntn_position_mng_) :
   ccch_notifier(ccch_notifier_),
   ue_exec_mapper(ue_exec_mapper_),
   logger(srslog::fetch_basic_logger("MAC")),
   sched(sched_),
   ue_manager(ue_manager_),
   rnti_table(rnti_table_),
-  pcap(pcap_)
+  pcap(pcap_),
+  ntn_position_mng(ntn_position_mng_)
 {
 }
 
@@ -307,6 +310,9 @@ bool pdu_rx_handler::handle_ccch_msg(const decoded_mac_rx_pdu& ctx, const mac_ul
   msg.tc_rnti    = ctx.pdu_rx.rnti;
   msg.cell_index = ctx.cell_index_rx;
   msg.slot_rx    = ctx.slot_rx;
+  if (ntn_position_mng != nullptr) {
+    msg.ntn_initial_ul_position = ntn_position_mng->take_for_ul_ccch(ctx.cell_index_rx, ctx.pdu_rx.rnti);
+  }
 
   if (!msg.subpdu.append(sdu.payload())) {
     logger.warning("{}: Unable to append SDU into sub-PDU", create_prefix(ctx, sdu));

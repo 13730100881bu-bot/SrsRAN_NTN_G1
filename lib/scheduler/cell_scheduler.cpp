@@ -318,8 +318,14 @@ void cell_scheduler::run_slot(slot_point sl_tx)
   if (calendar_gate != nullptr && not calendar_gate->is_allowed(sl_tx, ntn_access_calendar_purpose::ssb)) {
     res_grid[0].result.dl.bc.ssb_info.clear();
   }
-  if (calendar_gate != nullptr && not calendar_gate->is_allowed(sl_tx, ntn_access_calendar_purpose::prach)) {
-    res_grid[0].result.ul.prachs.clear();
+  if (calendar_gate != nullptr) {
+    if (not calendar_gate->is_allowed(sl_tx, ntn_access_calendar_purpose::prach)) {
+      res_grid[0].result.ul.prachs.clear();
+    } else {
+      for (unsigned i = 0; i != res_grid[0].result.ul.prachs.size(); ++i) {
+        calendar_gate->configure_prach_rx_port_attribution(sl_tx, i, res_grid[0].result.ul.prachs[i]);
+      }
+    }
   }
 
   // > Mark stop of the slot processing

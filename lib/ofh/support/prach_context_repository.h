@@ -28,6 +28,7 @@
 #include "srsran/adt/mpmc_queue.h"
 #include "srsran/adt/unique_function.h"
 #include "srsran/ofh/ofh_constants.h"
+#include "srsran/ofh/serdes/ofh_cplane_message_properties.h"
 #include "srsran/phy/support/prach_buffer.h"
 #include "srsran/phy/support/prach_buffer_context.h"
 #include "srsran/phy/support/shared_prach_buffer.h"
@@ -36,6 +37,8 @@
 #include "srsran/ran/prach/prach_preamble_information.h"
 #include "srsran/srslog/logger.h"
 #include "srsran/srsvec/copy.h"
+#include <algorithm>
+#include <array>
 #include <mutex>
 #include <numeric>
 #include <optional>
@@ -46,6 +49,8 @@ namespace ofh {
 ///  PRACH context.
 class prach_context
 {
+  enum class rx_context_state { undetermined, legacy, verified, invalid };
+
   /// PRACH buffer writer statistics.
   struct prach_buffer_writer_stats {
     prach_buffer_writer_stats(unsigned nof_ports, size_t nof_res) :
@@ -69,6 +74,8 @@ public:
     prach_buffer_context context;
     /// PRACH buffer.
     shared_prach_buffer buffer;
+    /// Per-buffer-port eAxC/calendar context. Present only when every received port was matched unambiguously.
+    std::optional<static_vector<verified_prach_uplane_context, MAX_NOF_SUPPORTED_EAXC>> verified_contexts;
   };
 
   /// Default constructor.
@@ -111,6 +118,8 @@ public:
     freq_mapping_info    = other.freq_mapping_info;
     nof_symbols          = other.nof_symbols;
     start_symbol         = other.start_symbol;
+    rx_contexts          = other.rx_contexts;
+    context_state        = other.context_state;
   }
 
   prach_context& operator=(const prach_context& other)
@@ -122,6 +131,8 @@ public:
     freq_mapping_info    = other.freq_mapping_info;
     nof_symbols          = other.nof_symbols;
     start_symbol         = other.start_symbol;
+    rx_contexts          = other.rx_contexts;
+    context_state        = other.context_state;
 
     return *this;
   }
@@ -150,7 +161,11 @@ public:
   }
 
   /// Writes the given IQ buffer corresponding to the given symbol and port.
-  void write_iq(unsigned port, unsigned symbol, unsigned re_start, span<const cbf16_t> iq_buffer)
+  void write_iq(unsigned                                     port,
+                unsigned                                     symbol,
+                unsigned                                     re_start,
+                span<const cbf16_t>                          iq_buffer,
+                std::optional<verified_prach_uplane_context> verified_context = std::nullopt)
   {
     if (is_long_preamble(context_info.context.format)) {
       // Some RUs always set PRACH symbolId to 0 when long format is used ignoring the value indicated in C-Plane.
@@ -168,6 +183,8 @@ public:
     if (port >= context_info.buffer->get_max_nof_ports()) {
       return;
     }
+
+    record_rx_context(port, std::move(verified_context));
 
     // Update the buffer.
     span<cbf16_t> prach_out_buffer = context_info.buffer->get_symbol(
@@ -196,13 +213,71 @@ public:
       return make_unexpected(default_error_t{});
     }
 
-    return {{context_info.context, std::move(context_info.buffer)}};
+    auto verified_contexts = get_verified_contexts();
+    return {{context_info.context, std::move(context_info.buffer), std::move(verified_contexts)}};
   }
 
   /// Returns the information of this PRACH context.
-  prach_context_information pop_context_information() { return {context_info.context, std::move(context_info.buffer)}; }
+  prach_context_information pop_context_information()
+  {
+    auto verified_contexts = get_verified_contexts();
+    return {context_info.context, std::move(context_info.buffer), std::move(verified_contexts)};
+  }
 
 private:
+  void record_rx_context(unsigned port, std::optional<verified_prach_uplane_context> verified_context)
+  {
+    if (context_state == rx_context_state::invalid) {
+      return;
+    }
+
+    if (!verified_context) {
+      if (context_state == rx_context_state::verified) {
+        context_state = rx_context_state::invalid;
+      } else {
+        context_state = rx_context_state::legacy;
+      }
+      return;
+    }
+
+    if (context_state == rx_context_state::legacy || port >= rx_contexts.size() ||
+        verified_context->buffer_port != port) {
+      context_state = rx_context_state::invalid;
+      return;
+    }
+
+    auto& stored = rx_contexts[port];
+    if (stored && (stored->eaxc != verified_context->eaxc || stored->buffer_port != verified_context->buffer_port ||
+                   !(stored->context == verified_context->context))) {
+      context_state = rx_context_state::invalid;
+      return;
+    }
+
+    stored        = std::move(verified_context);
+    context_state = rx_context_state::verified;
+  }
+
+  std::optional<static_vector<verified_prach_uplane_context, MAX_NOF_SUPPORTED_EAXC>>
+  get_verified_contexts() const
+  {
+    if (context_state != rx_context_state::verified || empty() ||
+        context_info.buffer->get_max_nof_ports() > rx_contexts.size()) {
+      return std::nullopt;
+    }
+
+    static_vector<verified_prach_uplane_context, MAX_NOF_SUPPORTED_EAXC> result;
+    std::array<bool, MAX_SUPPORTED_EAXC_ID_VALUE>                        seen_eaxcs{};
+    for (unsigned port = 0; port != context_info.buffer->get_max_nof_ports(); ++port) {
+      if (!rx_contexts[port] || rx_contexts[port]->eaxc >= seen_eaxcs.size() ||
+          seen_eaxcs[rx_contexts[port]->eaxc]) {
+        return std::nullopt;
+      }
+      seen_eaxcs[rx_contexts[port]->eaxc] = true;
+      result.push_back(*rx_contexts[port]);
+    }
+    return result;
+  }
+
   /// PRACH context information
   prach_context_information context_info;
   /// Statistic of written data.
@@ -215,6 +290,10 @@ private:
   unsigned nof_symbols;
   /// OFDM symbol index within the slot marking the start of PRACH preamble after the cyclic prefix.
   unsigned start_symbol;
+  /// Per-port metadata observed on received U-Plane packets.
+  std::array<std::optional<verified_prach_uplane_context>, MAX_NOF_SUPPORTED_EAXC> rx_contexts;
+  /// Whether the current buffer is legacy, fully verified or invalid/ambiguous.
+  rx_context_state context_state = rx_context_state::undetermined;
 };
 
 /// PRACH context repository.
@@ -269,10 +348,15 @@ public:
   }
 
   /// Function to write the uplink PRACH buffer.
-  void write_iq(slot_point slot, unsigned port, unsigned symbol, unsigned re_start, span<const cbf16_t> iq_buffer)
+  void write_iq(slot_point                                    slot,
+                unsigned                                      port,
+                unsigned                                      symbol,
+                unsigned                                      re_start,
+                span<const cbf16_t>                           iq_buffer,
+                std::optional<verified_prach_uplane_context> verified_context = std::nullopt)
   {
     std::lock_guard<std::mutex> lock(mutex);
-    entry(slot).write_iq(port, symbol, re_start, iq_buffer);
+    entry(slot).write_iq(port, symbol, re_start, iq_buffer, std::move(verified_context));
   }
 
   /// Returns the entry of the repository for the given slot.

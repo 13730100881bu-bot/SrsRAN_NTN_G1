@@ -268,9 +268,10 @@ static void serialize_section_3(network_order_binary_serializer&             ser
   // Write the common fields.
   serialize_section_0_1_3_5_fields(serializer, section.common_fields);
 
-  // EF and BeamId field (2 Bytes). Not supporting extensions.
-  static constexpr uint16_t ext_bytes = 0;
-  serializer.write(ext_bytes);
+  // EF and BeamId field (2 Bytes). Section extensions are not supported, therefore EF remains zero.
+  uint16_t beam_id = section.beam_id.value_or(0);
+  srsran_assert(beam_id <= MAX_CPLANE_BEAM_ID, "Invalid Open Fronthaul BeamId={}", beam_id);
+  serializer.write(beam_id);
 
   // The frequency offset (3 Bytes).
   serializer.write(uint8_t(section.frequency_offset >> 16));

@@ -31,6 +31,7 @@ static uplink_request_handler_impl_config generate_uplink_request_handler_config
   uplink_request_handler_impl_config config;
   config.sector                        = tx_config.sector;
   config.is_prach_cp_enabled           = tx_config.is_prach_cp_enabled;
+  config.is_prach_beam_context_enabled = tx_config.is_prach_beam_context_enabled;
   config.prach_eaxc                    = tx_config.prach_eaxc;
   config.ul_data_eaxc                  = tx_config.ul_eaxc;
   config.tdd_config                    = tx_config.tdd_config;
@@ -55,7 +56,8 @@ resolve_uplink_request_handler_dependencies(transmitter_impl_dependencies& tx_de
           std::move(tx_dependencies.ul_prach_repo),
           std::move(tx_dependencies.notifier_symbol_repo),
           std::move(tx_dependencies.ul_df_cplane),
-          tx_dependencies.frame_pool_ul_cp};
+          tx_dependencies.frame_pool_ul_cp,
+          std::move(tx_dependencies.prach_beam_context_source)};
 }
 
 static downlink_handler_impl_config generate_downlink_handler_config(const transmitter_config& tx_config)

@@ -55,6 +55,15 @@ public:
     // PRACH notifies all symbols at once, no need to reorder.
     notifier.on_new_prach_window_data(context, std::move(buffer));
   }
+
+  // See interface for documentation.
+  void on_new_prach_window_data(const prach_buffer_context&                 context,
+                                shared_prach_buffer                         buffer,
+                                span<const verified_prach_uplane_context>   verified_contexts) override
+  {
+    // PRACH notifies all symbols at once, no need to reorder.
+    notifier.on_new_prach_window_data(context, std::move(buffer), verified_contexts);
+  }
 };
 
 } // namespace ofh

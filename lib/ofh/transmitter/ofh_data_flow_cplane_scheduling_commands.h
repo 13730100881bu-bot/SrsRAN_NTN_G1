@@ -23,6 +23,7 @@
 #pragma once
 
 #include "ofh_data_flow_cuplane_encoding_metrics_collector.h"
+#include "srsran/ofh/serdes/ofh_cplane_message_properties.h"
 #include "srsran/ofh/serdes/ofh_message_properties.h"
 #include "srsran/ofh/transmitter/ofh_transmitter_data_flow_metrics.h"
 #include "srsran/ran/prach/prach_subcarrier_spacing.h"
@@ -56,6 +57,8 @@ struct data_flow_cplane_scheduling_prach_context {
   unsigned prach_nof_rb;
   /// Time offset to the start of PRACH.
   unsigned time_offset;
+  /// Optional local eAxC-to-beam/calendar context. Only BeamId is serialized into the type-3 message.
+  std::optional<prach_beam_context> beam_context;
 };
 
 /// Open Fronthaul Control-Plane type 1 context parameters.

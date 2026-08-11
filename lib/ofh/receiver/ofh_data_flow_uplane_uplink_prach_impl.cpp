@@ -46,7 +46,8 @@ data_flow_uplane_uplink_prach_impl::data_flow_uplane_uplink_prach_impl(
 
 bool data_flow_uplane_uplink_prach_impl::should_uplane_packet_be_filtered(
     unsigned                              eaxc,
-    const uplane_message_decoder_results& results) const
+    const uplane_message_decoder_results& results,
+    std::optional<prach_beam_context>&    beam_context) const
 {
   if (SRSRAN_UNLIKELY(!is_a_prach_message(results.params.filter_index))) {
     logger.info("Sector#{}: dropped received Open Fronthaul User-Plane packet for slot '{}' and symbol '{}' as decoded "
@@ -64,8 +65,29 @@ bool data_flow_uplane_uplink_prach_impl::should_uplane_packet_be_filtered(
     return false;
   }
 
-  const uplane_message_params& params  = results.params;
-  ul_cplane_context            context = prach_cplane_context_repo->get(params.slot, eaxc);
+  const uplane_message_params& params = results.params;
+  auto                         exact_context = prach_cplane_context_repo->get_prach(params.slot, eaxc);
+  if (SRSRAN_UNLIKELY(!exact_context)) {
+    logger.info("Sector#{}: dropped received Open Fronthaul User-Plane PRACH packet because no unambiguous current "
+                "Control-Plane context exists for slot '{}', symbol '{}' and eAxC '{}'",
+                sector_id,
+                params.slot,
+                params.symbol_id,
+                eaxc);
+    return true;
+  }
+
+  const ul_cplane_context& context = exact_context->radio_context;
+  beam_context                    = exact_context->beam_context;
+  if (beam_context && !is_valid_prach_beam_context(*beam_context)) {
+    logger.info("Sector#{}: dropped received Open Fronthaul User-Plane PRACH packet because its beam context is invalid "
+                "for slot '{}', symbol '{}' and eAxC '{}'",
+                sector_id,
+                params.slot,
+                params.symbol_id,
+                eaxc);
+    return true;
+  }
 
   // Check if the filter index is valid.
   if (SRSRAN_UNLIKELY(params.filter_index != context.filter_index)) {
@@ -116,13 +138,14 @@ void data_flow_uplane_uplink_prach_impl::decode_type1_message(unsigned eaxc, spa
     return;
   }
 
-  if (should_uplane_packet_be_filtered(eaxc, results)) {
+  std::optional<prach_beam_context> beam_context;
+  if (should_uplane_packet_be_filtered(eaxc, results, beam_context)) {
     metrics_collector.increase_dropped_messages();
 
     return;
   }
 
-  if (!prach_iq_writter.write_to_prach_buffer(eaxc, results)) {
+  if (!prach_iq_writter.write_to_prach_buffer(eaxc, results, std::move(beam_context))) {
     metrics_collector.increase_dropped_messages();
 
     return;

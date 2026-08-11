@@ -373,15 +373,30 @@ static std::optional<float> convert_fapi_to_mac_preamble_power_dB(uint32_t fapi_
   return std::nullopt;
 }
 
+static std::shared_ptr<const verified_prach_rx_context>
+convert_verified_rx_context(const std::shared_ptr<const verified_prach_rx_context>& context)
+{
+  if (!context || context->authority != prach_rx_context_authority::ofh_beam_id_verified ||
+      !is_valid_verified_prach_rx_context(*context)) {
+    return nullptr;
+  }
+  return context;
+}
+
 void fapi_to_mac_data_msg_fastpath_translator::on_rach_indication(const fapi::rach_indication_message& msg)
 {
   mac_rach_indication indication;
   indication.slot_rx = slot_point(scs, msg.sfn, msg.slot);
   for (const auto& pdu : msg.pdus) {
     mac_rach_indication::rach_occasion& occas = indication.occasions.emplace_back();
+    occas.handle                              = pdu.handle;
     occas.frequency_index                     = pdu.ra_index;
     occas.slot_index                          = pdu.slot_index;
     occas.start_symbol                        = pdu.symbol_index;
+    occas.calendar_position_valid             = pdu.calendar_position_valid;
+    occas.calendar_schedule_version           = pdu.calendar_schedule_version;
+    occas.calendar_cycle_index                = pdu.calendar_cycle_index;
+    occas.occasion_offset_us                  = pdu.occasion_offset_us;
     occas.rssi_dBFS                           = convert_fapi_to_mac_rssi_dB(pdu.avg_rssi);
 
     for (const auto& preamble : pdu.preambles) {
@@ -389,6 +404,19 @@ void fapi_to_mac_data_msg_fastpath_translator::on_rach_indication(const fapi::ra
       mac_pream.index                               = preamble.preamble_index;
       mac_pream.time_advance = phy_time_unit::from_seconds(preamble.timing_advance_offset_ns * 1e-9);
       mac_pream.pwr_dBFS     = convert_fapi_to_mac_preamble_power_dB(preamble.preamble_pwr);
+
+      const bool has_physical_port = preamble.strongest_rx_port != std::numeric_limits<uint8_t>::max();
+      if (has_physical_port && (preamble.port_attribution_status == fapi::prach_rx_port_attribution_status::unique)) {
+        mac_pream.port_attribution_status       = mac_rach_indication::rx_port_attribution_status::unique;
+        mac_pream.strongest_rx_port             = preamble.strongest_rx_port;
+        mac_pream.strongest_to_second_margin_dB = preamble.strongest_to_second_margin_dB;
+        mac_pream.verified_context               = convert_verified_rx_context(preamble.verified_rx_context);
+      } else if (has_physical_port &&
+                 (preamble.port_attribution_status == fapi::prach_rx_port_attribution_status::ambiguous)) {
+        mac_pream.port_attribution_status       = mac_rach_indication::rx_port_attribution_status::ambiguous;
+        mac_pream.strongest_rx_port             = preamble.strongest_rx_port;
+        mac_pream.strongest_to_second_margin_dB = preamble.strongest_to_second_margin_dB;
+      }
     }
   }
 

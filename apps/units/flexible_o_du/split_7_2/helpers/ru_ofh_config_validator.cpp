@@ -111,6 +111,11 @@ static bool validate_ru_ofh_unit_config(span<const ru_ofh_unit_cell_config>     
       return false;
     }
 
+    if (ofh_cell.cell.supports_prach_beam_id && !ofh_cell.cell.is_prach_control_plane_enabled) {
+      fmt::print("PRACH BeamId capability requires PRACH Control-Plane signalling to be enabled.\n");
+      return false;
+    }
+
     if (cell_cfg.nof_antennas_dl != ofh_cell.ru_dl_port_id.size()) {
       fmt::print("RU number of downlink ports={} must match the number of transmission antennas={}\n",
                  ofh_cell.ru_dl_port_id.size(),

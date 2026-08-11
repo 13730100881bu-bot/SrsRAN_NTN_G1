@@ -1132,6 +1132,28 @@ static std::map<srb_id_t, srs_du::du_srb_config> generate_du_srb_config(const du
 static mac_expert_config generate_mac_expert_config(const du_high_unit_config& config)
 {
   mac_expert_config out_cfg = {};
+  out_cfg.ntn_initial_ul_rx_mapping.enabled          = config.ntn_initial_ul_rx_mapping.enabled;
+  out_cfg.ntn_initial_ul_rx_mapping.version          = config.ntn_initial_ul_rx_mapping.version;
+  out_cfg.ntn_initial_ul_rx_mapping.hash             = config.ntn_initial_ul_rx_mapping.hash;
+  out_cfg.ntn_initial_ul_rx_mapping.unique_margin_db = config.ntn_initial_ul_rx_mapping.unique_margin_db;
+  if (config.ntn_initial_ul_rx_mapping.enabled) {
+    out_cfg.ntn_initial_ul_rx_mapping.entries.reserve(config.ntn_initial_ul_rx_mapping.entries.size());
+    for (const du_high_unit_ntn_initial_ul_rx_mapping_entry& entry : config.ntn_initial_ul_rx_mapping.entries) {
+      mac_ntn_rx_port_mapping translated_entry;
+      translated_entry.nci              = nr_cell_identity::create(entry.nci).value();
+      translated_entry.cell_local_port  = static_cast<uint16_t>(entry.cell_local_port);
+      translated_entry.backend = entry.backend == "ofh" ? mac_ntn_rx_backend::ofh : mac_ntn_rx_backend::sdr;
+      translated_entry.physical_rx_port = static_cast<uint16_t>(entry.physical_rx_port);
+      if (entry.prach_eaxc.has_value()) {
+        translated_entry.prach_eaxc = static_cast<uint16_t>(entry.prach_eaxc.value());
+      }
+      if (entry.beam_id.has_value()) {
+        translated_entry.beam_id = static_cast<uint16_t>(entry.beam_id.value());
+      }
+      out_cfg.ntn_initial_ul_rx_mapping.entries.push_back(std::move(translated_entry));
+    }
+  }
+
   for (const auto& cell : config.cells_cfg) {
     out_cfg.configs.push_back({.max_consecutive_dl_kos  = cell.cell.pdsch_cfg.max_consecutive_kos,
                                .max_consecutive_ul_kos  = cell.cell.pusch_cfg.max_consecutive_kos,

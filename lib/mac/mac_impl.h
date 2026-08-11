@@ -26,6 +26,7 @@
 #include "mac_dl/mac_dl_processor.h"
 #include "mac_ntn_access_calendar_compiler.h"
 #include "mac_ntn_access_calendar_manager.h"
+#include "mac_ntn_initial_ul_position_manager.h"
 #include "mac_sched/mac_scheduler_adapter.h"
 #include "mac_sched/rlf_detector.h"
 #include "mac_ul/mac_ul_processor.h"
@@ -71,6 +72,11 @@ public:
     return mac_sched->get_positioning_handler();
   }
 
+  std::shared_ptr<ofh::prach_beam_context_provider> get_ntn_prach_beam_context_provider() override
+  {
+    return ntn_initial_ul_position_mng->has_ofh_rx_mapping() ? ntn_initial_ul_position_mng : nullptr;
+  }
+
   mac_ntn_rnti_lease_pool_result apply_ntn_rnti_lease_pool_update(
       const mac_ntn_rnti_lease_pool_update& request) override
   {
@@ -92,11 +98,13 @@ public:
     result.calendar_hash    = request.calendar_hash;
 
     if (request.operation != mac_ntn_access_calendar_operation::prepare) {
-      return ntn_calendar_manager.handle_query_or_clear(
+      mac_ntn_access_calendar_result calendar_result = ntn_calendar_manager.handle_query_or_clear(
           request,
           [this](const ntn_access_calendar_request& scheduler_request) {
             return mac_sched->handle_ntn_access_calendar_update(scheduler_request);
           });
+      ntn_initial_ul_position_mng->handle_calendar_result(request, calendar_result);
+      return calendar_result;
     }
 
     if (const auto cleanup_rejection = ntn_calendar_manager.reject_prepare_if_cleanup_pending(request);
@@ -131,21 +139,31 @@ public:
         return result;
       }
       scheduler_requests[i] = std::move(compile_result.scheduler_request.value());
+      if (const std::optional<float> margin = ntn_initial_ul_position_mng->rx_port_attribution_margin_db();
+          margin.has_value()) {
+        scheduler_requests[i].enable_prach_rx_port_attribution                  = true;
+        scheduler_requests[i].prach_rx_port_attribution_unique_margin_dB       = *margin;
+      }
       accepted_intents[i]   = compile_result.accepted_intents;
     }
 
-    return ntn_calendar_manager.handle_prepare(
+    mac_ntn_access_calendar_result calendar_result = ntn_calendar_manager.handle_prepare(
         request,
         scheduler_requests,
         accepted_intents,
         [this](const ntn_access_calendar_request& scheduler_request) {
           return mac_sched->handle_ntn_access_calendar_update(scheduler_request);
         });
+    ntn_initial_ul_position_mng->handle_calendar_result(request, calendar_result);
+    return calendar_result;
   }
 
 private:
   /// Used to allocate new TC-RNTIs and convert from C-RNTI to UE index.
   rnti_manager rnti_table;
+
+  /// Correlates an opt-in NTN PRACH detection with the later Initial UL message.
+  std::shared_ptr<mac_ntn_initial_ul_position_manager> ntn_initial_ul_position_mng;
 
   /// MAC scheduler.
   std::unique_ptr<mac_scheduler_adapter> mac_sched;

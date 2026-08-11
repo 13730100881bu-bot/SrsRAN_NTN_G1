@@ -29,6 +29,8 @@
 #include "srsran/ran/prach/prach_frequency_mapping.h"
 #include "srsran/ran/prach/prach_preamble_information.h"
 #include "srsran/ran/resource_block.h"
+#include <algorithm>
+#include <array>
 
 using namespace srsran;
 using namespace ofh;
@@ -83,15 +85,44 @@ uplink_request_handler_impl::uplink_request_handler_impl(const uplink_request_ha
   notifier_symbol_repo(std::move(dependencies.notifier_symbol_repo)),
   data_flow(std::move(dependencies.data_flow)),
   frame_pool(std::move(dependencies.frame_pool)),
+  prach_beam_context_source(std::move(dependencies.prach_beam_context_source)),
   err_notifier(dependencies.err_notifier),
   metrics_collector(data_flow->get_metrics_collector(), window_checker),
-  enable_log_warnings_for_lates(config.enable_log_warnings_for_lates)
+  enable_log_warnings_for_lates(config.enable_log_warnings_for_lates),
+  is_prach_beam_context_enabled(config.is_prach_beam_context_enabled)
 {
   srsran_assert(ul_slot_repo, "Invalid uplink repository");
   srsran_assert(ul_prach_repo, "Invalid PRACH repository");
   srsran_assert(notifier_symbol_repo, "Invalid notified uplink grid symbol repository");
   srsran_assert(data_flow, "Invalid data flow");
   srsran_assert(frame_pool, "Invalid frame pool");
+  srsran_assert(!is_prach_beam_context_enabled || is_prach_cp_enabled,
+                "PRACH beam context requires PRACH Control-Plane messages");
+  srsran_assert(!is_prach_beam_context_enabled || prach_beam_context_source,
+                "PRACH beam context is enabled without a context provider");
+}
+
+static bool are_prach_beam_context_mappings_valid(
+    span<const unsigned>                                                             expected_eaxcs,
+    const static_vector<prach_eaxc_beam_context, MAX_NOF_SUPPORTED_EAXC>& mappings)
+{
+  if (mappings.size() != expected_eaxcs.size() || mappings.empty()) {
+    return false;
+  }
+
+  std::array<bool, MAX_SUPPORTED_EAXC_ID_VALUE> seen_eaxcs{};
+  for (const auto& mapping : mappings) {
+    const auto& context = mapping.context;
+    if (mapping.eaxc >= seen_eaxcs.size() || seen_eaxcs[mapping.eaxc] ||
+        std::find(expected_eaxcs.begin(), expected_eaxcs.end(), mapping.eaxc) == expected_eaxcs.end() ||
+        !is_valid_prach_beam_context(context)) {
+      return false;
+    }
+    seen_eaxcs[mapping.eaxc] = true;
+  }
+
+  return std::all_of(expected_eaxcs.begin(), expected_eaxcs.end(),
+                     [&seen_eaxcs](unsigned eaxc) { return eaxc < seen_eaxcs.size() && seen_eaxcs[eaxc]; });
 }
 
 /// \brief Determine PRACH start symbol index.
@@ -139,6 +170,21 @@ void uplink_request_handler_impl::handle_prach_occasion(const prach_buffer_conte
 
     err_notifier.on_late_prach_message({context.slot, context.sector});
     return;
+  }
+
+  std::optional<static_vector<prach_eaxc_beam_context, MAX_NOF_SUPPORTED_EAXC>> beam_contexts;
+  if (is_prach_beam_context_enabled) {
+    beam_contexts = prach_beam_context_source->get_prach_beam_context(context);
+    if (!beam_contexts || !are_prach_beam_context_mappings_valid(prach_eaxc, *beam_contexts)) {
+      // Keep the ordinary PRACH receive path alive for audit mode. Without a complete BeamId/eAxC context the
+      // request uses the legacy BeamId and no verified sidecar is published, so strict admission still fails closed
+      // while terrestrial and audit traffic continue to work.
+      logger.warning("Sector#{}: using PRACH without verified BeamId context in slot '{}' because the eAxC-to-beam "
+                     "mapping is missing, invalid or ambiguous",
+                     context.sector,
+                     context.slot);
+      beam_contexts.reset();
+    }
   }
 
   // Sampling rate defining the \f$T_s = 1/(\Delta f_{ref} \times N_{f,ref})\f$ parameter, see 3GPP TS38.211,
@@ -197,6 +243,12 @@ void uplink_request_handler_impl::handle_prach_occasion(const prach_buffer_conte
 
   for (auto eaxc : prach_eaxc) {
     cp_prach_context.eaxc = eaxc;
+    if (beam_contexts) {
+      auto mapping = std::find_if(beam_contexts->begin(), beam_contexts->end(),
+                                  [eaxc](const auto& item) { return item.eaxc == eaxc; });
+      srsran_assert(mapping != beam_contexts->end(), "Validated PRACH mapping is missing eAxC={}", eaxc);
+      cp_prach_context.beam_context = mapping->context;
+    }
     data_flow->enqueue_section_type_3_prach_message(cp_prach_context);
   }
 }

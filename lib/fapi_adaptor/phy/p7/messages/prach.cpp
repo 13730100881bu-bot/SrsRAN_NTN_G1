@@ -42,14 +42,22 @@ void srsran::fapi_adaptor::convert_prach_fapi_to_phy(prach_buffer_context&      
                 "Only PRACH resource configuration index 0 supported.");
   srsran_assert(fapi_pdu.index_fd_ra == 0, "Only one FD occasion supported.");
 
-  context.slot                 = slot_point(prach_cfg.prach_ul_bwp_pusch_scs, sfn, slot);
-  context.sector               = sector_id;
-  context.format               = fapi_pdu.prach_format;
-  context.nof_td_occasions     = fapi_pdu.num_prach_ocas;
-  context.nof_fd_occasions     = fapi_pdu.maintenance_v3.num_fd_ra;
-  context.start_symbol         = fapi_pdu.prach_start_symbol;
-  context.start_preamble_index = fapi_pdu.maintenance_v3.start_preamble_index;
-  context.nof_preamble_indices = fapi_pdu.maintenance_v3.num_preamble_indices;
+  context.slot                                 = slot_point(prach_cfg.prach_ul_bwp_pusch_scs, sfn, slot);
+  context.sector                               = sector_id;
+  context.format                               = fapi_pdu.prach_format;
+  context.nof_td_occasions                     = fapi_pdu.num_prach_ocas;
+  context.nof_fd_occasions                     = fapi_pdu.maintenance_v3.num_fd_ra;
+  context.start_symbol                         = fapi_pdu.prach_start_symbol;
+  context.start_preamble_index                 = fapi_pdu.maintenance_v3.start_preamble_index;
+  context.nof_preamble_indices                 = fapi_pdu.maintenance_v3.num_preamble_indices;
+  context.handle                               = fapi_pdu.maintenance_v3.handle;
+  context.enable_rx_port_attribution           = fapi_pdu.enable_rx_port_attribution;
+  context.rx_port_attribution_unique_margin_dB = fapi_pdu.rx_port_attribution_unique_margin_dB;
+  context.calendar_position_valid              = fapi_pdu.calendar_position_valid;
+  context.calendar_schedule_version            = fapi_pdu.calendar_schedule_version;
+  context.calendar_cycle_index                 = fapi_pdu.calendar_cycle_index;
+  context.occasion_offset_us                   = fapi_pdu.occasion_offset_us;
+  context.verified_rx_contexts.reset();
 
   context.pusch_scs       = prach_cfg.prach_ul_bwp_pusch_scs;
   context.restricted_set  = prach_cfg.restricted_set;

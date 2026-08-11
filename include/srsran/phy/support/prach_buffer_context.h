@@ -26,10 +26,16 @@
 #include "srsran/phy/constants.h"
 #include "srsran/ran/prach/prach_format_type.h"
 #include "srsran/ran/prach/restricted_set_config.h"
+#include "srsran/ran/prach/verified_prach_rx_context.h"
 #include "srsran/ran/slot_point.h"
 #include "srsran/ran/subcarrier_spacing.h"
+#include <memory>
 
 namespace srsran {
+
+static_assert(MAX_PORTS == MAX_VERIFIED_PRACH_RX_PORTS);
+
+using verified_prach_rx_context_list = static_vector<verified_prach_rx_context, MAX_PORTS>;
 
 /// \brief Collects PRACH time and frequency mapping parameters.
 ///
@@ -87,6 +93,22 @@ struct prach_buffer_context {
   ///
   /// The sum <tt>start_preamble_index + nof_preamble_indices</tt> should not exceed 64.
   uint8_t nof_preamble_indices;
+  /// Request handle echoed with the corresponding PRACH detection result.
+  uint32_t handle = 0;
+  /// Enables receive-port attribution for detected preambles.
+  bool enable_rx_port_attribution = false;
+  /// Minimum strongest-to-second-strongest power margin for a unique receive-port attribution, in dB.
+  float rx_port_attribution_unique_margin_dB = 6.0F;
+  /// True when the scheduler supplied an NTN calendar position from its extended slot timeline.
+  bool calendar_position_valid = false;
+  /// Immutable schedule version selected by the scheduler for this opportunity.
+  uint64_t calendar_schedule_version = 0;
+  /// Number of complete calendar cycles since activation.
+  uint64_t calendar_cycle_index = 0;
+  /// Offset of this PRACH opportunity within the calendar cycle, in microseconds.
+  uint32_t occasion_offset_us = 0;
+  /// Immutable per-buffer-port receive context. Empty for the default terrestrial and legacy RU paths.
+  std::shared_ptr<const verified_prach_rx_context_list> verified_rx_contexts;
 };
 
 } // namespace srsran

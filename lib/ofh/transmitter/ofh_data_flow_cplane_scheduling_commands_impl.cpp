@@ -102,6 +102,9 @@ generate_prach_control_parameters(const data_flow_cplane_scheduling_prach_contex
   msg_params.time_offset  = context.time_offset;
   msg_params.cpLength     = 0;
   msg_params.fft_size     = c_plane_prach_fft_len;
+  if (context.beam_context) {
+    msg_params.section_fields.beam_id = context.beam_context->beam_id;
+  }
 
   // Initialize radio application header.
   init_radio_app_header_parameters(
@@ -233,6 +236,14 @@ void data_flow_cplane_scheduling_commands_impl::enqueue_section_type_1_message(
 void data_flow_cplane_scheduling_commands_impl::enqueue_section_type_3_prach_message(
     const data_flow_cplane_scheduling_prach_context& context)
 {
+  if (context.beam_context && !is_valid_prach_beam_context(*context.beam_context)) {
+    logger.warning("Sector#{}: dropped an invalid type 3 PRACH beam context for slot '{}' and eAxC '{}'",
+                   sector_id,
+                   context.slot,
+                   context.eaxc);
+    return;
+  }
+
   slot_point        slot = context.slot;
   slot_symbol_point symbol_point(slot, context.start_symbol, nof_symbols_per_slot);
   if (SRSRAN_UNLIKELY(logger.debug.enabled())) {
@@ -279,16 +290,21 @@ void data_flow_cplane_scheduling_commands_impl::enqueue_section_type_3_prach_mes
         ofh_ctrl_params.section_fields.frequency_offset);
   }
 
-  unsigned bytes_written = cp_builder->build_prach_mixed_numerology_message(ofh_buffer, ofh_ctrl_params);
-  unsigned eaxc          = context.eaxc;
-
-  prach_cplane_context_repo->add(slot,
-                                 eaxc,
-                                 {ofh_ctrl_params.radio_hdr.filter_index,
+  unsigned eaxc = context.eaxc;
+  ul_cplane_context radio_context{ofh_ctrl_params.radio_hdr.filter_index,
                                   ofh_ctrl_params.radio_hdr.start_symbol,
                                   ofh_ctrl_params.section_fields.common_fields.prb_start,
                                   ofh_ctrl_params.section_fields.common_fields.nof_prb,
-                                  ofh_ctrl_params.section_fields.common_fields.nof_symbols});
+                                  ofh_ctrl_params.section_fields.common_fields.nof_symbols};
+  if (!prach_cplane_context_repo->add_prach(slot, eaxc, radio_context, context.beam_context)) {
+    logger.warning("Sector#{}: dropped a conflicting type 3 PRACH context for slot '{}' and eAxC '{}'",
+                   sector_id,
+                   slot,
+                   eaxc);
+    return;
+  }
+
+  unsigned bytes_written = cp_builder->build_prach_mixed_numerology_message(ofh_buffer, ofh_ctrl_params);
 
   // Add eCPRI header.
   span<uint8_t> ecpri_buffer = buffer.subspan(ether_hdr_size.value(), ecpri_hdr_size.value() + bytes_written);

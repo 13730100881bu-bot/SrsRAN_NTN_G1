@@ -8,6 +8,8 @@
 #include "srsran/ran/rnti.h"
 #include "srsran/ran/slot_pdu_capacity_constants.h"
 #include "srsran/ran/slot_point.h"
+#include "srsran/mac/mac_ntn_initial_ul_position.h"
+#include <optional>
 
 namespace srsran {
 
@@ -46,6 +48,8 @@ struct ul_ccch_indication_message {
   rnti_t          tc_rnti;
   slot_point      slot_rx;
   byte_buffer     subpdu;
+  /// Present only when the opt-in NTN receive source observed this Initial UL attempt.
+  std::optional<mac_ntn_initial_ul_position_record> ntn_initial_ul_position;
 };
 
 /// Methods used by MAC to notify events.

@@ -278,6 +278,8 @@ o_du_unit flexible_o_du_factory::create_flexible_o_du(const o_du_unit_dependenci
   }
 
   o_du_high_unit odu_hi_unit = make_o_du_high_unit(config.odu_high_cfg, std::move(odu_hi_unit_dependencies));
+  std::shared_ptr<ofh::prach_beam_context_provider> prach_beam_context_source =
+      odu_hi_unit.o_du_hi->get_du_high().get_ntn_prach_beam_context_provider();
 
   // Connect the adaptors.
   for (unsigned i = 0, e = du_cells.size(); i != e; ++i) {
@@ -310,7 +312,8 @@ o_du_unit flexible_o_du_factory::create_flexible_o_du(const o_du_unit_dependenci
   flexible_o_du_ru_dependencies ru_dependencies{*dependencies.workers,
                                                 du_impl->get_upper_ru_ul_adapter(),
                                                 du_impl->get_upper_ru_timing_adapter(),
-                                                du_impl->get_upper_ru_error_adapter()};
+                                                du_impl->get_upper_ru_error_adapter(),
+                                                std::move(prach_beam_context_source)};
 
   std::unique_ptr<radio_unit> ru = create_radio_unit(ru_config, ru_dependencies);
 

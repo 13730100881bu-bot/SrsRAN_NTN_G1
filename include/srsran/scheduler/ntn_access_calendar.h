@@ -94,6 +94,10 @@ struct ntn_access_calendar_request {
   uint32_t                                     cycle_slots    = 0;
   std::vector<ntn_access_calendar_slot_window> windows;
   std::vector<ntn_access_calendar_expectation> expectations;
+  /// Enables receive-port attribution for PRACH opportunities authorized by this calendar.
+  bool enable_prach_rx_port_attribution = false;
+  /// Minimum strongest-to-second-strongest power margin for a unique attribution, in dB.
+  float prach_rx_port_attribution_unique_margin_dB = 6.0F;
 };
 
 enum class ntn_access_calendar_state : uint8_t { ready, applied, cleared, rejected };

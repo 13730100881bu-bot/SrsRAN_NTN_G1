@@ -25,6 +25,7 @@
 #include "srsran/adt/spsc_queue.h"
 #include "srsran/ran/slot_point_extended.h"
 #include "srsran/scheduler/ntn_access_calendar.h"
+#include "srsran/scheduler/result/prach_info.h"
 #include <array>
 #include <atomic>
 #include <limits>
@@ -78,6 +79,8 @@ public:
             pending.activation_slot + static_cast<uint32_t>(slot_command.validity_slots);
         pending.cycle_slots   = slot_command.cycle_slots;
         pending.purpose_masks = slot_command.purpose_masks;
+        pending.enable_prach_rx_port_attribution           = slot_command.enable_prach_rx_port_attribution;
+        pending.prach_rx_port_attribution_unique_margin_dB = slot_command.prach_rx_port_attribution_unique_margin_dB;
       } else if (slot_command.type == command_type::clear) {
         if (pending.valid and pending.version == slot_command.version) {
           pending.valid = false;
@@ -141,6 +144,48 @@ public:
     return (selected->purpose_masks[cycle_offset] & ntn_access_calendar_purpose_bit(purpose)) != 0;
   }
 
+  /// Attach the configured receive-port attribution request and calendar position to an authorized PRACH opportunity.
+  ///
+  /// The calendar position is derived from the extended slot timeline so it remains monotonic across the ordinary
+  /// 10.24-second SFN wrap. The handle is deterministic for a cell, slot and PRACH occasion ordinal. The MAC/FAPI/PHY
+  /// chain echoes both values with the detection result, while zero remains reserved for the default uncorrelated path.
+  void configure_prach_rx_port_attribution(slot_point           target_slot,
+                                           unsigned             occasion_ordinal,
+                                           prach_occasion_info& occasion) const noexcept
+  {
+    const selected_snapshot selection = select_snapshot(target_slot);
+    if (selection.snapshot == nullptr or selection.target_slot >= selection.snapshot->valid_until_slot) {
+      return;
+    }
+
+    const slot_difference offset       = selection.target_slot - selection.snapshot->activation_slot;
+    const uint32_t        cycle_offset = static_cast<uint32_t>(offset) % selection.snapshot->cycle_slots;
+    if ((selection.snapshot->purpose_masks[cycle_offset] &
+         ntn_access_calendar_purpose_bit(ntn_access_calendar_purpose::prach)) == 0) {
+      return;
+    }
+
+    const unsigned slots_per_ms = selection.target_slot.nof_slots_per_subframe();
+    if (slots_per_ms == 0) {
+      return;
+    }
+    occasion.calendar_position_valid = true;
+    occasion.calendar_schedule_version = selection.snapshot->version;
+    occasion.calendar_cycle_index    = static_cast<uint64_t>(offset) / selection.snapshot->cycle_slots;
+    occasion.occasion_offset_us = static_cast<uint32_t>((static_cast<uint64_t>(cycle_offset) * 1000U) / slots_per_ms);
+
+    if (not selection.snapshot->enable_prach_rx_port_attribution) {
+      return;
+    }
+
+    occasion.handle = (target_slot.to_uint() << 8U) | ((occasion_ordinal + 1U) & 0xffU);
+    if (occasion.handle == 0) {
+      occasion.handle = 1;
+    }
+    occasion.enable_rx_port_attribution           = true;
+    occasion.rx_port_attribution_unique_margin_dB = selection.snapshot->prach_rx_port_attribution_unique_margin_dB;
+  }
+
   uint32_t get_minimum_lead_slots() const { return minimum_lead_slots; }
 
 private:
@@ -153,6 +198,8 @@ private:
     slot_point_extended                                      valid_until_slot;
     uint32_t                                                 cycle_slots = 0;
     std::array<uint8_t, MAX_NTN_ACCESS_CALENDAR_CYCLE_SLOTS> purpose_masks;
+    bool                                                     enable_prach_rx_port_attribution           = false;
+    float                                                    prach_rx_port_attribution_unique_margin_dB = 6.0F;
   };
 
   struct compiled_command {
@@ -163,6 +210,13 @@ private:
     uint64_t                                                 validity_slots = 0;
     uint32_t                                                 cycle_slots    = 0;
     std::array<uint8_t, MAX_NTN_ACCESS_CALENDAR_CYCLE_SLOTS> purpose_masks{};
+    bool                                                     enable_prach_rx_port_attribution           = false;
+    float                                                    prach_rx_port_attribution_unique_margin_dB = 6.0F;
+  };
+
+  struct selected_snapshot {
+    const compiled_snapshot* snapshot = nullptr;
+    slot_point_extended      target_slot;
   };
 
   using command_queue_type = concurrent_queue<compiled_command,
@@ -229,6 +283,8 @@ private:
     command.activation_slot = request.activation_slot;
     command.validity_slots  = request.validity_slots;
     command.cycle_slots     = request.cycle_slots;
+    command.enable_prach_rx_port_attribution           = request.enable_prach_rx_port_attribution;
+    command.prach_rx_port_attribution_unique_margin_dB = request.prach_rx_port_attribution_unique_margin_dB;
     command.purpose_masks.fill(0);
     for (const ntn_access_calendar_slot_window& window : request.windows) {
       const uint32_t window_end = window.start_slot_offset + window.nof_slots;
@@ -249,15 +305,17 @@ private:
     bool known_entry_updated = false;
     for (unsigned i = 0; i != known_versions.size(); ++i) {
       if (known_versions[i] == request.version) {
-        known_hashes[i]      = request.content_hash;
-        known_entry_updated  = true;
+        known_hashes[i]           = request.content_hash;
+        known_activation_slots[i] = request.activation_slot;
+        known_entry_updated       = true;
         break;
       }
     }
     if (not known_entry_updated) {
-      known_versions[next_known_entry] = request.version;
-      known_hashes[next_known_entry]    = request.content_hash;
-      next_known_entry                  = (next_known_entry + 1U) % known_versions.size();
+      known_versions[next_known_entry]         = request.version;
+      known_hashes[next_known_entry]            = request.content_hash;
+      known_activation_slots[next_known_entry] = request.activation_slot;
+      next_known_entry                          = (next_known_entry + 1U) % known_versions.size();
     }
     if (last_clear_version == request.version and last_clear_hash == request.content_hash) {
       last_clear_sequence = 0;
@@ -276,7 +334,40 @@ private:
       return make_response(
           ntn_access_calendar_state::cleared, ntn_access_calendar_reject_reason::none, 0, {}, slot_point{});
     }
+
+    const uint64_t observed_active  = active_version.load(std::memory_order_acquire);
+    const uint64_t observed_pending = pending_version.load(std::memory_order_acquire);
     if (request.version != latest_accepted_version or request.content_hash != latest_content_hash) {
+      // Clearing an applied successor can restore its still-valid predecessor on the slot thread. The control-plane
+      // latest identity intentionally remains monotonic, so reconnect recovery must also recognize that exact active
+      // predecessor rather than reporting a false latest-version mismatch.
+      slot_point known_activation_slot;
+      bool       known_identity = false;
+      for (unsigned i = 0; i != known_versions.size(); ++i) {
+        if (request.version != 0 and known_versions[i] == request.version && known_hashes[i] == request.content_hash) {
+          known_activation_slot = known_activation_slots[i];
+          known_identity        = true;
+          break;
+        }
+      }
+      if (known_identity and observed_active == request.version) {
+        if (active_expired.load(std::memory_order_acquire)) {
+          auto response = make_response(ntn_access_calendar_state::rejected,
+                                        ntn_access_calendar_reject_reason::expired,
+                                        request.version,
+                                        request.content_hash,
+                                        known_activation_slot);
+          response.command_consumed = true;
+          return response;
+        }
+        auto response = make_response(ntn_access_calendar_state::applied,
+                                      ntn_access_calendar_reject_reason::none,
+                                      request.version,
+                                      request.content_hash,
+                                      known_activation_slot);
+        response.command_consumed = true;
+        return response;
+      }
       return make_rejected_response(request, ntn_access_calendar_reject_reason::version_hash_mismatch);
     }
 
@@ -290,8 +381,6 @@ private:
                            latest_activation_slot);
     }
 
-    const uint64_t observed_active  = active_version.load(std::memory_order_acquire);
-    const uint64_t observed_pending = pending_version.load(std::memory_order_acquire);
     if (observed_active == latest_accepted_version && active_expired.load(std::memory_order_acquire)) {
       auto response = make_rejected_response(request, ntn_access_calendar_reject_reason::expired);
       response.command_consumed = true;
@@ -385,6 +474,27 @@ private:
     current_raw_slot_count.store(slot.to_uint(), std::memory_order_release);
   }
 
+  selected_snapshot select_snapshot(slot_point target_slot) const noexcept
+  {
+    if (not current_slot.valid()) {
+      return {};
+    }
+
+    const slot_difference target_delta = target_slot - current_slot.without_hyper_sfn();
+    if (target_delta < 0) {
+      return {};
+    }
+
+    selected_snapshot selection;
+    selection.target_slot = current_slot + target_delta;
+    if (pending.valid and selection.target_slot >= pending.activation_slot) {
+      selection.snapshot = &pending;
+    } else if (active.valid and selection.target_slot >= active.activation_slot) {
+      selection.snapshot = &active;
+    }
+    return selection;
+  }
+
   void publish_runtime_versions()
   {
     active_version.store(active.valid ? active.version : 0, std::memory_order_release);
@@ -433,6 +543,7 @@ private:
   uint64_t                      last_clear_sequence = 0;
   std::array<uint64_t, 3>       known_versions{};
   std::array<std::string, 3>    known_hashes{};
+  std::array<slot_point, 3>     known_activation_slots{};
   unsigned                      next_known_entry = 0;
 
   command_queue_type command_queue{command_queue_capacity};

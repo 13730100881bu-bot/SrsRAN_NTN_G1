@@ -22,8 +22,11 @@
 
 #pragma once
 
+#include "srsran/adt/span.h"
+#include "srsran/ofh/serdes/ofh_cplane_message_properties.h"
 #include "srsran/phy/support/shared_prach_buffer.h"
 #include "srsran/ran/slot_point.h"
+#include <utility>
 
 namespace srsran {
 struct prach_buffer_context;
@@ -58,6 +61,19 @@ public:
   /// \param[in] context PRACH context.
   /// \param[in] buffer  PRACH buffer.
   virtual void on_new_prach_window_data(const prach_buffer_context& context, shared_prach_buffer buffer) = 0;
+
+  /// \brief Notifies a completed PRACH window with verified per-buffer-port eAxC and beam/calendar context.
+  ///
+  /// The default implementation preserves compatibility by forwarding only the PRACH buffer to the legacy callback.
+  /// Consumers that require receive attribution override this overload and must treat the supplied span as valid only
+  /// for the duration of the call.
+  virtual void on_new_prach_window_data(
+      const prach_buffer_context&                 context,
+      shared_prach_buffer                         buffer,
+      span<const verified_prach_uplane_context>)
+  {
+    on_new_prach_window_data(context, std::move(buffer));
+  }
 };
 
 } // namespace ofh

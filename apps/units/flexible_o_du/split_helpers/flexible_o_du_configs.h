@@ -26,6 +26,7 @@
 #include "apps/units/flexible_o_du/o_du_low/du_low_config.h"
 #include "srsran/ran/cyclic_prefix.h"
 #include "srsran/ran/tdd/tdd_ul_dl_config.h"
+#include <memory>
 
 namespace srsran {
 
@@ -33,6 +34,10 @@ class ru_error_notifier;
 class ru_timing_notifier;
 class ru_uplink_plane_rx_symbol_notifier;
 struct worker_manager;
+
+namespace ofh {
+class prach_beam_context_provider;
+}
 
 namespace srs_du {
 struct du_cell_config;
@@ -79,6 +84,8 @@ struct flexible_o_du_ru_dependencies {
   ru_uplink_plane_rx_symbol_notifier& symbol_notifier;
   ru_timing_notifier&                 timing_notifier;
   ru_error_notifier&                  error_notifier;
+  /// Optional NTN PRACH BeamId provider owned by MAC and consumed by an OFH RU.
+  std::shared_ptr<ofh::prach_beam_context_provider> prach_beam_context_source;
 };
 
 } // namespace srsran

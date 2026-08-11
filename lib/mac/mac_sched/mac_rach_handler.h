@@ -33,6 +33,7 @@ namespace srsran {
 class scheduler_configurator;
 class rnti_manager;
 class mac_rach_handler;
+class mac_ntn_initial_ul_position_manager;
 struct sched_cell_configuration_request_message;
 
 /// Handler of RACH indications for a given cell in the MAC.
@@ -68,7 +69,10 @@ private:
 class mac_rach_handler
 {
 public:
-  mac_rach_handler(scheduler_configurator& sched_, rnti_manager& rnti_mng_, srslog::basic_logger& logger_);
+  mac_rach_handler(scheduler_configurator&                  sched_,
+                   rnti_manager&                            rnti_mng_,
+                   srslog::basic_logger&                    logger_,
+                   mac_ntn_initial_ul_position_manager*     ntn_position_mng_ = nullptr);
 
   /// Create new handler of RACH indications for a cell.
   mac_cell_rach_handler_impl& add_cell(const sched_cell_configuration_request_message& sched_cfg);
@@ -86,6 +90,7 @@ private:
   scheduler_configurator& sched;
   rnti_manager&           rnti_mng;
   srslog::basic_logger&   logger;
+  mac_ntn_initial_ul_position_manager* ntn_position_mng;
 
   slotted_id_vector<du_cell_index_t, std::unique_ptr<mac_cell_rach_handler_impl>> cell_map;
   std::vector<cfra_ue_context>                                                    ue_map;

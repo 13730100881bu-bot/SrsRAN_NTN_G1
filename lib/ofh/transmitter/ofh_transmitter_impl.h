@@ -57,6 +57,8 @@ struct transmitter_impl_dependencies {
   std::shared_ptr<prach_context_repository> ul_prach_repo;
   /// Notified uplink grid symbol repository.
   std::shared_ptr<uplink_notified_grid_symbol_repository> notifier_symbol_repo;
+  /// Optional slot-specific NTN PRACH BeamId provider.
+  std::shared_ptr<prach_beam_context_provider> prach_beam_context_source;
   /// Ethernet transmitter.
   std::unique_ptr<ether::transmitter> eth_transmitter;
   /// Ethernet frame pool downlink Control-Plane.

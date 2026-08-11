@@ -51,6 +51,11 @@ std::unique_ptr<radio_unit> srsran::create_ofh_radio_unit(const ru_ofh_unit_conf
     sector_deps.uplink_executor   = &ofh_exec_map[i].uplink_executor();
     sector_deps.downlink_executor = &ofh_exec_map[i].downlink_executor();
     sector_deps.logger            = dependencies.logger;
+    // Only a sector whose RU explicitly declares BeamId support receives the provider. Other sectors retain the
+    // legacy PRACH path even when another sector in the same DU uses verified NTN receive beams.
+    if (ru_cfg.cells[i].cell.supports_prach_beam_id) {
+      sector_deps.prach_beam_context_source = ru_dependencies.prach_beam_context_source;
+    }
   }
 
   return create_ofh_ru(generate_ru_ofh_config(ru_cfg, ru_config.cells, ru_config.max_processing_delay),

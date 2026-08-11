@@ -26,6 +26,8 @@
 #include "apps/units/flexible_o_du/split_8/helpers/ru_sdr_config_validator.h"
 #include "srsran/ran/prach/prach_configuration.h"
 #include "srsran/ran/prach/prach_preamble_information.h"
+#include "fmt/format.h"
+#include <algorithm>
 
 using namespace srsran;
 
@@ -88,6 +90,39 @@ static std::vector<ru_sdr_cell_validation_config> get_ru_sdr_validation_dependen
   return out_cfg;
 }
 
+static bool validate_ntn_initial_ul_sdr_mapping(const du_high_unit_config& du_cfg)
+{
+  const auto& mapping = du_cfg.ntn_initial_ul_rx_mapping;
+  if (!mapping.enabled) {
+    return true;
+  }
+  for (const auto& entry : mapping.entries) {
+    if (entry.backend != "sdr") {
+      fmt::print("Split 8 NTN Initial UL receive mappings must use the 'sdr' backend.\n");
+      return false;
+    }
+    bool matches_served_port = false;
+    for (const auto& configured_cell : du_cfg.cells_cfg) {
+      const auto& cell = configured_cell.cell;
+      if (!cell.sector_id.has_value()) {
+        continue;
+      }
+      const auto nci = nr_cell_identity::create(du_cfg.gnb_id, cell.sector_id.value());
+      if (nci.has_value() && nci.value().value() == entry.nci &&
+          std::find(cell.prach_cfg.ports.begin(), cell.prach_cfg.ports.end(), entry.physical_rx_port) !=
+              cell.prach_cfg.ports.end()) {
+        matches_served_port = true;
+        break;
+      }
+    }
+    if (!matches_served_port) {
+      fmt::print("NTN Initial UL SDR mapping NCI/physical port does not identify a served PRACH receive port.\n");
+      return false;
+    }
+  }
+  return true;
+}
+
 bool srsran::validate_split_8_o_du_unit_config(const split_8_o_du_unit_config& config)
 {
   if (!validate_o_du_high_config(config.odu_high_cfg)) {
@@ -100,5 +135,6 @@ bool srsran::validate_split_8_o_du_unit_config(const split_8_o_du_unit_config& c
   }
 
   auto ru_sdr_dependencies = get_ru_sdr_validation_dependencies(config.odu_high_cfg.du_high_cfg.config);
-  return validate_ru_sdr_config(config.ru_cfg, ru_sdr_dependencies);
+  return validate_ru_sdr_config(config.ru_cfg, ru_sdr_dependencies) &&
+         validate_ntn_initial_ul_sdr_mapping(config.odu_high_cfg.du_high_cfg.config);
 }

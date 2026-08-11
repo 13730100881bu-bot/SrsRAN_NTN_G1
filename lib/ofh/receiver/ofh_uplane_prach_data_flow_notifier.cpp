@@ -37,7 +37,11 @@ void uplane_prach_data_flow_notifier::notify_prach(slot_point slot)
 
   const auto& ctx_value = context->context;
 
-  notifier->on_new_prach_window_data(ctx_value, std::move(context->buffer));
+  if (context->verified_contexts) {
+    notifier->on_new_prach_window_data(ctx_value, std::move(context->buffer), *context->verified_contexts);
+  } else {
+    notifier->on_new_prach_window_data(ctx_value, std::move(context->buffer));
+  }
 
   if (SRSRAN_UNLIKELY(logger.debug.enabled())) {
     logger.debug("Notifying PRACH in slot '{}' for sector#{}", ctx_value.slot, ctx_value.sector);

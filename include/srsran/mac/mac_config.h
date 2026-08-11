@@ -25,6 +25,7 @@
 #include "srsran/du/du_high/du_high_executor_mapper.h"
 #include "srsran/du/du_high/du_test_mode_config.h"
 #include "srsran/mac/mac_cell_result.h"
+#include "srsran/mac/mac_ntn_initial_ul_position.h"
 #include "srsran/mac/mac_pdu_handler.h"
 #include "srsran/pcap/mac_pcap.h"
 #include "srsran/scheduler/config/scheduler_expert_config.h"
@@ -40,6 +41,8 @@ class mac_clock_controller;
 struct mac_expert_config {
   /// Initial C-RNTI to assign to created UEs.
   rnti_t initial_crnti = to_rnti(0x4601);
+  /// Optional local mapping used to verify the receive path of NTN Initial UL attempts.
+  mac_ntn_rx_mapping_config ntn_initial_ul_rx_mapping;
   /// \brief Implementation-specific parameters used to tune MAC operation per cell.
   struct mac_expert_cell_config {
     /// \brief Maximum number of consecutive DL KOs before an RLF is reported.

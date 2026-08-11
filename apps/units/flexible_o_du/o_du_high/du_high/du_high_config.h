@@ -48,6 +48,7 @@
 #include "srsran/scheduler/config/scheduler_expert_config.h"
 #include "srsran/srslog/srslog.h"
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <optional>
 #include <string>
@@ -1130,6 +1131,31 @@ struct du_high_unit_qos_config {
   du_high_unit_f1u_du_config f1u_du;
 };
 
+/// One deployment-local NTN Initial UL receive-port mapping entry.
+struct du_high_unit_ntn_initial_ul_rx_mapping_entry {
+  /// Stable NR cell identity served by the DU.
+  uint64_t nci = 0;
+  /// Cell-local analog receive port referenced by the NTN access calendar.
+  unsigned cell_local_port = std::numeric_limits<unsigned>::max();
+  /// Receive backend. Supported values are "sdr" and "ofh".
+  std::string backend;
+  /// Physical receive channel reported by the PRACH detector.
+  unsigned physical_rx_port = std::numeric_limits<unsigned>::max();
+  /// OFH PRACH eAxC. Required only by the "ofh" backend.
+  std::optional<unsigned> prach_eaxc;
+  /// OFH 15-bit BeamId. Required only by the "ofh" backend.
+  std::optional<unsigned> beam_id;
+};
+
+/// Optional deployment-local mapping used to verify NTN Initial UL receive provenance.
+struct du_high_unit_ntn_initial_ul_rx_mapping_config {
+  bool        enabled          = false;
+  uint64_t    version          = 0;
+  std::string hash;
+  float       unique_margin_db = 6.0F;
+  std::vector<du_high_unit_ntn_initial_ul_rx_mapping_entry> entries;
+};
+
 /// DU high configuration.
 struct du_high_unit_config {
   bool warn_on_drop = false;
@@ -1157,6 +1183,8 @@ struct du_high_unit_config {
   du_high_unit_expert_execution_config expert_execution_cfg;
   /// SRB configuration.
   std::map<srb_id_t, du_high_unit_srb_config> srb_cfg;
+  /// Optional verified receive-port mapping for NTN Initial UL.
+  du_high_unit_ntn_initial_ul_rx_mapping_config ntn_initial_ul_rx_mapping;
 
   /// Returns true if testmode is enabled, false otherwise.
   bool is_testmode_enabled() const { return test_mode_cfg.test_ue.rnti != rnti_t::INVALID_RNTI; }

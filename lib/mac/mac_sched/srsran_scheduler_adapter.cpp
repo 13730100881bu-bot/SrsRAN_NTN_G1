@@ -51,7 +51,9 @@ make_scheduler_ue_reconfiguration_request(const mac_ue_reconfiguration_request& 
   return ret;
 }
 
-srsran_scheduler_adapter::srsran_scheduler_adapter(const srsran_mac_sched_config& params, rnti_manager& rnti_mng_) :
+srsran_scheduler_adapter::srsran_scheduler_adapter(const srsran_mac_sched_config&       params,
+                                                   rnti_manager&                        rnti_mng_,
+                                                   mac_ntn_initial_ul_position_manager* ntn_position_mng_) :
   rnti_mng(rnti_mng_),
   rlf_handler(params.mac_cfg, params.ctrl_exec),
   ctrl_exec(params.ctrl_exec),
@@ -59,7 +61,7 @@ srsran_scheduler_adapter::srsran_scheduler_adapter(const srsran_mac_sched_config
   logger(srslog::fetch_basic_logger("MAC")),
   notifier(*this),
   sched_impl(create_scheduler(scheduler_config{params.sched_cfg, notifier})),
-  rach_handler(*sched_impl, rnti_mng, logger),
+  rach_handler(*sched_impl, rnti_mng, logger, ntn_position_mng_),
   pos_handler(create_positioning_handler(*sched_impl, params.ctrl_exec, params.timers, logger))
 {
   srsran_assert(last_slot_point.is_lock_free(), "slot point is not lock free");

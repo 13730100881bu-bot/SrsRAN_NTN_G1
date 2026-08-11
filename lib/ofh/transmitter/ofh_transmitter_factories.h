@@ -30,6 +30,7 @@
 #include "srsran/ofh/transmitter/ofh_transmitter.h"
 #include "srsran/ofh/transmitter/ofh_transmitter_configuration.h"
 #include "srsran/srslog/logger.h"
+#include <memory>
 
 namespace srsran {
 
@@ -40,6 +41,8 @@ class eth_frame_pool;
 } // namespace ether
 
 namespace ofh {
+
+class prach_beam_context_provider;
 
 /// Creates a transmitter with the given configuration and dependencies.
 std::unique_ptr<transmitter>
@@ -53,7 +56,8 @@ create_transmitter(const transmitter_config&                               trans
                    std::shared_ptr<uplink_context_repository>              ul_slot_context_repo,
                    std::shared_ptr<uplink_cplane_context_repository>       ul_cp_context_repo,
                    std::shared_ptr<uplink_cplane_context_repository>       prach_cp_context_repo,
-                   std::shared_ptr<uplink_notified_grid_symbol_repository> notifier_symbol_repo);
+                   std::shared_ptr<uplink_notified_grid_symbol_repository> notifier_symbol_repo,
+                   std::shared_ptr<prach_beam_context_provider>            prach_beam_context_source = {});
 
 } // namespace ofh
 } // namespace srsran

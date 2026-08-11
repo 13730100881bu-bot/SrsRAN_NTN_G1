@@ -22,7 +22,11 @@
 
 #pragma once
 
+#include "srsran/adt/static_vector.h"
+#include "srsran/ofh/ofh_constants.h"
+#include "srsran/ofh/serdes/ofh_cplane_message_properties.h"
 #include "srsran/phy/support/shared_prach_buffer.h"
+#include <optional>
 
 namespace srsran {
 
@@ -33,6 +37,21 @@ class shared_resource_grid;
 namespace ofh {
 
 class error_notifier;
+
+/// Supplies the slot-specific eAxC-to-beam mapping used for an Open Fronthaul PRACH request.
+///
+/// A provider is queried only when verified PRACH beam context is explicitly enabled. Returning no value, omitting an
+/// expected eAxC or returning the same eAxC more than once suppresses verified attribution while the ordinary PRACH
+/// request remains available to audit mode.
+class prach_beam_context_provider
+{
+public:
+  virtual ~prach_beam_context_provider() = default;
+
+  /// Returns the mappings for the given PRACH occasion, or no value when no authoritative mapping is available.
+  virtual std::optional<static_vector<prach_eaxc_beam_context, MAX_NOF_SUPPORTED_EAXC>>
+  get_prach_beam_context(const prach_buffer_context& context) = 0;
+};
 
 /// \brief Open Fronthaul uplink request handler.
 ///

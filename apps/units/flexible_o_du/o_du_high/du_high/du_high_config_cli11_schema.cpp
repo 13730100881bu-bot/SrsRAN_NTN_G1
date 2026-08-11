@@ -1996,6 +1996,60 @@ static void configure_cli11_qos_args(CLI::App& app, du_high_unit_qos_config& qos
   app.needs(f1u_du_subcmd);
 }
 
+static void configure_cli11_ntn_initial_ul_rx_mapping_entry_args(
+    CLI::App& app, du_high_unit_ntn_initial_ul_rx_mapping_entry& entry)
+{
+  add_option(app, "--nci", entry.nci, "36-bit NR cell identity")
+      ->check(CLI::Range(uint64_t{0}, (uint64_t{1} << 36U) - 1U));
+  add_option(app, "--cell_local_port", entry.cell_local_port, "Cell-local NTN receive port")
+      ->check(CLI::Range(0U, static_cast<unsigned>(std::numeric_limits<uint16_t>::max() - 1U)));
+  add_option(app, "--backend", entry.backend, "Receive backend: sdr or ofh")
+      ->check(CLI::IsMember({"sdr", "ofh"}));
+  add_option(app, "--physical_rx_port", entry.physical_rx_port, "Physical PRACH receive channel")
+      ->check(CLI::Range(0U, 254U));
+  add_option(app, "--prach_eaxc", entry.prach_eaxc, "OFH PRACH eAxC (0..31)")->check(CLI::Range(0U, 31U));
+  add_option(app, "--beam_id", entry.beam_id, "OFH 15-bit BeamId (0..32767)")
+      ->check(CLI::Range(0U, 0x7fffU));
+}
+
+static void configure_cli11_ntn_initial_ul_rx_mapping_args(
+    CLI::App& app, du_high_unit_ntn_initial_ul_rx_mapping_config& mapping)
+{
+  add_option(app, "--enabled", mapping.enabled, "Enable verified NTN Initial UL receive mapping")
+      ->capture_default_str();
+  add_option(app, "--version", mapping.version, "Deployment-local receive mapping version")->capture_default_str();
+  add_option(app, "--hash", mapping.hash, "Deployment-local receive mapping hash")->capture_default_str();
+  add_option(app,
+             "--unique_margin_db",
+             mapping.unique_margin_db,
+             "Minimum strongest-to-second PRACH receive-port energy margin in dB")
+      ->capture_default_str()
+      ->check(CLI::Range(0.0F, 60.0F));
+
+  add_option_cell(
+      app,
+      "--entries",
+      [&mapping](const std::vector<std::string>& values) {
+        mapping.entries.clear();
+        if (values.size() > 1024U) {
+          // Bound parsing memory and leave an explicit over-limit marker for the common validator.
+          mapping.entries.resize(1025U);
+          return;
+        }
+        mapping.entries.resize(values.size());
+        for (unsigned i = 0, e = values.size(); i != e; ++i) {
+          CLI::App subapp("NTN Initial UL receive mapping entry",
+                          "NTN Initial UL receive mapping entry #" + std::to_string(i));
+          subapp.config_formatter(create_yaml_config_parser());
+          subapp.allow_config_extras(CLI::config_extras_mode::capture);
+          configure_cli11_ntn_initial_ul_rx_mapping_entry_args(subapp, mapping.entries[i]);
+          std::istringstream stream(values[i]);
+          subapp.parse_from_stream(stream);
+        }
+      },
+      "Maps an onboard NCI and cell-local port to one verified receive path");
+}
+
 void srsran::configure_cli11_with_du_high_config_schema(CLI::App& app, du_high_parsed_config& parsed_cfg)
 {
   add_option(app, "--gnb_id", parsed_cfg.config.gnb_id.id, "gNodeB identifier")->capture_default_str();
@@ -2046,6 +2100,12 @@ void srsran::configure_cli11_with_du_high_config_schema(CLI::App& app, du_high_p
   // Expert execution section.
   CLI::App* expert_subcmd = add_subcommand(app, "expert_execution", "Expert execution configuration")->configurable();
   configure_cli11_expert_execution_args(*expert_subcmd, parsed_cfg.config.expert_execution_cfg);
+
+  // Optional verified receive mapping used only by the NTN Initial UL path.
+  CLI::App* ntn_rx_mapping_subcmd =
+      add_subcommand(app, "ntn_initial_ul_rx_mapping", "NTN Initial UL receive mapping")->configurable();
+  configure_cli11_ntn_initial_ul_rx_mapping_args(*ntn_rx_mapping_subcmd,
+                                                  parsed_cfg.config.ntn_initial_ul_rx_mapping);
 
   // NTN section.
   static ntn_config ntn_cfg;

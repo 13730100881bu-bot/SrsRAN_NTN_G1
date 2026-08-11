@@ -23,15 +23,20 @@
 #pragma once
 
 #include "srsran/adt/static_vector.h"
+#include "srsran/ran/prach/verified_prach_rx_context.h"
 #include "srsran/ran/phy_time_unit.h"
 #include "srsran/ran/slot_pdu_capacity_constants.h"
 #include "srsran/ran/slot_point.h"
+#include <memory>
 #include <optional>
 
 namespace srsran {
 
 /// Describes a RACH indication.
 struct mac_rach_indication {
+  /// Receive-port attribution status for a detected preamble.
+  enum class rx_port_attribution_status : uint8_t { unavailable, unique, ambiguous };
+
   /// Describes the detection of a single preamble.
   struct rach_preamble {
     /// Index of the detected preamble. Possible values are {0, ..., 63}.
@@ -42,10 +47,20 @@ struct mac_rach_indication {
     std::optional<float> pwr_dBFS;
     /// Average SNR value in dB.
     std::optional<float> snr_dB;
+    /// Receive-port attribution status.
+    rx_port_attribution_status port_attribution_status = rx_port_attribution_status::unavailable;
+    /// Physical receive-port identifier when attribution is available.
+    std::optional<unsigned> strongest_rx_port;
+    /// Power difference between the strongest and second strongest receive ports, in dB.
+    std::optional<float> strongest_to_second_margin_dB;
+    /// Present only after a unique detector port was matched to one verified OFH receive context.
+    std::shared_ptr<const verified_prach_rx_context> verified_context;
   };
 
   /// Describes a single RACH occasion.
   struct rach_occasion {
+    /// Request handle echoed by the PRACH result. Zero denotes the legacy uncorrelated behavior.
+    uint32_t handle = 0;
     /// OFDM symbol index within the slot that marks the start of the acquisition window for the first time-domain PRACH
     /// occasion.
     unsigned start_symbol;
@@ -53,6 +68,14 @@ struct mac_rach_indication {
     unsigned slot_index;
     /// The index of the received PRACH frequency domain occasion.
     unsigned frequency_index;
+    /// True when the scheduler supplied an NTN calendar position from its extended slot timeline.
+    bool calendar_position_valid = false;
+    /// Immutable schedule version selected by the scheduler for this opportunity.
+    uint64_t calendar_schedule_version = 0;
+    /// Number of complete calendar cycles since activation.
+    uint64_t calendar_cycle_index = 0;
+    /// Offset of this PRACH opportunity within the calendar cycle, in microseconds.
+    uint32_t occasion_offset_us = 0;
     /// Average value of RSSI in dBFS.
     std::optional<float> rssi_dBFS;
     /// List of detected preambles in this RACH occasion.

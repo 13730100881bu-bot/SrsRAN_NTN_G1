@@ -36,6 +36,9 @@
 #include "srsran/ru/ru_error_notifier.h"
 #include "srsran/ru/ru_timing_notifier.h"
 #include "srsran/ru/ru_uplink_plane.h"
+#include <algorithm>
+#include <array>
+#include <memory>
 
 namespace srsran {
 
@@ -102,6 +105,45 @@ public:
   {
     srsran_assert(context.sector < handlers.size(), "Unsupported sector {}", context.sector);
     handlers[context.sector]->handle_rx_prach_window(context, std::move(buffer));
+  }
+
+  // See interface for documentation.
+  void on_new_prach_window_data(const prach_buffer_context&             context,
+                                shared_prach_buffer                     buffer,
+                                span<const verified_prach_rx_context>   verified_contexts) override
+  {
+    srsran_assert(context.sector < handlers.size(), "Unsupported sector {}", context.sector);
+
+    prach_buffer_context extended_context = context;
+    extended_context.verified_rx_contexts.reset();
+    if (!verified_contexts.empty() && verified_contexts.size() == context.ports.size()) {
+      std::array<bool, MAX_PORTS> seen_buffer_ports{};
+      bool                        valid = true;
+      for (const auto& item : verified_contexts) {
+        if (!is_valid_verified_prach_rx_context(item) || item.buffer_port >= context.ports.size() ||
+            seen_buffer_ports[item.buffer_port]) {
+          valid = false;
+          break;
+        }
+        if (item.authority == prach_rx_context_authority::ofh_beam_id_verified &&
+            std::count_if(verified_contexts.begin(), verified_contexts.end(), [&item](const auto& candidate) {
+              return candidate.ofh_prach_eaxc == item.ofh_prach_eaxc;
+            }) != 1) {
+          valid = false;
+          break;
+        }
+        seen_buffer_ports[item.buffer_port] = true;
+      }
+      for (unsigned port = 0; valid && port != context.ports.size(); ++port) {
+        valid = seen_buffer_ports[port];
+      }
+      if (valid) {
+        extended_context.verified_rx_contexts = std::make_shared<const verified_prach_rx_context_list>(
+            verified_contexts.begin(), verified_contexts.end());
+      }
+    }
+
+    handlers[context.sector]->handle_rx_prach_window(extended_context, std::move(buffer));
   }
 
   /// Maps the given upper PHY received symbol handler and sector to this adapter.

@@ -171,3 +171,8 @@ du_manager_time_mapper_accessor& du_high_impl::get_du_manager_time_mapper_access
 {
   return *du_manager;
 }
+
+std::shared_ptr<ofh::prach_beam_context_provider> du_high_impl::get_ntn_prach_beam_context_provider()
+{
+  return mac->get_ntn_prach_beam_context_provider();
+}

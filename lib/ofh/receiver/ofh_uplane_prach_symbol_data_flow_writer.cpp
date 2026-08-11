@@ -27,7 +27,8 @@ using namespace srsran;
 using namespace ofh;
 
 bool uplane_prach_symbol_data_flow_writer::write_to_prach_buffer(unsigned                              eaxc,
-                                                                 const uplane_message_decoder_results& results)
+                                                                 const uplane_message_decoder_results& results,
+                                                                 std::optional<prach_beam_context>      beam_context)
 {
   slot_point slot = results.params.slot;
 
@@ -109,7 +110,12 @@ bool uplane_prach_symbol_data_flow_writer::write_to_prach_buffer(unsigned       
     span<const cbf16_t> prach_in_data = span<const cbf16_t>(section.iq_samples).subspan(iq_start_re, iq_size_re);
 
     // Copy the data in the buffer.
-    prach_context_repo->write_iq(slot, port, results.params.symbol_id, start_re, prach_in_data);
+    std::optional<verified_prach_uplane_context> verified_context;
+    if (beam_context) {
+      verified_context = verified_prach_uplane_context{eaxc, port, *beam_context};
+    }
+    prach_context_repo->write_iq(
+        slot, port, results.params.symbol_id, start_re, prach_in_data, std::move(verified_context));
 
     if (SRSRAN_UNLIKELY(logger.debug.enabled())) {
       logger.debug("Sector#{}: handling PRACH in slot '{}', symbol '{}' and port '{}'",

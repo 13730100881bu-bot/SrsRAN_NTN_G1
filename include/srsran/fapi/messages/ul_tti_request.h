@@ -53,7 +53,7 @@ enum class prach_config_scope_type : uint8_t { common_context, phy_context };
 
 /// PRACH maintenance parameters added in FAPIv3.
 struct ul_prach_maintenance_v3 {
-  uint32_t                handle;
+  uint32_t                handle = 0;
   prach_config_scope_type prach_config_scope;
   uint16_t                prach_res_config_index;
   uint8_t                 num_fd_ra;
@@ -76,6 +76,13 @@ struct ul_prach_pdu {
   //: TODO: uplink spatial assignment struct
   //: TODO: msgA signalling in v4
   //: TODO: msgA pusch beamforming
+  // Internal extension used only between the scheduler and upper PHY.
+  bool  enable_rx_port_attribution           = false;
+  float rx_port_attribution_unique_margin_dB = 6.0F;
+  bool     calendar_position_valid = false;
+  uint64_t calendar_schedule_version = 0;
+  uint64_t calendar_cycle_index    = 0;
+  uint32_t occasion_offset_us      = 0;
 };
 
 /// Uplink PUSCH data information.

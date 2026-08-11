@@ -57,6 +57,8 @@ public:
 
   du_manager_time_mapper_accessor& get_du_manager_time_mapper_accessor() override;
 
+  std::shared_ptr<ofh::prach_beam_context_provider> get_ntn_prach_beam_context_provider() override;
+
 private:
   class layer_connector;
 

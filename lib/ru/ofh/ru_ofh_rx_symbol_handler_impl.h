@@ -40,6 +40,11 @@ public:
   // See interface for documentation.
   void on_new_prach_window_data(const prach_buffer_context& context, shared_prach_buffer buffer) override;
 
+  // See interface for documentation.
+  void on_new_prach_window_data(const prach_buffer_context&                      context,
+                                shared_prach_buffer                              buffer,
+                                span<const ofh::verified_prach_uplane_context>   verified_contexts) override;
+
 private:
   ru_uplink_plane_rx_symbol_notifier& notifier;
 };

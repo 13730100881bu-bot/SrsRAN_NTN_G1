@@ -21,6 +21,7 @@
  */
 
 #include "mac_rach_handler.h"
+#include "../mac_ntn_initial_ul_position_manager.h"
 #include "../rnti_manager.h"
 #include "srsran/scheduler/scheduler_configurator.h"
 
@@ -62,7 +63,8 @@ void mac_cell_rach_handler_impl::handle_rach_indication(const mac_rach_indicatio
     sched_occasion.start_symbol    = occasion.start_symbol;
     sched_occasion.frequency_index = occasion.frequency_index;
     for (const auto& preamble : occasion.preambles) {
-      rnti_t selected_rnti = rnti_t::INVALID_RNTI;
+      rnti_t   selected_rnti       = rnti_t::INVALID_RNTI;
+      uint32_t selected_generation = 0;
       if (is_cfra_preamble(preamble.index)) {
         // Fetch C-RNTI if it is Contention-free RACH preamble.
         selected_rnti = preambles[get_cfra_index(preamble.index)].load(std::memory_order_acquire);
@@ -75,7 +77,9 @@ void mac_cell_rach_handler_impl::handle_rach_indication(const mac_rach_indicatio
         }
       } else {
         // It is a Contention-based RACH preamble. Allocate TC-RNTI for the UE.
-        selected_rnti = parent.rnti_mng.allocate_for_cell(cell_index);
+        const rnti_allocation_result allocation = parent.rnti_mng.allocate_for_cell_with_generation(cell_index);
+        selected_rnti                           = allocation.rnti;
+        selected_generation                     = allocation.generation;
         if (selected_rnti == rnti_t::INVALID_RNTI) {
           parent.logger.warning("cell={} preamble id={}: Ignoring PRACH. Cause: Failed to allocate TC-RNTI.",
                                 fmt::underlying(cell_index),
@@ -87,6 +91,21 @@ void mac_cell_rach_handler_impl::handle_rach_indication(const mac_rach_indicatio
       sched_preamble.preamble_id  = preamble.index;
       sched_preamble.tc_rnti      = selected_rnti;
       sched_preamble.time_advance = preamble.time_advance;
+
+      if (!is_cfra_preamble(preamble.index) && parent.ntn_position_mng != nullptr) {
+        parent.ntn_position_mng->record_initial_prach(cell_index,
+                                                      rach_ind.slot_rx,
+                                                      selected_rnti,
+                                                      selected_generation,
+                                                      occasion.calendar_position_valid,
+                                                      occasion.calendar_schedule_version,
+                                                      occasion.calendar_cycle_index,
+                                                      occasion.occasion_offset_us,
+                                                      preamble.port_attribution_status,
+                                                      preamble.strongest_rx_port,
+                                                      preamble.strongest_to_second_margin_dB,
+                                                      preamble.verified_context);
+      }
     }
     if (sched_occasion.preambles.empty()) {
       // No preamble was added. Remove occasion.
@@ -130,10 +149,12 @@ void mac_cell_rach_handler_impl::handle_cfra_deallocation(du_ue_index_t ue_idx)
 
 mac_rach_handler::mac_rach_handler(scheduler_configurator& sched_,
                                    rnti_manager&           rnti_mng_,
-                                   srslog::basic_logger&   logger_) :
+                                   srslog::basic_logger&   logger_,
+                                   mac_ntn_initial_ul_position_manager* ntn_position_mng_) :
   sched(sched_),
   rnti_mng(rnti_mng_),
   logger(logger_),
+  ntn_position_mng(ntn_position_mng_),
   ue_map(MAX_NOF_DU_UES, cfra_ue_context{INVALID_DU_CELL_INDEX, MAX_NOF_RA_PREAMBLES_PER_OCCASION})
 {
 }
@@ -148,5 +169,8 @@ mac_cell_rach_handler_impl& mac_rach_handler::add_cell(const sched_cell_configur
 void mac_rach_handler::rem_cell(du_cell_index_t cell_index)
 {
   srsran_assert(cell_map.contains(cell_index), "Cell does not exist");
+  if (ntn_position_mng != nullptr) {
+    ntn_position_mng->invalidate_cell(cell_index);
+  }
   cell_map.erase(cell_index);
 }

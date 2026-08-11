@@ -28,6 +28,7 @@
 #include "srsran/ran/rnti.h"
 #include <algorithm>
 #include <chrono>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <set>
@@ -36,6 +37,15 @@
 namespace srsran {
 
 using du_rnti_table = rnti_value_table<du_ue_index_t, du_ue_index_t::INVALID_DU_UE_INDEX>;
+
+/// Result of a cell-aware C-RNTI allocation.
+///
+/// A non-zero generation identifies an NTN lease. Terrestrial allocations intentionally use generation zero because
+/// they are not backed by the versioned NTN lease ledger. Failed allocations return INVALID_RNTI and generation zero.
+struct rnti_allocation_result {
+  rnti_t   rnti       = rnti_t::INVALID_RNTI;
+  uint32_t generation = 0;
+};
 
 /// \brief Extends DU RNTI Table with the ability to allocate unique RNTIs for UEs.
 class rnti_manager : public du_rnti_table
@@ -63,21 +73,33 @@ public:
   /// Atomically chooses the cell's authoritative NTN pool or the terrestrial allocator.
   rnti_t allocate_for_cell(du_cell_index_t cell_index)
   {
-    return allocate_for_cell(cell_index, ntn_lease_clock::now());
+    return allocate_for_cell_with_generation(cell_index, ntn_lease_clock::now()).rnti;
   }
 
   /// Deterministic-time overload used to verify atomic lease-mode selection.
   rnti_t allocate_for_cell(du_cell_index_t cell_index, ntn_lease_time_point now)
   {
+    return allocate_for_cell_with_generation(cell_index, now).rnti;
+  }
+
+  /// Atomically allocates a C-RNTI and returns its NTN lease generation when applicable.
+  rnti_allocation_result allocate_for_cell_with_generation(du_cell_index_t cell_index)
+  {
+    return allocate_for_cell_with_generation(cell_index, ntn_lease_clock::now());
+  }
+
+  /// Deterministic-time overload used to verify generation-preserving NTN lease allocation.
+  rnti_allocation_result allocate_for_cell_with_generation(du_cell_index_t cell_index, ntn_lease_time_point now)
+  {
     std::lock_guard<std::mutex> lock(ntn_lease_mutex);
     if (!is_ntn_rnti_lease_mode_enabled_locked(cell_index)) {
-      return allocate_terrestrial_locked(now);
+      return {allocate_terrestrial_locked(now), 0};
     }
-    rnti_t result = allocate_ntn_lease_locked(cell_index, now);
-    if (result != rnti_t::INVALID_RNTI || cell_index == INVALID_DU_CELL_INDEX) {
+    rnti_allocation_result result = allocate_ntn_lease_with_generation_locked(cell_index, now);
+    if (result.rnti != rnti_t::INVALID_RNTI || cell_index == INVALID_DU_CELL_INDEX) {
       return result;
     }
-    return allocate_ntn_lease_locked(INVALID_DU_CELL_INDEX, now);
+    return allocate_ntn_lease_with_generation_locked(INVALID_DU_CELL_INDEX, now);
   }
 
   /// Associates an RNTI with a UE while closing any outstanding terrestrial RACH reservation.
@@ -287,11 +309,11 @@ public:
   rnti_t allocate_ntn_lease(du_cell_index_t cell_index, ntn_lease_time_point now)
   {
     std::lock_guard<std::mutex> lock(ntn_lease_mutex);
-    rnti_t                      result = allocate_ntn_lease_locked(cell_index, now);
-    if (result != rnti_t::INVALID_RNTI || cell_index == INVALID_DU_CELL_INDEX) {
-      return result;
+    rnti_allocation_result      result = allocate_ntn_lease_with_generation_locked(cell_index, now);
+    if (result.rnti != rnti_t::INVALID_RNTI || cell_index == INVALID_DU_CELL_INDEX) {
+      return result.rnti;
     }
-    return allocate_ntn_lease_locked(INVALID_DU_CELL_INDEX, now);
+    return allocate_ntn_lease_with_generation_locked(INVALID_DU_CELL_INDEX, now).rnti;
   }
 
   /// Clears the full pending/consumed/expired history for one cell.
@@ -623,15 +645,16 @@ private:
     return rnti_t::INVALID_RNTI;
   }
 
-  rnti_t allocate_ntn_lease_locked(du_cell_index_t cell_index, ntn_lease_time_point now)
+  rnti_allocation_result allocate_ntn_lease_with_generation_locked(du_cell_index_t cell_index,
+                                                                    ntn_lease_time_point now)
   {
     refresh_ntn_rnti_lease_states_locked(cell_index, now);
     auto it = ntn_rnti_leases.find(cell_index);
     if (it == ntn_rnti_leases.end()) {
-      return rnti_t::INVALID_RNTI;
+      return {};
     }
     if (this->nof_ues() >= MAX_NOF_DU_UES) {
-      return rnti_t::INVALID_RNTI;
+      return {};
     }
     for (ntn_rnti_lease_record& lease : it->second) {
       if (lease.state != ntn_rnti_lease_state::pending) {
@@ -640,10 +663,15 @@ private:
       if (this->has_rnti(lease.rnti)) {
         continue;
       }
+      // UINT32_MAX cannot be followed by a strictly newer generation, so consuming it would make safe reuse
+      // impossible. Keep the lease pending and fail closed.
+      if (lease.generation_id == std::numeric_limits<uint32_t>::max()) {
+        continue;
+      }
       lease.state = ntn_rnti_lease_state::consumed_by_mac;
-      return lease.rnti;
+      return {lease.rnti, lease.generation_id};
     }
-    return rnti_t::INVALID_RNTI;
+    return {};
   }
 
   static constexpr int CRNTI_RANGE = to_value(rnti_t::MAX_CRNTI) + 1 - to_value(rnti_t::MIN_CRNTI);

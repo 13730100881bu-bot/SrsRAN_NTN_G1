@@ -52,7 +52,9 @@ struct srsran_mac_sched_config {
 class srsran_scheduler_adapter final : public mac_scheduler_adapter
 {
 public:
-  explicit srsran_scheduler_adapter(const srsran_mac_sched_config& params, rnti_manager& rnti_mng_);
+  explicit srsran_scheduler_adapter(const srsran_mac_sched_config&       params,
+                                    rnti_manager&                        rnti_mng_,
+                                    mac_ntn_initial_ul_position_manager* ntn_position_mng_ = nullptr);
 
   void add_cell(const mac_scheduler_cell_creation_request& msg) override;
 
