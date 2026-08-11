@@ -627,10 +627,16 @@ static void configure_cli11_mobility_args(CLI::App& app, cu_cp_unit_mobility_con
   add_option(*ntn_position_plan_subcmd,
              "--initial_ul_position_validation",
              config.ntn_onboard_position_plan.initial_ul_position_validation,
-             "Initial UL position validation: disabled, audit, or strict; strict requires an injected source before "
+             "Initial UL position validation: disabled, audit, or strict; strict requires an available source before "
              "CU-CP startup")
       ->capture_default_str()
       ->check(CLI::IsMember({"disabled", "audit", "strict"}));
+  add_option(*ntn_position_plan_subcmd,
+             "--initial_ul_position_query_timeout_ms",
+             config.ntn_onboard_position_plan.initial_ul_position_query_timeout_ms,
+             "Timeout for the private F1 Initial UL position query in milliseconds")
+      ->capture_default_str()
+      ->check(CLI::Range(10U, 200U));
   add_option(*ntn_position_plan_subcmd,
              "--require_signed_plan",
              config.ntn_onboard_position_plan.require_signed_plan,

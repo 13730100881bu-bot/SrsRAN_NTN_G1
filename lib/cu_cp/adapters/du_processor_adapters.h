@@ -45,6 +45,24 @@ public:
     ue_context_handler  = &ue_context_handler_;
   }
 
+  std::optional<f1ap_initial_ul_position_query_plan>
+  on_initial_ul_position_query_required(du_index_t                                      du_index,
+                                        const f1ap_initial_ul_position_query_context& context) override
+  {
+    srsran_assert(cu_cp_handler != nullptr, "CU-CP handler must not be nullptr");
+    return cu_cp_handler->handle_initial_ul_position_query_required(du_index, context);
+  }
+
+  void on_initial_ul_position_query_complete(
+      du_index_t                                         du_index,
+      const f1ap_initial_ul_position_query_context&      context,
+      const f1ap_initial_ul_position_query_plan&         plan,
+      const f1ap_gnb_du_resource_coordination_response& response) override
+  {
+    srsran_assert(cu_cp_handler != nullptr, "CU-CP handler must not be nullptr");
+    cu_cp_handler->handle_initial_ul_position_query_complete(du_index, context, plan, response);
+  }
+
   bool on_cell_config_update_request(nr_cell_identity nci, const serving_cell_meas_config& serv_cell_cfg) override
   {
     srsran_assert(meas_config_handler != nullptr, "Measurement config handler must not be nullptr");

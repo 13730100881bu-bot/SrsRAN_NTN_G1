@@ -111,6 +111,19 @@ struct ue_rrc_context_creation_response {
 
 using ue_rrc_context_creation_outcome = expected<ue_rrc_context_creation_response, byte_buffer>;
 
+/// Immutable identity extracted from one InitialULRRCMessageTransfer before CU-CP UE creation.
+struct f1ap_initial_ul_position_query_context {
+  gnb_du_ue_f1ap_id_t du_ue_f1ap_id = gnb_du_ue_f1ap_id_t::invalid;
+  nr_cell_global_id_t cell_cgi;
+  rnti_t              c_rnti = rnti_t::INVALID_RNTI;
+};
+
+/// CU-CP supplied private query to resolve the Initial UL receive position on the current F1 connection.
+struct f1ap_initial_ul_position_query_plan {
+  f1ap_ntn_initial_ul_position_query query;
+  std::chrono::milliseconds          response_timeout{50};
+};
+
 /// Scheduler of F1AP async tasks using common signalling.
 class f1ap_common_du_task_notifier
 {
@@ -126,6 +139,22 @@ class f1ap_du_processor_notifier : public du_setup_notifier, public f1ap_common_
 {
 public:
   virtual ~f1ap_du_processor_notifier() = default;
+
+  /// Requests a private DU observation lookup before creating the RRC UE. Returning no plan preserves the original
+  /// Initial UL path without an extra F1 transaction.
+  virtual std::optional<f1ap_initial_ul_position_query_plan>
+  on_initial_ul_position_query_required(const f1ap_initial_ul_position_query_context& context)
+  {
+    return std::nullopt;
+  }
+
+  /// Delivers the bounded private query outcome before the original Initial UL message is processed.
+  virtual void on_initial_ul_position_query_complete(
+      const f1ap_initial_ul_position_query_context&       context,
+      const f1ap_initial_ul_position_query_plan&          plan,
+      const f1ap_gnb_du_resource_coordination_response& response)
+  {
+  }
 
   /// \brief Notifies the CU-CP that an RRC context has been created for an existing CU-CP UE.
   virtual ue_rrc_context_creation_outcome
@@ -211,6 +240,12 @@ public:
   /// Returns the current F1AP identity of a UE.
   /// Returns no value if the UE has no complete ID pair or is being released.
   virtual std::optional<f1ap_ue_identity> get_ue_identity(ue_index_t ue_index) const = 0;
+
+  /// Immediately prevents connection-scoped work from progressing after the F1 transport is lost.
+  ///
+  /// This method is synchronous so that an in-flight Initial UL side query can be cancelled before the DU removal
+  /// task is queued behind it. Implementations must make repeated calls idempotent.
+  virtual void handle_connection_loss() {}
 
   virtual async_task<void> stop() = 0;
 

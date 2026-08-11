@@ -250,6 +250,21 @@ class cu_cp_du_event_handler
 public:
   virtual ~cu_cp_du_event_handler() = default;
 
+  virtual std::optional<f1ap_initial_ul_position_query_plan>
+  handle_initial_ul_position_query_required(du_index_t                                      du_index,
+                                            const f1ap_initial_ul_position_query_context& context)
+  {
+    return std::nullopt;
+  }
+
+  virtual void handle_initial_ul_position_query_complete(
+      du_index_t                                         du_index,
+      const f1ap_initial_ul_position_query_context&      context,
+      const f1ap_initial_ul_position_query_plan&         plan,
+      const f1ap_gnb_du_resource_coordination_response& response)
+  {
+  }
+
   /// \brief Handle creation of a DU connection context.
   virtual void handle_du_connection_established(du_index_t du_index) = 0;
 

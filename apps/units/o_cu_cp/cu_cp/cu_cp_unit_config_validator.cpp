@@ -107,6 +107,11 @@ static bool validate_mobility_appconfig(gnb_id_t gnb_id, const cu_cp_unit_mobili
                "execution\n");
     return false;
   }
+  if (position_plan_cfg.initial_ul_position_query_timeout_ms < 10 ||
+      position_plan_cfg.initial_ul_position_query_timeout_ms > 200) {
+    fmt::print("Invalid CU-CP configuration. initial_ul_position_query_timeout_ms must be within [10, 200]\n");
+    return false;
+  }
   if (position_plan_cfg.du_execution_enabled && ntn_cfg.enabled) {
     fmt::print("Invalid CU-CP configuration. Executing onboard position plans and legacy NTN location mobility "
                "cannot both be identity-authoritative\n");

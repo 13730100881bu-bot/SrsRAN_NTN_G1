@@ -179,6 +179,12 @@ struct cu_cp_ntn_onboard_cell_plan_status {
   std::string      runtime_plmn               = "none";
   tac_t            runtime_tac                = INVALID_TAC;
   std::string      runtime_tai_status         = "unavailable";
+  std::string      initial_access_rx_state    = "disabled";
+  std::string      initial_access_rx_backend  = "none";
+  bool             initial_access_strict_available = false;
+  uint64_t         initial_access_rx_mapping_version = 0;
+  std::string      initial_access_rx_mapping_hash = "none";
+  std::string      initial_access_rx_last_reason = "none";
 };
 
 /// Static scheduler opportunity evidence for one onboard cell. This does not prove position, antenna or RF execution.
@@ -246,6 +252,7 @@ struct cu_cp_ntn_position_plan_status {
   /// Compatibility summary retained for existing read-only command consumers.
   std::string initial_access_position_check     = "disabled";
   std::string initial_access_position_mode      = "disabled";
+  /// Provider/query interface state. This is intentionally independent of live SDR/OFH backend readiness.
   std::string initial_access_position_source_state = "disabled";
   std::string initial_access_position_source_authority = "none";
   unsigned    initial_access_position_pending         = 0;
@@ -256,6 +263,19 @@ struct cu_cp_ntn_position_plan_status {
   uint64_t    initial_access_position_expired         = 0;
   uint64_t    initial_access_position_replayed        = 0;
   std::string initial_access_position_last_reason     = "none";
+  std::string initial_access_rx_beam_state             = "disabled";
+  std::string initial_access_rx_backend                = "none";
+  bool        initial_access_strict_available          = false;
+  uint64_t    initial_access_rx_mapping_version        = 0;
+  std::string initial_access_rx_mapping_hash           = "none";
+  uint64_t    initial_access_software_records          = 0;
+  uint64_t    initial_access_sdr_records               = 0;
+  uint64_t    initial_access_ofh_records               = 0;
+  uint64_t    initial_access_ambiguous_records         = 0;
+  uint64_t    initial_access_no_port_records           = 0;
+  uint64_t    initial_access_query_timeouts            = 0;
+  uint64_t    initial_access_generation_mismatches     = 0;
+  std::string initial_access_rx_last_reason            = "none";
   unsigned    clear_queue_depth   = 0;
   bool        clear_in_flight     = false;
   uint64_t    clear_queue_head_schedule_version = 0;

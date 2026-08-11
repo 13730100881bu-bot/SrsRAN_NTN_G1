@@ -556,6 +556,8 @@ srs_cu_cp::cu_cp_configuration srsran::generate_cu_cp_config(const cu_cp_unit_co
     out_cfg.mobility.onboard_position_plan.initial_ul_position_validation =
         srs_cu_cp::ntn_initial_ul_position_validation_mode::disabled;
   }
+  out_cfg.mobility.onboard_position_plan.initial_ul_position_query_timeout = std::chrono::milliseconds{
+      cu_cfg.mobility_config.ntn_onboard_position_plan.initial_ul_position_query_timeout_ms};
   out_cfg.mobility.onboard_position_plan.require_signed_plan =
       cu_cfg.mobility_config.ntn_onboard_position_plan.require_signed_plan;
   out_cfg.mobility.onboard_position_plan.trusted_signing_keys.reserve(

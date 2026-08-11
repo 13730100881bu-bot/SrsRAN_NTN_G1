@@ -106,6 +106,21 @@ class du_processor_cu_cp_notifier
 public:
   virtual ~du_processor_cu_cp_notifier() = default;
 
+  virtual std::optional<f1ap_initial_ul_position_query_plan>
+  on_initial_ul_position_query_required(du_index_t                                      du_index,
+                                        const f1ap_initial_ul_position_query_context& context)
+  {
+    return std::nullopt;
+  }
+
+  virtual void on_initial_ul_position_query_complete(
+      du_index_t                                      du_index,
+      const f1ap_initial_ul_position_query_context&   context,
+      const f1ap_initial_ul_position_query_plan&      plan,
+      const f1ap_gnb_du_resource_coordination_response& response)
+  {
+  }
+
   /// \brief Request to update the measurement related parameters for the given cell id.
   /// \param[in] nci The cell id of the serving cell to update.
   /// \param[in] serv_cell_cfg_ The serving cell meas config to update.

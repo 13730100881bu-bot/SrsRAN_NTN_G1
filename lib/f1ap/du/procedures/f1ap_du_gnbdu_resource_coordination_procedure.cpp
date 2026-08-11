@@ -40,9 +40,16 @@ void f1ap_du_gnbdu_resource_coordination_procedure::operator()(coro_context<asyn
 {
   CORO_BEGIN(ctx);
 
-  calendar_container_seen =
-      is_f1ap_ntn_access_calendar_update_container(request->eutra_nr_cell_res_coordination_req_container);
-  if (calendar_container_seen) {
+  position_query_container_seen =
+      is_f1ap_ntn_initial_ul_position_query_container(request->eutra_nr_cell_res_coordination_req_container);
+  if (position_query_container_seen) {
+    position_query =
+        decode_f1ap_ntn_initial_ul_position_query(request->eutra_nr_cell_res_coordination_req_container);
+    if (position_query.has_value()) {
+      CORO_AWAIT_VALUE(position_result, du_mng.request_ntn_initial_ul_position(position_query.value()));
+    }
+  } else if ((calendar_container_seen =
+                  is_f1ap_ntn_access_calendar_update_container(request->eutra_nr_cell_res_coordination_req_container))) {
     calendar_update = decode_f1ap_ntn_access_calendar_update(request->eutra_nr_cell_res_coordination_req_container);
     if (calendar_update.has_value()) {
       CORO_AWAIT_VALUE(calendar_result, du_mng.request_ntn_access_calendar_update(calendar_update.value()));
@@ -78,7 +85,8 @@ void f1ap_du_gnbdu_resource_coordination_procedure::send_response()
 
   resp->transaction_id = request->transaction_id;
   resp->eutra_nr_cell_res_coordination_req_ack_container =
-      calendar_container_seen ? encode_f1ap_ntn_access_calendar_result(calendar_result)
+      position_query_container_seen ? encode_f1ap_ntn_initial_ul_position_result(position_result)
+      : calendar_container_seen ? encode_f1ap_ntn_access_calendar_result(calendar_result)
       : audit_request.has_value() ? encode_f1ap_ntn_resource_audit_result(audit_result)
       : sib19_update.has_value() ? encode_f1ap_ntn_sib19_broadcast_result(sib19_result)
                                 : encode_f1ap_ntn_rnti_lease_pool_result(result);

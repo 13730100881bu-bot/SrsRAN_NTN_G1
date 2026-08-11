@@ -93,6 +93,9 @@ public:
   /// \return asynchronous task for the DU processor removal.
   async_task<void> remove_du(du_index_t du_index);
 
+  /// Synchronously invalidates connection-scoped state before the asynchronous DU removal is queued.
+  void handle_du_connection_closed(du_index_t du_index);
+
   /// Number of DUs managed by the CU-CP.
   size_t get_nof_dus() const { return du_db.size(); }
 
@@ -102,6 +105,8 @@ private:
     du_processor_cu_cp_adapter du_to_cu_cp_notifier;
 
     std::unique_ptr<du_processor> processor;
+
+    bool connection_closed = false;
 
     /// Notifier used by the CU-CP to push F1AP Tx messages to the respective DU.
     std::unique_ptr<f1ap_message_notifier> f1ap_tx_pdu_notifier;

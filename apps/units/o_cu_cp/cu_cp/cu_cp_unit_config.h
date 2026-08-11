@@ -274,6 +274,7 @@ struct cu_cp_unit_ntn_onboard_position_plan_config {
   bool                  enabled = false;
   bool                  du_execution_enabled = false;
   std::string           initial_ul_position_validation = "disabled";
+  unsigned              initial_ul_position_query_timeout_ms = 50;
   bool                  require_signed_plan = false;
   std::vector<cu_cp_unit_ntn_position_plan_trusted_key_config> trusted_signing_keys;
   std::string           satellite_id;

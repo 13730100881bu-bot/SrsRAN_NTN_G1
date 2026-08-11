@@ -88,8 +88,8 @@ async_task<void> du_processor_repository::remove_du(du_index_t du_index)
       return;
     }
 
-    // Invalidate connection-scoped evidence while the served-cell context is still available.
-    cfg.cu_cp_du_handler.handle_du_disconnection(du_index);
+    // Also cover direct callers that did not receive a transport-close notification first.
+    handle_du_connection_closed(du_index);
 
     // Stop DU activity, eliminating pending transactions for the DU and respective UEs.
     CORO_AWAIT(du_db.find(du_index)->second.processor->get_f1ap_handler().stop());
@@ -100,6 +100,20 @@ async_task<void> du_processor_repository::remove_du(du_index_t du_index)
 
     CORO_RETURN();
   });
+}
+
+void du_processor_repository::handle_du_connection_closed(du_index_t du_index)
+{
+  auto it = du_db.find(du_index);
+  if (it == du_db.end() || it->second.connection_closed) {
+    return;
+  }
+
+  it->second.connection_closed = true;
+  // Cancel F1-owned side queries before their completion task can create an RRC UE on a dead connection.
+  it->second.processor->get_f1ap_handler().handle_connection_loss();
+  // Invalidate CU-CP evidence while the served-cell context is still available.
+  cfg.cu_cp_du_handler.handle_du_disconnection(du_index);
 }
 
 du_index_t du_processor_repository::get_next_du_index()

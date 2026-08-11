@@ -126,6 +126,12 @@ public:
     return du_mng->handle_ntn_resource_audit_request(request);
   }
 
+  async_task<f1ap_ntn_initial_ul_position_result>
+  request_ntn_initial_ul_position(const f1ap_ntn_initial_ul_position_query& request) override
+  {
+    return du_mng->handle_ntn_initial_ul_position_query(request);
+  }
+
   async_task<f1ap_ntn_sib19_broadcast_result>
   request_ntn_sib19_broadcast_update(const f1ap_ntn_sib19_broadcast_update& request) override
   {

@@ -23,24 +23,33 @@
 #pragma once
 
 #include "srsran/f1ap/ntn_access_calendar.h"
+#include "srsran/f1ap/ntn_initial_ul_position_query.h"
 #include "srsran/f1ap/ntn_rnti_lease_pool.h"
+#include <chrono>
 #include <optional>
+#include <string>
 
 namespace srsran::srs_cu_cp {
 
 struct f1ap_gnb_du_resource_coordination_request {
-  std::optional<f1ap_ntn_access_calendar_update> ntn_access_calendar_update;
-  f1ap_ntn_rnti_lease_pool_update ntn_rnti_lease_update;
-  f1ap_ntn_resource_audit_request ntn_resource_audit_request;
-  f1ap_ntn_sib19_broadcast_update ntn_sib19_broadcast_update;
+  std::optional<f1ap_ntn_initial_ul_position_query> ntn_initial_ul_position_query;
+  /// Per-request response timeout. Initial UL position queries default to 50 ms when this is not set.
+  std::optional<std::chrono::milliseconds>           response_timeout;
+  std::optional<f1ap_ntn_access_calendar_update>     ntn_access_calendar_update;
+  f1ap_ntn_rnti_lease_pool_update                    ntn_rnti_lease_update;
+  f1ap_ntn_resource_audit_request                    ntn_resource_audit_request;
+  f1ap_ntn_sib19_broadcast_update                    ntn_sib19_broadcast_update;
 };
 
 struct f1ap_gnb_du_resource_coordination_response {
-  bool                                           success = false;
-  std::optional<f1ap_ntn_access_calendar_result> calendar_result;
-  std::optional<f1ap_ntn_rnti_lease_pool_result> result;
-  std::optional<f1ap_ntn_resource_audit_result>  audit_result;
-  std::optional<f1ap_ntn_sib19_broadcast_result> sib19_result;
+  bool                                              success = false;
+  /// Transport/procedure failure. A valid rejected NTN result uses its own reason and leaves this empty.
+  std::string                                       failure_reason;
+  std::optional<f1ap_ntn_initial_ul_position_result> initial_ul_position_result;
+  std::optional<f1ap_ntn_access_calendar_result>     calendar_result;
+  std::optional<f1ap_ntn_rnti_lease_pool_result>     result;
+  std::optional<f1ap_ntn_resource_audit_result>      audit_result;
+  std::optional<f1ap_ntn_sib19_broadcast_result>     sib19_result;
 };
 
 } // namespace srsran::srs_cu_cp

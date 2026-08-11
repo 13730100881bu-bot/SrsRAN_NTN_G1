@@ -32,10 +32,13 @@
 #include "srsran/f1ap/f1ap_message_notifier.h"
 #include "srsran/ran/positioning/trp_information_exchange.h"
 #include "srsran/support/executors/task_executor.h"
+#include <map>
 #include <memory>
 
 namespace srsran {
 namespace srs_cu_cp {
+
+struct gnb_du_resource_coordination_transaction_observer;
 
 class f1ap_cu_impl final : public f1ap_cu
 {
@@ -53,6 +56,8 @@ public:
   resolve_ue_identity(gnb_cu_ue_f1ap_id_t cu_ue_f1ap_id, gnb_du_ue_f1ap_id_t du_ue_f1ap_id) const override;
 
   std::optional<f1ap_ue_identity> get_ue_identity(ue_index_t ue_index) const override;
+
+  void handle_connection_loss() override;
 
   async_task<void> stop() override;
 
@@ -143,6 +148,8 @@ private:
   /// @see rrc_setup_procedure.
   /// \param[in] msg The F1AP initial UL RRC message.
   void handle_initial_ul_rrc_message(const asn1::f1ap::init_ul_rrc_msg_transfer_s& msg);
+  void process_initial_ul_rrc_message(const asn1::f1ap::init_ul_rrc_msg_transfer_s& msg);
+  void invalidate_initial_ul_position_queries();
 
   /// \brief Handle the reception of an UL RRC Message Transfer message.
   /// \param[in] msg The F1AP UL RRC message.
@@ -182,6 +189,23 @@ private:
 
   tx_pdu_notifier_with_logging tx_pdu_notifier;
   f1ap_event_manager           ev_mng;
+
+  struct initial_ul_position_connection_lifetime {
+    bool accepting = true;
+  };
+  struct initial_ul_position_query_state {
+    bool active = true;
+    std::shared_ptr<gnb_du_resource_coordination_transaction_observer> transaction_observer;
+  };
+  // A DU UE identity can have only one Initial UL flow on a live F1 connection. Keying by C-RNTI as well would let a
+  // second message with the same DU UE ID but a changed C-RNTI start another query before the first one completes.
+  using initial_ul_position_query_key = gnb_du_ue_f1ap_id_t;
+
+  std::shared_ptr<initial_ul_position_connection_lifetime> initial_ul_position_lifetime =
+      std::make_shared<initial_ul_position_connection_lifetime>();
+  std::map<initial_ul_position_query_key, std::shared_ptr<initial_ul_position_query_state>>
+      initial_ul_position_queries;
+  bool f1ap_stopping = false;
 
   // Store current F1AP transaction ID.
   unsigned current_transaction_id = 0;

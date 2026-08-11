@@ -47,6 +47,8 @@ enum class ntn_initial_ul_position_authorization_status {
   invalid_request,
   ue_identity_mismatch,
   du_generation_mismatch,
+  rnti_generation_mismatch,
+  receive_port_unavailable,
   active_plan_unavailable,
   active_plan_mismatch,
   plan_audit_only
@@ -62,8 +64,12 @@ const char* to_string(ntn_initial_ul_position_authorization_status status);
 class ntn_initial_ul_position_observation_store final : public ntn_initial_ul_position_observation_provider
 {
 public:
-  explicit ntn_initial_ul_position_observation_store(std::string authority_ = "private_injected") :
-    source_authority(std::move(authority_))
+  explicit ntn_initial_ul_position_observation_store(std::string authority_ = "private_injected",
+                                                     bool rnti_generation_authoritative_ = false,
+                                                     bool device_verification_capable_ = false) :
+    source_authority(std::move(authority_)),
+    rnti_generation_authoritative(rnti_generation_authoritative_),
+    device_verification_capable(device_verification_capable_)
   {
   }
 
@@ -103,6 +109,8 @@ private:
   std::deque<stored_observation> observations;
   std::string                    source_authority;
   bool                           source_ready = true;
+  bool                           rnti_generation_authoritative = false;
+  bool                           device_verification_capable = false;
 };
 
 struct ntn_initial_ul_position_authorization_request {
@@ -110,6 +118,8 @@ struct ntn_initial_ul_position_authorization_request {
   ue_index_t                              ue_index      = ue_index_t::invalid;
   du_cell_index_t                         du_cell_index = du_cell_index_t::invalid;
   uint64_t                                du_connection_generation = 0;
+  /// Strict production admission accepts only an SDR or OFH device-verified observation.
+  bool                                    require_device_verified = false;
   std::shared_ptr<const ntn_onboard_runtime_mapping_snapshot> runtime_mapping;
   std::chrono::system_clock::time_point now{};
   std::chrono::steady_clock::time_point observation_now{};
@@ -120,6 +130,8 @@ struct ntn_initial_ul_position_authorization_result {
       ntn_initial_ul_position_authorization_status::observation_missing;
   uint64_t                                     observation_id = 0;
   std::string                                  position_id;
+  ntn_initial_ul_position_observation_authority authority =
+      ntn_initial_ul_position_observation_authority::invalid;
   ntn_initial_access_plan_audit                plan_audit;
 };
 

@@ -864,6 +864,22 @@ public:
                position_plan.initial_access_position_expired,
                position_plan.initial_access_position_replayed,
                position_plan.initial_access_position_last_reason);
+    fmt::print("NTN Initial UL receive source: state={} backend={} strict_available={} mapping_version={} "
+               "mapping_hash={} software={} sdr={} ofh={} ambiguous={} no_port={} query_timeout={} "
+               "generation_mismatch={} last_reason={}\n",
+               position_plan.initial_access_rx_beam_state,
+               position_plan.initial_access_rx_backend,
+               position_plan.initial_access_strict_available,
+               position_plan.initial_access_rx_mapping_version,
+               position_plan.initial_access_rx_mapping_hash,
+               position_plan.initial_access_software_records,
+               position_plan.initial_access_sdr_records,
+               position_plan.initial_access_ofh_records,
+               position_plan.initial_access_ambiguous_records,
+               position_plan.initial_access_no_port_records,
+               position_plan.initial_access_query_timeouts,
+               position_plan.initial_access_generation_mismatches,
+               position_plan.initial_access_rx_last_reason);
     fmt::print("NTN access calendar intent: schedule_version={} intents={} ssb={} prach_ro={} prach_ul_beam={} "
                "max_ssb_interval_ms={} max_prach_interval_ms={} "
                "prach_ro_without_beam={} resource_conflicts={} deployment_detail={} evidence={}\n",
@@ -907,8 +923,9 @@ public:
     }
     for (const auto& cell : position_plan.cells) {
       fmt::print("NTN onboard cell: nci={:#x} pci={} active_l1={} pending_l1={} mapped_l1={} capacity={} "
-                 "plmn={} tac={} tai_status={} analog_ports={}/{} digital_planning_capacity={} "
-                 "digital_binding={}\n",
+                  "plmn={} tac={} tai_status={} analog_ports={}/{} digital_planning_capacity={} "
+                  "digital_binding={} rx_state={} rx_backend={} strict_available={} rx_mapping_version={} "
+                  "rx_mapping_hash={} rx_last_reason={}\n",
                  cell.nci,
                  cell.pci,
                  cell.active_l1_positions,
@@ -919,9 +936,15 @@ public:
                  cell.runtime_tac,
                  cell.runtime_tai_status,
                  cell.analog_ports_used,
-                 cell.analog_port_capacity,
-                 cell.digital_planning_capacity,
-                 cell.digital_binding_state);
+                  cell.analog_port_capacity,
+                  cell.digital_planning_capacity,
+                  cell.digital_binding_state,
+                  cell.initial_access_rx_state,
+                  cell.initial_access_rx_backend,
+                  cell.initial_access_strict_available,
+                  cell.initial_access_rx_mapping_version,
+                  cell.initial_access_rx_mapping_hash,
+                  cell.initial_access_rx_last_reason);
     }
     fmt::print("NTN readable summary: access_ready={} service_ready={} move_waiting={} move_active={} "
                "reserved_capacity={} safety_guard_active={}\n",

@@ -88,7 +88,10 @@ struct ntn_onboard_position_plan_source_config {
   /// Controls whether trusted Initial UL position observations are ignored, audited or enforced.
   ntn_initial_ul_position_validation_mode initial_ul_position_validation =
       ntn_initial_ul_position_validation_mode::disabled;
-  /// Optional source of trusted Initial UL position observations. Strict-mode availability is checked at startup.
+  /// Maximum time to wait for one private F1 Initial UL position query before applying the configured policy.
+  std::chrono::milliseconds initial_ul_position_query_timeout{50};
+  /// Optional Initial UL observation source. Strict mode requires generation binding and SDR/OFH verification
+  /// capability, while live backend readiness is established separately at runtime.
   std::shared_ptr<ntn_initial_ul_position_observation_provider> initial_ul_position_provider;
   /// Require every accepted position plan to carry a valid management-center signature.
   bool                      require_signed_plan = false;

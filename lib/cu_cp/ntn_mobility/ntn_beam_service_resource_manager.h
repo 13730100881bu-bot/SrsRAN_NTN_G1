@@ -88,6 +88,12 @@ public:
   ntn_access_rnti_ownership_result validate_access_rnti_ownership(
       const ntn_access_rnti_ownership_update& update) const;
 
+  /// Returns the exact current lease generation for one DU cell and C-RNTI.
+  std::optional<uint32_t> find_rnti_lease_generation(du_index_t              du_index,
+                                                      srsran::du_cell_index_t cell_index,
+                                                      pci_t                   pci,
+                                                      rnti_t                  rnti) const;
+
   ntn_access_rnti_ownership_result register_access_rnti_ownership(const ntn_access_rnti_ownership_update& update);
 
   void release_analog_access_after_ics(ue_index_t ue_index);

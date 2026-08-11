@@ -41,6 +41,36 @@ bool valid_observation(const ntn_initial_ul_position_observation& observation)
       observation.c_rnti == rnti_t::INVALID_RNTI) {
     return false;
   }
+  if (observation.authority == ntn_initial_ul_position_observation_authority::invalid) {
+    return false;
+  }
+  if (observation.authority != ntn_initial_ul_position_observation_authority::injected_trusted &&
+      observation.rnti_lease_generation == 0) {
+    return false;
+  }
+  if (is_device_verified(observation.authority) &&
+      (observation.physical_rx_port_id > 254U ||
+       observation.mapping_version == 0 || observation.mapping_hash.empty() ||
+       observation.mapping_hash.size() > max_observation_identifier_size)) {
+    return false;
+  }
+  if (observation.authority == ntn_initial_ul_position_observation_authority::software_attributed) {
+    if (observation.physical_rx_port_id != std::numeric_limits<uint16_t>::max() ||
+        observation.mapping_version != 0 || !observation.mapping_hash.empty() ||
+        observation.ofh_prach_eaxc != std::numeric_limits<uint16_t>::max() ||
+        observation.ofh_beam_id != std::numeric_limits<uint16_t>::max()) {
+      return false;
+    }
+  }
+  if (observation.authority == ntn_initial_ul_position_observation_authority::ofh_beam_id_verified &&
+      (observation.ofh_prach_eaxc > 31U || observation.ofh_beam_id > 0x7fffU)) {
+    return false;
+  }
+  if (observation.authority == ntn_initial_ul_position_observation_authority::sdr_rx_port_verified &&
+      (observation.ofh_prach_eaxc != std::numeric_limits<uint16_t>::max() ||
+       observation.ofh_beam_id != std::numeric_limits<uint16_t>::max())) {
+    return false;
+  }
   return observation.du_cell_index != du_cell_index_t::invalid && !observation.satellite_id.empty() &&
          observation.satellite_id.size() <= max_observation_identifier_size &&
          observation.catalog_version != 0 && observation.schedule_version != 0 &&
@@ -93,6 +123,10 @@ const char* srsran::srs_cu_cp::to_string(ntn_initial_ul_position_authorization_s
       return "ue_identity_mismatch";
     case ntn_initial_ul_position_authorization_status::du_generation_mismatch:
       return "du_generation_mismatch";
+    case ntn_initial_ul_position_authorization_status::rnti_generation_mismatch:
+      return "rnti_generation_mismatch";
+    case ntn_initial_ul_position_authorization_status::receive_port_unavailable:
+      return "receive_port_unavailable";
     case ntn_initial_ul_position_authorization_status::active_plan_unavailable:
       return "active_plan_unavailable";
     case ntn_initial_ul_position_authorization_status::active_plan_mismatch:
@@ -117,7 +151,12 @@ ntn_initial_ul_position_observation_store::record(ntn_initial_ul_position_observ
   }
   prune_expired(now);
   const auto duplicate = std::find_if(observations.begin(), observations.end(), [&](const stored_observation& stored) {
-    return stored.value.observation_id == observation.observation_id;
+    // Observation identifiers are allocated by each DU-side source. Their replay scope is therefore the live DU
+    // connection, not the whole CU-CP process. This also prevents two DUs that both start at identifier one from
+    // rejecting each other's first observation.
+    return stored.value.du_index == observation.du_index &&
+           stored.value.du_connection_generation == observation.du_connection_generation &&
+           stored.value.observation_id == observation.observation_id;
   });
   if (duplicate != observations.end()) {
     return ntn_initial_ul_position_record_status::replayed;
@@ -175,6 +214,17 @@ ntn_initial_ul_position_observation_store::take(const ntn_initial_ul_position_ob
                          observations.end());
       return {ntn_initial_ul_position_take_status::expired, std::nullopt};
     }
+    const auto stale_rnti_generation =
+        std::find_if(observations.begin(), observations.end(), [&](const auto& stored) {
+          return stored.value.du_index == key.du_index && stored.value.du_cell_index == key.du_cell_index &&
+                 stored.value.c_rnti == key.c_rnti && !stored.consumed &&
+                 now - stored.received_at < ntn_initial_ul_position_observation_ttl &&
+                 stored.value.du_connection_generation == key.du_connection_generation &&
+                 stored.value.rnti_lease_generation != key.rnti_lease_generation;
+        });
+    if (stale_rnti_generation != observations.end()) {
+      return {ntn_initial_ul_position_take_status::rnti_generation_mismatch, std::nullopt};
+    }
     const auto stale_generation = std::find_if(observations.begin(), observations.end(), [&](const auto& stored) {
       return stored.value.du_index == key.du_index && stored.value.du_cell_index == key.du_cell_index &&
              stored.value.c_rnti == key.c_rnti && !stored.consumed &&
@@ -199,11 +249,28 @@ ntn_initial_ul_position_source_snapshot ntn_initial_ul_position_observation_stor
 {
   std::lock_guard<std::mutex> lock(mutex);
   const auto                  now = std::chrono::steady_clock::now();
+  bool                        has_live_sdr = false;
+  bool                        has_live_ofh = false;
+  for (const stored_observation& stored : observations) {
+    if (now - stored.received_at >= ntn_initial_ul_position_observation_ttl) {
+      continue;
+    }
+    has_live_sdr |= stored.value.authority == ntn_initial_ul_position_observation_authority::sdr_rx_port_verified;
+    has_live_ofh |= stored.value.authority == ntn_initial_ul_position_observation_authority::ofh_beam_id_verified;
+  }
+  const char* live_backend = has_live_sdr && has_live_ofh ? "mixed"
+                             : has_live_sdr                ? "sdr_zmq"
+                             : has_live_ofh                ? "ofh"
+                                                           : "none";
   return {source_ready,
           source_authority,
           static_cast<size_t>(std::count_if(observations.begin(), observations.end(), [&](const auto& stored) {
             return !stored.consumed && now - stored.received_at < ntn_initial_ul_position_observation_ttl;
-          }))};
+          })),
+          rnti_generation_authoritative,
+          device_verification_capable,
+          source_ready && (has_live_sdr || has_live_ofh),
+          live_backend};
 }
 
 bool ntn_initial_ul_position_observation_store::is_ready() const
@@ -256,6 +323,7 @@ bool ntn_initial_ul_position_observation_store::same_key(
 {
   return observation.du_index == key.du_index && observation.du_cell_index == key.du_cell_index &&
          observation.c_rnti == key.c_rnti &&
+         observation.rnti_lease_generation == key.rnti_lease_generation &&
          observation.du_connection_generation == key.du_connection_generation;
 }
 
@@ -307,6 +375,9 @@ ntn_initial_ul_position_authorizer::authorize(const ntn_initial_ul_position_auth
     case ntn_initial_ul_position_take_status::du_generation_mismatch:
       result.status = ntn_initial_ul_position_authorization_status::du_generation_mismatch;
       return result;
+    case ntn_initial_ul_position_take_status::rnti_generation_mismatch:
+      result.status = ntn_initial_ul_position_authorization_status::rnti_generation_mismatch;
+      return result;
   }
 
   const ntn_initial_ul_position_observation& observation = *taken.observation;
@@ -314,8 +385,9 @@ ntn_initial_ul_position_authorizer::authorize(const ntn_initial_ul_position_auth
     result.status = ntn_initial_ul_position_authorization_status::source_unavailable;
     return result;
   }
-  result.observation_id                                  = observation.observation_id;
-  result.position_id                                     = observation.position_id;
+  result.observation_id = observation.observation_id;
+  result.position_id    = observation.position_id;
+  result.authority      = observation.authority;
 
   if (observation.ue_index != ue_index_t::invalid && observation.ue_index != request.ue_index) {
     result.status = ntn_initial_ul_position_authorization_status::ue_identity_mismatch;
@@ -324,6 +396,14 @@ ntn_initial_ul_position_authorizer::authorize(const ntn_initial_ul_position_auth
   if (observation.du_index != request.key.du_index || observation.du_cell_index != request.du_cell_index ||
       observation.du_connection_generation != request.du_connection_generation) {
     result.status = ntn_initial_ul_position_authorization_status::du_generation_mismatch;
+    return result;
+  }
+  if (observation.rnti_lease_generation != request.key.rnti_lease_generation) {
+    result.status = ntn_initial_ul_position_authorization_status::rnti_generation_mismatch;
+    return result;
+  }
+  if (request.require_device_verified && !is_device_verified(observation.authority)) {
+    result.status = ntn_initial_ul_position_authorization_status::receive_port_unavailable;
     return result;
   }
   // The observation must describe the current Initial UL attempt, not merely any matching PRACH slot in the active

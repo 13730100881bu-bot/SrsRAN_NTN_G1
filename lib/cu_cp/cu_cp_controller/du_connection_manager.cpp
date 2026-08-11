@@ -187,6 +187,11 @@ void du_connection_manager::handle_f1c_gw_connection_closed(du_index_t du_idx)
 {
   // Note: Called from within CU-CP execution context.
 
+  // Invalidate the live F1 connection before queuing removal on the same common FIFO. An Initial UL position query
+  // may currently own that FIFO while awaiting a private response; cancelling it here prevents the timeout path from
+  // creating an RRC UE after the transport has already disappeared.
+  dus.handle_du_connection_closed(du_idx);
+
   common_task_sched.schedule_async_task(launch_async([this, du_idx](coro_context<async_task<void>>& ctx) {
     CORO_BEGIN(ctx);
     if (du_connections.find(du_idx) == du_connections.end()) {

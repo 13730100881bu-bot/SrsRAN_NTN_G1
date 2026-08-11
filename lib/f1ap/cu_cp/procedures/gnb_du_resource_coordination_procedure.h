@@ -27,8 +27,16 @@
 #include "srsran/f1ap/cu_cp/f1ap_cu_resource_coordination.h"
 #include "srsran/f1ap/f1ap_message_notifier.h"
 #include "srsran/support/async/async_task.h"
+#include <memory>
+#include <optional>
 
 namespace srsran::srs_cu_cp {
+
+/// Optional observer used by connection-scoped callers that need to cancel one private transaction without stopping
+/// the shared Resource Coordination transaction manager.
+struct gnb_du_resource_coordination_transaction_observer {
+  std::optional<unsigned> transaction_id;
+};
 
 class gnb_du_resource_coordination_procedure
 {
@@ -37,7 +45,9 @@ public:
                                          const f1ap_gnb_du_resource_coordination_request& request_,
                                          f1ap_message_notifier&                         f1ap_notifier_,
                                          f1ap_event_manager&                            ev_mng_,
-                                         srslog::basic_logger&                          logger_);
+                                         srslog::basic_logger&                          logger_,
+                                         std::shared_ptr<gnb_du_resource_coordination_transaction_observer>
+                                             transaction_observer_ = nullptr);
 
   void operator()(coro_context<async_task<f1ap_gnb_du_resource_coordination_response>>& ctx);
 
@@ -53,8 +63,10 @@ private:
   f1ap_message_notifier&                          f1ap_notifier;
   f1ap_event_manager&                             ev_mng;
   srslog::basic_logger&                           logger;
+  std::shared_ptr<gnb_du_resource_coordination_transaction_observer> transaction_observer;
 
   f1ap_transaction transaction;
+  f1ap_gnb_du_resource_coordination_response procedure_response;
 };
 
 } // namespace srsran::srs_cu_cp

@@ -440,6 +440,16 @@ ntn_beam_service_resource_manager::validate_access_rnti_ownership(const ntn_acce
                                               : ntn_access_rnti_ownership_result{true, "observed", "access_active"};
 }
 
+std::optional<uint32_t> ntn_beam_service_resource_manager::find_rnti_lease_generation(
+    du_index_t du_index, srsran::du_cell_index_t cell_index, pci_t pci, rnti_t rnti) const
+{
+  const auto lease = rnti_leases_by_key.find(rnti_key{du_index, cell_index, pci, rnti});
+  if (lease == rnti_leases_by_key.end() || lease->second.generation_id == 0) {
+    return std::nullopt;
+  }
+  return lease->second.generation_id;
+}
+
 ntn_access_rnti_ownership_result
 ntn_beam_service_resource_manager::register_access_rnti_ownership(const ntn_access_rnti_ownership_update& update)
 {

@@ -63,6 +63,20 @@ public:
     return parent.handle_ue_rrc_context_creation_request(req);
   }
 
+  std::optional<f1ap_initial_ul_position_query_plan>
+  on_initial_ul_position_query_required(const f1ap_initial_ul_position_query_context& context) override
+  {
+    return parent.cu_cp_notifier.on_initial_ul_position_query_required(parent.cfg.du_index, context);
+  }
+
+  void on_initial_ul_position_query_complete(
+      const f1ap_initial_ul_position_query_context&       context,
+      const f1ap_initial_ul_position_query_plan&          plan,
+      const f1ap_gnb_du_resource_coordination_response& response) override
+  {
+    parent.cu_cp_notifier.on_initial_ul_position_query_complete(parent.cfg.du_index, context, plan, response);
+  }
+
   void on_du_initiated_ue_context_release_request(const f1ap_ue_context_release_request& req) override
   {
     parent.handle_du_initiated_ue_context_release_request(req);

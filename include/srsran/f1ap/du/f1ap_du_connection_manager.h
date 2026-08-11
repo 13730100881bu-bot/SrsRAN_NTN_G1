@@ -34,6 +34,7 @@
 #include "srsran/ran/subcarrier_spacing.h"
 #include "srsran/ran/tac.h"
 #include "srsran/f1ap/ntn_access_calendar.h"
+#include "srsran/f1ap/ntn_initial_ul_position_query.h"
 #include "srsran/f1ap/ntn_rnti_lease_pool.h"
 #include "srsran/support/async/async_task.h"
 #include <optional>
@@ -182,6 +183,10 @@ public:
   /// \brief Query the DU for its currently applied NTN resource state via F1AP resource coordination.
   virtual async_task<f1ap_ntn_resource_audit_result>
   request_ntn_resource_audit(const f1ap_ntn_resource_audit_request& request) = 0;
+
+  /// \brief Consume one connection-bound DU Initial UL position observation.
+  virtual async_task<f1ap_ntn_initial_ul_position_result>
+  request_ntn_initial_ul_position(const f1ap_ntn_initial_ul_position_query& request) = 0;
 
   /// \brief Notify the DU of an NTN SIB19 broadcast payload update requested by CU-CP.
   virtual async_task<f1ap_ntn_sib19_broadcast_result>

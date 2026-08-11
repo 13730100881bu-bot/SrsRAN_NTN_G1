@@ -57,11 +57,37 @@ f1ap_cu_impl::f1ap_cu_impl(const f1ap_configuration&   f1ap_cfg_,
 }
 
 // Note: For fwd declaration of member types, dtor cannot be trivial.
-f1ap_cu_impl::~f1ap_cu_impl() {}
+f1ap_cu_impl::~f1ap_cu_impl()
+{
+  handle_connection_loss();
+}
 
 async_task<void> f1ap_cu_impl::stop()
 {
+  handle_connection_loss();
   return launch_async<f1ap_stop_procedure>(du_processor_notifier, ue_ctxt_list);
+}
+
+void f1ap_cu_impl::handle_connection_loss()
+{
+  if (f1ap_stopping) {
+    return;
+  }
+  f1ap_stopping = true;
+  invalidate_initial_ul_position_queries();
+}
+
+void f1ap_cu_impl::invalidate_initial_ul_position_queries()
+{
+  initial_ul_position_lifetime->accepting = false;
+  for (auto& entry : initial_ul_position_queries) {
+    std::shared_ptr<initial_ul_position_query_state>& state = entry.second;
+    state->active = false;
+    if (state->transaction_observer != nullptr && state->transaction_observer->transaction_id.has_value()) {
+      ev_mng.transactions.cancel_transaction(*state->transaction_observer->transaction_id);
+    }
+  }
+  initial_ul_position_queries.clear();
 }
 
 const f1ap_du_context& f1ap_cu_impl::get_context() const
@@ -964,6 +990,87 @@ void f1ap_cu_impl::handle_f1_setup_request(const asn1::f1ap::f1_setup_request_s&
 }
 
 void f1ap_cu_impl::handle_initial_ul_rrc_message(const asn1::f1ap::init_ul_rrc_msg_transfer_s& msg)
+{
+  const gnb_du_ue_f1ap_id_t du_ue_id = int_to_gnb_du_ue_f1ap_id(msg->gnb_du_ue_f1ap_id);
+  expected<nr_cell_global_id_t> cgi   = cgi_from_asn1(msg->nr_cgi);
+  const rnti_t                  crnti = to_rnti(msg->c_rnti);
+  if (f1ap_stopping) {
+    logger.debug("du_ue={}: Dropping \"InitialULRRCMessageTransfer\" because the F1 connection is stopping",
+                 fmt::underlying(du_ue_id));
+    return;
+  }
+  if (!cgi.has_value() || crnti == rnti_t::INVALID_RNTI) {
+    process_initial_ul_rrc_message(msg);
+    return;
+  }
+
+  if (ue_ctxt_list.find(du_ue_id) != nullptr) {
+    logger.debug("du_ue={}: Ignoring duplicate \"InitialULRRCMessageTransfer\" for an existing F1 UE",
+                 fmt::underlying(du_ue_id));
+    return;
+  }
+
+  const initial_ul_position_query_key query_key = du_ue_id;
+  if (initial_ul_position_queries.find(query_key) != initial_ul_position_queries.end()) {
+    logger.debug("du_ue={} c_rnti={}: Ignoring duplicate Initial UL while its position query is in flight",
+                 fmt::underlying(du_ue_id),
+                 crnti);
+    return;
+  }
+
+  const f1ap_initial_ul_position_query_context query_context{du_ue_id, cgi.value(), crnti};
+  const std::optional<f1ap_initial_ul_position_query_plan> query_plan =
+      du_processor_notifier.on_initial_ul_position_query_required(query_context);
+  if (!query_plan.has_value()) {
+    process_initial_ul_rrc_message(msg);
+    return;
+  }
+
+  f1ap_gnb_du_resource_coordination_request request;
+  request.ntn_initial_ul_position_query = query_plan->query;
+  request.response_timeout              = query_plan->response_timeout;
+  auto query_state                      = std::make_shared<initial_ul_position_query_state>();
+  query_state->transaction_observer =
+      std::make_shared<gnb_du_resource_coordination_transaction_observer>();
+  initial_ul_position_queries.emplace(query_key, query_state);
+  async_task<f1ap_gnb_du_resource_coordination_response> query_task =
+      launch_async<gnb_du_resource_coordination_procedure>(
+          cfg, request, tx_pdu_notifier, ev_mng, logger, query_state->transaction_observer);
+  std::shared_ptr<initial_ul_position_connection_lifetime> connection_lifetime = initial_ul_position_lifetime;
+  auto completion_task = [this,
+                          msg_copy = msg,
+                          query_context,
+                          query_plan = *query_plan,
+                          query_key,
+                          query_state,
+                          connection_lifetime,
+                          query_task = std::move(query_task)](coro_context<async_task<void>>& ctx) mutable {
+    f1ap_gnb_du_resource_coordination_response response;
+    CORO_BEGIN(ctx);
+    if (!connection_lifetime->accepting || !query_state->active) {
+      CORO_EARLY_RETURN();
+    }
+    CORO_AWAIT_VALUE(response, query_task);
+    if (!connection_lifetime->accepting || !query_state->active) {
+      CORO_EARLY_RETURN();
+    }
+    du_processor_notifier.on_initial_ul_position_query_complete(query_context, query_plan, response);
+    process_initial_ul_rrc_message(msg_copy);
+    query_state->active = false;
+    initial_ul_position_queries.erase(query_key);
+    CORO_RETURN();
+  };
+  if (!du_processor_notifier.schedule_async_task(launch_async(std::move(completion_task)))) {
+    query_state->active = false;
+    initial_ul_position_queries.erase(query_key);
+    f1ap_gnb_du_resource_coordination_response response;
+    response.failure_reason = "query_schedule_failed";
+    du_processor_notifier.on_initial_ul_position_query_complete(query_context, *query_plan, response);
+    process_initial_ul_rrc_message(msg);
+  }
+}
+
+void f1ap_cu_impl::process_initial_ul_rrc_message(const asn1::f1ap::init_ul_rrc_msg_transfer_s& msg)
 {
   const gnb_du_ue_f1ap_id_t du_ue_id = int_to_gnb_du_ue_f1ap_id(msg->gnb_du_ue_f1ap_id);
 

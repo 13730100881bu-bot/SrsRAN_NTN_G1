@@ -313,6 +313,15 @@ public:
 
 private:
   // Handling of DU events.
+  std::optional<f1ap_initial_ul_position_query_plan>
+  handle_initial_ul_position_query_required(du_index_t                                      du_index,
+                                            const f1ap_initial_ul_position_query_context& context) override;
+  void handle_initial_ul_position_query_complete(
+      du_index_t                                         du_index,
+      const f1ap_initial_ul_position_query_context&      context,
+      const f1ap_initial_ul_position_query_plan&         plan,
+      const f1ap_gnb_du_resource_coordination_response& response) override;
+
   void handle_rrc_ue_creation(ue_index_t ue_index, rrc_ue_interface& rrc_ue) override;
 
   void handle_du_connection_established(du_index_t du_index) override;
@@ -819,6 +828,43 @@ private:
     std::optional<ntn_initial_ul_position_ue_context> context;
   };
   std::optional<ntn_initial_ul_position_authorizer> initial_ul_position_authorizer;
+  /// Production sink/source populated by the private F1 Initial UL position query. Test or application providers
+  /// supplied through configuration continue to take precedence.
+  std::shared_ptr<ntn_initial_ul_position_observation_store> production_initial_ul_position_store;
+  enum class ntn_initial_ul_rx_source_stage { disabled, awaiting_calendar, awaiting_rx_backend, ready, stale };
+  struct ntn_initial_ul_position_query_cell_state {
+    ntn_initial_ul_rx_source_stage stage = ntn_initial_ul_rx_source_stage::disabled;
+    /// Highest query generation issued for this cell on the current DU connection. Older completions may still
+    /// deliver their one-shot observation, but must not overwrite the current cell-level source status.
+    uint32_t                       latest_query_generation = 0;
+    std::string                    backend = "none";
+    uint64_t                       mapping_version = 0;
+    std::string                    mapping_hash;
+    std::string                    last_reason = "disabled";
+  };
+  struct ntn_initial_ul_position_query_du_state {
+    bool                               connected = false;
+    uint64_t                           connection_token = 0;
+    uint32_t                           next_query_generation = 1;
+    uint64_t                           next_nonce = 1;
+    ntn_initial_ul_rx_source_stage     stage = ntn_initial_ul_rx_source_stage::disabled;
+    std::string                        backend = "none";
+    uint64_t                           mapping_version = 0;
+    std::string                        mapping_hash;
+    uint64_t                           software_records = 0;
+    uint64_t                           sdr_records = 0;
+    uint64_t                           ofh_records = 0;
+    uint64_t                           ambiguous_records = 0;
+    uint64_t                           no_port_records = 0;
+    uint64_t                           query_timeouts = 0;
+    uint64_t                           generation_mismatches = 0;
+    std::string                        last_reason = "disabled";
+    // Private F1 query identities carry the DU-side cell index type. Keep this key in the same domain instead of
+    // relying on the CU-CP-local cell index having the same underlying value.
+    std::map<srsran::du_cell_index_t, ntn_initial_ul_position_query_cell_state> cells;
+  };
+  std::map<du_index_t, ntn_initial_ul_position_query_du_state> ntn_initial_ul_position_query_states;
+  uint64_t next_ntn_initial_ul_position_connection_token = 1;
   std::unordered_map<ue_index_t, ntn_initial_ul_position_ue_context> ntn_initial_ul_position_contexts;
   uint64_t    nof_ntn_initial_ul_position_accepted = 0;
   uint64_t    nof_ntn_initial_ul_position_rejected = 0;

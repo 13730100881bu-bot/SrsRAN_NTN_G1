@@ -49,15 +49,18 @@ private:
   f1ap_du_configurator&                               du_mng;
   f1ap_message_notifier&                              cu_notifier;
 
-  std::optional<f1ap_ntn_rnti_lease_pool_update> update;
-  std::optional<f1ap_ntn_resource_audit_request> audit_request;
-  std::optional<f1ap_ntn_sib19_broadcast_update> sib19_update;
-  std::optional<f1ap_ntn_access_calendar_update>  calendar_update;
-  bool                                            calendar_container_seen = false;
-  f1ap_ntn_rnti_lease_pool_result result;
-  f1ap_ntn_resource_audit_result   audit_result;
-  f1ap_ntn_sib19_broadcast_result  sib19_result;
-  f1ap_ntn_access_calendar_result  calendar_result;
+  std::optional<f1ap_ntn_rnti_lease_pool_update>   update;
+  std::optional<f1ap_ntn_initial_ul_position_query> position_query;
+  std::optional<f1ap_ntn_resource_audit_request>   audit_request;
+  std::optional<f1ap_ntn_sib19_broadcast_update>   sib19_update;
+  std::optional<f1ap_ntn_access_calendar_update>    calendar_update;
+  bool                                              calendar_container_seen       = false;
+  bool                                              position_query_container_seen = false;
+  f1ap_ntn_rnti_lease_pool_result                   result;
+  f1ap_ntn_initial_ul_position_result                position_result;
+  f1ap_ntn_resource_audit_result                     audit_result;
+  f1ap_ntn_sib19_broadcast_result                    sib19_result;
+  f1ap_ntn_access_calendar_result                    calendar_result;
 };
 
 } // namespace srs_du
