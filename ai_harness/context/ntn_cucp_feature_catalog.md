@@ -215,6 +215,41 @@ removal, plan activation, DU disconnect and restart. Standard F1AP Initial UL,
 generated ASN.1 and lower-layer code are unchanged, and `position_id` is never
 derived from legacy beam-to-NCI state.
 
+CUCP-051 supplies the runtime lower-layer source for this contract in production
+code. The active calendar marks each authorized PRACH opportunity with its
+schedule version, extended cycle index and in-cycle offset. Optional upper-PHY
+port classification reports `unique`, `ambiguous` or `unavailable` from
+per-port correlation power while retaining the established PRACH detection
+decision. MAC combines the selected calendar position with the detector-
+reported physical receive-port identifier or the complete OFH BeamId/eAxC
+context and binds the result to the allocated C-RNTI lease generation.
+
+The deployment-local receive mapping is versioned and hash identified.
+`software_attributed` uses only a unique calendar candidate and is restricted to
+`audit`; `strict` accepts only `sdr_rx_port_verified` or
+`ofh_beam_id_verified`. OFH additionally requires an explicit RU BeamId
+capability, Type-3 C-plane BeamId and matching PRACH U-plane eAxC. A unique
+measured port with a missing or conflicting mapping returns a specific failure
+and is not downgraded to software attribution.
+
+DU keeps the one-shot observation under the current DU UE F1 identity. CU-CP
+retrieves it through the bounded private `NTPOSQ01/NTPOSR01` resource-
+coordination container before the ordinary Initial UL processing continues.
+The exact target includes gNB-DU, NCGI, DU cell, PCI, DU UE F1 ID, C-RNTI and
+lease generation plus the live connection token, query generation and nonce.
+Standard Initial UL and generated ASN.1 remain unchanged. The stores are
+bounded to 1,024 entries for one second, and the default F1 query timeout is
+50 ms within a configurable 10..200 ms range. See
+`docs/ntn_initial_ul_receive_source.md`.
+
+CUCP-051 closeout passed 5/5 selected NTN mobility tests, 18/18 exact CU-CP
+Initial UL tests and 3/3 configuration tests; `srsran_cu_cp` also built. The
+receive-port code-level scenario exited zero with 33/33 and no skips. The OFH
+code-level scenario exited zero and passed with 45 matched, 37 passed, zero
+failed and eight platform-conditioned skips. Both scenarios invoked CTest
+without `-Build`; neither exercised live ZMQ IQ or physical RU hardware.
+`git diff --check` passed and cleanup found zero residual processes.
+
 ## 7a. Resource-domain guard policy
 
 CU-CP may model analog access and digital service resource domains with caps,
@@ -262,14 +297,19 @@ contracts.
 ## 13. Strict exclusions
 
 Future work is CU-CP-only unless a task grants exact non-CU-CP paths. Completed
-task-scoped exceptions such as CUCP-036 do not authorize further DU/MAC changes.
-HARQ timing, TA scheduler, raw PRACH detection, PHY/lower PHY, RU/RF/radio
-drivers, ZMQ channel behavior, O-DU/flexible_o_du behavior, generated ASN.1 and
-GIS-site behavior remain excluded without explicit authorization.
+task-scoped exceptions such as CUCP-036 and CUCP-051 do not authorize further
+DU/MAC/PHY/OFH changes. HARQ timing, TA scheduler, ordinary scheduling policy,
+radio-driver behavior, generated ASN.1 and GIS-site behavior remain excluded
+without explicit authorization.
 
 Resource-audit completeness covers CU-CP and DU/MAC software state. RAR
-transmission, raw PRACH detection, authenticated Initial UL position metadata
-and PHY/RU/RF telemetry remain separate work. CUCP-050 binds its UE-slot query
-to a current local connection token and current F1 UE identities; transport
-sender authentication and end-to-end freshness/anti-replay remain outside this
-task.
+transmission and PHY/RU/RF telemetry use their respective runtime interfaces.
+CUCP-051 adds verified Initial UL receive provenance through SDR/ZMQ-configured
+and OFH production-code paths. Acceptance currently consists of focused tests
+and scripted code-level simulations; no live ZMQ IQ stream, physical RU/UHD,
+antenna execution or over-the-air traffic was exercised. Live UHD calibration,
+vendor RU interoperability and over-the-air acceptance remain device
+integration work.
+CUCP-050 binds its UE-slot query to a current local connection token and current
+F1 UE identities; transport sender authentication and end-to-end freshness/
+anti-replay remain outside that task.

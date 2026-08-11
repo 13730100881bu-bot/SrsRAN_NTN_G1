@@ -1,6 +1,6 @@
 # NTN CU-CP Agent Memory
 
-Last updated: 2026-08-09
+Last updated: 2026-08-10
 
 This file is the compact handoff memory for future conversations. It keeps the
 durable NTN CU-CP design context without pulling in the old project-management
@@ -364,9 +364,29 @@ Use a staged validation ladder:
   conflicts, DU-ahead generations and unresolved identities remain blocked or
   quarantined. Build and test results are recorded in
   `docs/ntn_ue_slot_audit_recovery.md`.
+- CUCP-051 supplies the production-code runtime Initial UL position source. The
+  optional PRACH output classifies the strongest physical receive port as `unique`,
+  `ambiguous` or `unavailable` using a configurable `6 dB` default margin,
+  without changing the established detection decision. Scheduler/FAPI/MAC echo
+  the exact schedule version, extended cycle index and in-cycle offset for the
+  detected opportunity. A versioned receive mapping binds `NCI + logical port`
+  to one SDR/ZMQ physical port or one OFH PRACH eAxC/15-bit BeamId. SDR
+  verification requires the measured port; OFH additionally requires declared
+  RU capability, Type-3 C-plane BeamId and matching U-plane eAxC. A calendar-
+  only `software_attributed` record is audit-only. MAC allocates the C-RNTI with
+  its lease generation, and DU stores one current-F1-UE record for at most one
+  second. The private 1-KiB `NTPOSQ01/NTPOSR01` query binds gNB-DU/cell/PCI/DU
+  UE/C-RNTI/generation to the current connection token, query generation and
+  nonce before CU-CP runs the CUCP-048 authorizer. Default `disabled` issues no
+  query. Focused tests and scripted code-level simulations cover the
+  SDR/ZMQ-configured receive-port and OFH BeamId/eAxC paths; they do not inject
+  live ZMQ IQ samples or exercise a physical RU, UHD, antenna or over-the-air
+  traffic. Hardware integration follows the L2 service-binding and
+  transmit-device tasks. See `docs/ntn_initial_ul_receive_source.md`.
 - Resource audit covers MAC/DU software state. RAR transmission, raw PRACH,
-  trusted Initial UL position input and PHY/RU/RF telemetry use their respective
-  runtime interfaces.
+  Initial UL receive provenance and PHY/RU/RF telemetry use their respective
+  runtime interfaces. CUCP-051 provides the Initial UL source through its
+  explicitly authorized internal PRACH/FAPI/MAC/DU/F1/OFH path.
   The local connection token rejects old-connection results; transport sender
   authentication and end-to-end freshness/anti-replay remain follow-up risks.
   Codec v2's historical compatibility remains decode-only and fail safe, while
@@ -468,9 +488,11 @@ For a more detailed task-to-change lookup, use
   complete proposed sideband metadata, it matches satellite/catalog/schedule,
   source/calendar hashes, stable NCI/PCI, `G######` ownership, PRACH occasion
   phase and paired UL port against the current active plan. It returns
-  `accept`, `reject` or `audit_only` with a machine-readable reason. Standard
-  F1AP Initial UL does not carry that metadata today, so production access must
-  not infer `position_id` from the legacy beam-to-NCI table. An `accept` result
+  `accept`, `reject` or `audit_only` with a machine-readable reason. At the
+  CUCP-037 boundary no runtime producer carried that metadata; CUCP-051 later
+  adds the private F1 resource-coordination query. Standard F1AP Initial UL
+  still does not carry it directly, so production access must not infer
+  `position_id` from the legacy beam-to-NCI table. An `accept` result
   proves only a CU-CP active-plan/software-gate snapshot match, not trusted
   sideband provenance, DU-reconnect reconciliation, position steering or RF
   application.
@@ -566,9 +588,9 @@ For a more detailed task-to-change lookup, use
   ready provider and rejects before access ownership is written. Successful
   strict checks create only a temporary, non-persistent UE position context;
   ICS, UE removal, setup failure, plan activation, DU disconnect and restart
-  clear it. This task adds only the CU-CP consumer and injection boundary. A
-  production lower-layer source remains a separate, explicitly authorized
-  cross-layer task. See `docs/ntn_initial_ul_position_consumer.md`.
+  clear it. This task adds the CU-CP consumer and injection boundary; CUCP-051
+  supplies its runtime lower-layer source in production code. See
+  `docs/ntn_initial_ul_position_consumer.md`.
 - CUCP-049 completes safe retirement and reuse for NTN C-RNTI access leases. A
   C-RNTI is a cell-local temporary UE identifier, assigned during access and
   retained during the connection: CU-CP may retire it only after local
@@ -616,6 +638,41 @@ For a more detailed task-to-change lookup, use
   tests, 14/14 F1 CU tests, 6/6 F1 DU tests, 15/15 DU tests, the read-only CLI
   check and the `srsran_cu_cp` build. The complete result table is maintained in
   `docs/ntn_ue_slot_audit_recovery.md`.
+- CUCP-051 completes the production-code Initial UL receive-source chain. An optional
+  PRACH result records the strongest physical receive port and its margin over
+  the second port as `unique`, `ambiguous` or `unavailable`; the default margin
+  is `6 dB`, and the existing combined detection decision is unchanged.
+  Scheduler/FAPI/MAC carry the exact schedule version, extended cycle index and
+  in-cycle opportunity offset. A bounded, versioned receive mapping resolves an
+  onboard cell's logical UL port to either an SDR/ZMQ physical port or an OFH
+  PRACH eAxC plus 15-bit BeamId. OFH verification requires RU capability,
+  Type-3 C-plane BeamId and matching U-plane data. Calendar-only
+  `software_attributed` records are audit-only.
+  MAC allocates the C-RNTI and lease generation atomically, correlates one
+  PRACH record with Msg3, and DU binds it to the current DU UE F1 ID. MAC and DU
+  stores each hold at most 1,024 records for one second. Accepted RNTI
+  `replace/clear` invalidates the cell, `retire` invalidates only accepted
+  RNTIs, and `add` preserves unrelated observations. Calendar apply retains the
+  active schedule/hash; clear or rollback erases only its exact target. CU-CP
+  retrieves the record through a private 1-KiB `NTPOSQ01/NTPOSR01` resource-
+  coordination query whose exact target, connection token, query generation and
+  nonce are echoed by DU. The default timeout is 50 ms within the configured
+  10..200 ms range. CU-CP reconstructs event time from the active plan epoch and
+  calendar position and reuses the CUCP-048 authorizer. `disabled` sends no query;
+  `audit` always continues; `strict` requires SDR/OFH verification before
+  access ownership. Standard Initial UL and generated ASN.1 are unchanged.
+  Current receive state, backend and mapping identity project only connected
+  DUs, while observation and failure counters are process-cumulative. Closeout
+  passed 5/5 selected NTN mobility tests, 18/18 exact CU-CP Initial UL tests,
+  3/3 configuration tests and the `srsran_cu_cp` build. The receive-port
+  scenario exited zero with 33/33 and no skips. The OFH scenario exited zero
+  and passed with 45 matched tests: 37 passed, zero failed and eight platform-
+  conditioned skips. Both are code-level CTest scenarios run without `-Build`,
+  not live ZMQ IQ or physical-RU hardware tests. `git diff --check` passed and
+  cleanup found zero residual processes. Live ZMQ IQ, physical RU/UHD, antenna
+  and over-the-air integration follow the L2 service binding and transmit-device
+  tasks. See
+  `docs/ntn_initial_ul_receive_source.md`.
 
 ## Protocol References
 
@@ -670,6 +727,8 @@ Task-scoped non-CU-CP areas used by previous resource-application tasks:
 - MAC RNTI manager lease mode
 - DU PUCCH/SRS resource manager tests
 - Scheduler SR/SRS focused tests
+- CUCP-051 PRACH receive-port result, internal FAPI calendar metadata, MAC/DU
+  Initial UL record, private F1 position query and OFH BeamId/eAxC context
 
 These are not globally safe to edit. Touch them only when the requested feature
 needs that layer.
@@ -741,6 +800,19 @@ needs that layer.
   and cleanup arrays also need their 65,536 and 66 bounds before reservation.
 - Do not aggregate PRACH at satellite level. Every assigned L1 needs its own
   planned PRACH opportunity and corresponding uplink beam intent.
+- Do not derive an Initial UL `position_id` from preamble, PRACH frequency
+  occasion, timing advance, NCI, coordinates or a legacy beam. CUCP-051 selects
+  a calendar position only through the detector-reported physical receive-port
+  identifier or complete OFH BeamId/eAxC context. Calendar-only
+  `software_attributed` is audit-only. `ofh_beam_id_verified` records a complete
+  software-chain context; it is not vendor RU telemetry or proof of physical
+  BeamId execution.
+- Do not downgrade a unique measured receive port that fails its mapping into
+  software attribution. Preserve `rx_mapping_mismatch` or
+  `ofh_beam_capability_unavailable`; strict admission must fail closed.
+- Bind every production Initial UL query to the current C-RNTI lease generation,
+  DU UE F1 ID, cell identity, connection token, query generation and nonce.
+  Wrapped SFN and DU wall-clock time are not the calendar-time authority.
 - Do not assume adding satellites monotonically improves a Walker arrangement;
   scan plane count, slots, inclination, F, RAAN and phase on one frozen mask.
 - Do not claim historical one-hop PCI proxy results prove the global conflict

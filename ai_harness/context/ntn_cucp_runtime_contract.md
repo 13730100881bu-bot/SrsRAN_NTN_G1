@@ -346,9 +346,11 @@ target set. Reconnect or a target-set change resets those values; the overall
 assignment generation high-water is the maximum current value among DUs.
 These values cover CU-CP and DU software resource state. RAR transmission, raw
 PRACH detection, authenticated Initial UL position metadata and PHY/RU/RF state
-belong to their respective runtime interfaces. The local connection token blocks
-results from an older connection; sender authentication and end-to-end anti-replay
-remain separate work. Build and test results are recorded in
+belong to their respective runtime interfaces. CUCP-051 implements the Initial
+UL receive-source path through its task-authorized PRACH/FAPI/MAC/DU/private-F1/
+OFH changes; live hardware remains in the device integration task. The local
+connection token blocks results from an older connection; sender authentication
+and end-to-end anti-replay remain separate work. Build and test results are recorded in
 `docs/ntn_ue_slot_audit_recovery.md`.
 
 ## onboard_plan_deployment_stage
@@ -500,16 +502,99 @@ before continuing ordinary admission.
 The policy modes are `disabled`, `audit` and `strict`. `disabled` is the
 default. `audit` records the result and continues the existing admission path.
 `strict` rejects before access ownership is written and can start only with a
-ready injected source. A successful strict check creates a non-persistent UE
-context that is removed at ICS completion, UE removal, setup failure, plan
-activation, DU disconnect and restart.
+ready generation-authoritative, device-verification-capable source. A
+successful strict check creates a non-persistent UE context that is removed at
+ICS completion, UE removal, setup failure, plan activation, DU disconnect and
+restart.
 
 The observation provider is a private C++ extension contract exposed for
-programmatic `cu_cp_configuration` injection. Standard
-Initial UL messages and generated ASN.1 remain unchanged, and the current
-application does not yet construct a production lower-layer source. The
-consumer never derives `position_id` from NCI, coordinates or legacy beam
-state. See `docs/ntn_initial_ul_position_consumer.md`.
+programmatic `cu_cp_configuration` injection. CUCP-051 also constructs the
+runtime private-F1 source when position validation is enabled. Standard
+Initial UL messages and generated ASN.1 remain unchanged. The consumer never
+derives `position_id` from NCI, coordinates or legacy beam state. See
+`docs/ntn_initial_ul_position_consumer.md` and
+`docs/ntn_initial_ul_receive_source.md`.
+
+## initial_ul_receive_provenance
+
+The cross-layer source used by CUCP-051 to associate one detected PRACH with an
+active onboard L1 position and the exact C-RNTI lease generation allocated for
+that access attempt.
+
+The optional detector output is one of `unique`, `ambiguous` or `unavailable`.
+`unique` requires the strongest receive port to meet the configured margin over
+the second strongest; the default margin is `6 dB`. The attribution calculation
+does not change the combined-port PRACH detection metric, threshold, preamble,
+TA or power result. An authorized PRACH request also carries the exact calendar
+schedule version, extended cycle index and in-cycle offset through scheduler,
+FAPI and MAC.
+
+One valid receive mapping has a nonzero version, a bounded hash and entries
+keyed by `NCI + cell_local_port`. An SDR entry maps to one physical receive
+port. An OFH entry maps to one physical receive port, PRACH eAxC and 15-bit
+BeamId. Keys and backend identities are unique within the NCI. The total is
+bounded to 1,024 entries and 16 entries per NCI; physical ports are `0..254`,
+OFH eAxC values are `0..31`, and BeamId values are `0..32767`.
+
+Source authority has three values:
+
+- `software_attributed`: one calendar candidate with no usable measured port;
+- `sdr_rx_port_verified`: the unique physical receive port and SDR mapping
+  select the same calendar UL-beam intent;
+- `ofh_beam_id_verified`: the unique receive port, RU capability, Type-3
+  C-plane BeamId, U-plane eAxC, calendar identity and mapping identity all
+  select the same intent.
+
+`software_attributed` can be consumed by `audit` and cannot authorize `strict`.
+A unique measured port that does not match the configured mapping returns
+`rx_mapping_mismatch`; absent OFH BeamId capability returns
+`ofh_beam_capability_unavailable`. Neither case is converted into software
+attribution.
+
+Contention-based access uses `allocate_for_cell_with_generation()` to return
+the C-RNTI and its lease generation atomically. The legacy allocator API keeps
+the same RNTI result, and a terrestrial allocation carries generation zero.
+MAC records at most 1,024 pending observations for one second and correlates
+one record with Msg3 UL-CCCH. DU stores it under the current
+`gnb_du_ue_f1ap_id` with the same capacity and lifetime.
+
+CU-CP retrieves the record before ordinary Initial UL processing by using a
+private `GNB-DU Resource Coordination` container. `NTPOSQ01` and `NTPOSR01`
+are limited to 1 KiB. Query and result echo query generation, nonce, live
+connection token, gNB-DU ID, NCGI, DU cell, PCI, DU UE F1 ID, C-RNTI and
+expected lease generation. The default wait is 50 ms and the configured range
+is 10..200 ms. A same-nonce retry returns the same consumed result; a different
+nonce cannot consume it. Oversize, truncated, trailing, malformed, stale-token
+or identity-mismatched results are rejected.
+
+CU-CP calculates the PRACH event time from the active plan activation epoch,
+calendar-cycle index and in-cycle offset. It does not trust a DU wall-clock
+timestamp. It then applies `initial_access_plan_audit`. Per-DU-cell source state
+uses `disabled`, `awaiting_calendar`, `awaiting_rx_backend`, `ready` and
+`stale`. Mapping replacement and F1 connection loss invalidate stale records
+and readiness. An accepted RNTI `replace/clear` invalidates the cell, `retire`
+invalidates only accepted RNTIs, and `add` preserves unrelated observations.
+Calendar application retains the active schedule/hash; clear or rollback
+erases only the exact target.
+
+Current source state, backend and mapping identity project only connected DUs.
+Observation and failure counters are process-cumulative and can retain history
+from a disconnected DU until process restart.
+
+The implemented runtime boundary covers focused cross-layer tests and scripted
+code-level simulations of the SDR/ZMQ-configured receive-port and OFH
+BeamId/eAxC paths. Those simulations do not inject live ZMQ IQ samples or
+exercise a physical RU, UHD, antenna switching or over-the-air traffic. Live
+UHD channel calibration, vendor RU BeamId interoperability and over-the-air
+acceptance belong to the device integration task.
+
+CUCP-051 closeout passed 5/5 selected `ntn_mobility_test` cases, 18/18 exact
+CU-CP Initial UL cases and 3/3 configuration cases, and `srsran_cu_cp` built.
+The receive-port code-level CTest scenario exited zero with 33/33 and no skips.
+The OFH code-level CTest scenario exited zero and passed with 45 matched tests:
+37 passed, zero failed and eight platform-conditioned skips. Neither scenario
+used `-Build` or exercised live ZMQ IQ or physical RU hardware. The final
+`git diff --check` passed and cleanup found zero residual processes.
 
 ## ntn_assistance_snapshot
 
